@@ -1,0 +1,846 @@
+//! Brew protocol binary message parsing and serialization (2-byte [kind, type] prefix, little-endian)
+
+use uuid::Uuid;
+
+// ─── Message classes ───────────────────────────────────────────────
+
+pub const BREW_CLASS_SUBSCRIBER: u8 = 0xf0;
+pub const BREW_CLASS_CALL_CONTROL: u8 = 0xf1;
+pub const BREW_CLASS_FRAME: u8 = 0xf2;
+pub const BREW_CLASS_ERROR: u8 = 0xf3;
+pub const BREW_CLASS_SERVICE: u8 = 0xf4;
+
+// ─── Subscriber control types (0xf0) ──────────────────────────────
+
+pub const BREW_SUBSCRIBER_DEREGISTER: u8 = 0;
+pub const BREW_SUBSCRIBER_REGISTER: u8 = 1;
+pub const BREW_SUBSCRIBER_REREGISTER: u8 = 2;
+pub const BREW_SUBSCRIBER_AFFILIATE: u8 = 8;
+pub const BREW_SUBSCRIBER_DEAFFILIATE: u8 = 9;
+
+// ─── Call control types (0xf1) ────────────────────────────────────
+
+pub const CALL_STATE_GROUP_TX: u8 = 2;
+pub const CALL_STATE_GROUP_IDLE: u8 = 3;
+pub const CALL_STATE_SETUP_REQUEST: u8 = 4;
+pub const CALL_STATE_SETUP_ACCEPT: u8 = 5;
+pub const CALL_STATE_SETUP_REJECT: u8 = 6;
+pub const CALL_STATE_CALL_ALERT: u8 = 7;
+pub const CALL_STATE_CONNECT_REQUEST: u8 = 8;
+pub const CALL_STATE_CONNECT_CONFIRM: u8 = 9;
+pub const CALL_STATE_CALL_RELEASE: u8 = 10;
+pub const CALL_STATE_SHORT_TRANSFER: u8 = 11;
+pub const CALL_STATE_SIMPLEX_GRANTED: u8 = 12;
+pub const CALL_STATE_SIMPLEX_IDLE: u8 = 13;
+
+// ─── Frame types (0xf2) ──────────────────────────────────────────
+
+pub const FRAME_TYPE_TRAFFIC_CHANNEL: u8 = 0;
+pub const FRAME_TYPE_SDS_TRANSFER: u8 = 1;
+pub const FRAME_TYPE_SDS_REPORT: u8 = 2;
+pub const FRAME_TYPE_DTMF_DATA: u8 = 3;
+pub const FRAME_TYPE_PACKET_DATA: u8 = 4;
+
+
+// ─── Circuit/individual call wire format ─────────────────────────
+const CIRCULAR_NUMBER_LEN: usize = 32;
+/// Total wire size of BrewCircularCall payload: source(4)+dest(4)+number(32)+11 single-byte fields
+const CIRCULAR_CALL_LEN: usize = 4 + 4 + CIRCULAR_NUMBER_LEN + 11;
+
+// ─── Error types (0xf3) ──────────────────────────────────────────
+
+pub const BREW_TYPE_MALFORMED: u8 = 0;
+pub const BREW_TYPE_RESTRICTED: u8 = 1;
+
+// ─── Parsed message types ─────────────────────────────────────────
+
+/// Top-level parsed Brew message
+#[derive(Debug, Clone)]
+pub enum BrewMessage {
+    Subscriber(BrewSubscriberMessage),
+    CallControl(BrewCallControlMessage),
+    Frame(BrewFrameMessage),
+    Error(BrewErrorMessage),
+    Service(BrewServiceMessage),
+}
+
+/// Subscriber control (0xf0)
+#[derive(Debug, Clone)]
+pub struct BrewSubscriberMessage {
+    pub msg_type: u8,
+    pub number: u32,      // ISSI
+    pub time: u64,        // UNIX timestamp
+    pub fraction: u32,    // Nanoseconds
+    pub groups: Vec<u32>, // GSSIs (for affiliate/deaffiliate)
+}
+
+/// Group transmission data, part of CALL_STATE_GROUP_TX
+#[derive(Debug, Clone)]
+pub struct BrewGroupTransmission {
+    pub source: u32,      // ISSI of caller
+    pub destination: u32, // GSSI of group
+    pub priority: u8,
+    pub access: u8,
+    pub service: u16, // Speech service
+}
+
+/// Circuit/PBX/phone call data, part of SETUP_REQUEST / CONNECT_REQUEST
+/// (ETSI EN 300 392-2 §14 individual call fields mapped to Brew wire format)
+#[derive(Debug, Clone)]
+pub struct BrewCircularCall {
+    pub source: u32,
+    pub destination: u32,
+    pub number: String,  // ASCII, up to 32 bytes, NUL-padded
+    pub priority: u8,
+    pub service: u8,
+    pub mode: u8,
+    pub duplex: u8,
+    pub method: u8,
+    pub communication: u8,
+    pub grant: u8,
+    pub permission: u8,
+    pub timeout: u8,
+    pub ownership: u8,
+    pub queued: u8,
+}
+
+/// Circuit grant payload, part of CONNECT_CONFIRM / SIMPLEX_* states
+#[derive(Debug, Clone)]
+pub struct BrewCircularGrant {
+    pub grant: u8,
+    pub permission: u8,
+}
+
+
+/// Call control (0xf1)
+#[derive(Debug, Clone)]
+pub struct BrewCallControlMessage {
+    pub call_state: u8,
+    pub identifier: Uuid, // Call session UUID (16 bytes)
+    pub payload: BrewCallPayload,
+}
+
+/// Union-like payload for call control messages
+#[derive(Debug, Clone)]
+pub enum BrewCallPayload {
+    /// CALL_STATE_GROUP_TX
+    GroupTransmission(BrewGroupTransmission),
+    /// CALL_STATE_GROUP_IDLE, CALL_STATE_SETUP_REJECT, CALL_STATE_CALL_RELEASE
+    Cause(u8),
+    /// CALL_STATE_SETUP_ACCEPT, CALL_STATE_CALL_ALERT — no extra payload
+    Empty,
+    /// CALL_STATE_SHORT_TRANSFER (SDS header)
+    ShortTransfer { source: u32, destination: u32 },
+    /// CALL_STATE_SETUP_REQUEST, CALL_STATE_CONNECT_REQUEST (individual/circuit call)
+    CircularCall(BrewCircularCall),
+    /// CALL_STATE_CONNECT_CONFIRM, CALL_STATE_SIMPLEX_GRANTED, CALL_STATE_SIMPLEX_IDLE
+    CircularGrant(BrewCircularGrant),
+    /// Unknown/unhandled call state
+    Raw(Vec<u8>),
+}
+
+/// Voice and data frames (0xf2)
+#[derive(Debug, Clone)]
+pub struct BrewFrameMessage {
+    pub frame_type: u8,
+    pub identifier: Uuid, // Call session UUID
+    pub length_bits: u16, // Length of data in bits
+    pub data: Vec<u8>,
+}
+
+/// Error messages (0xf3)
+#[derive(Debug, Clone)]
+pub struct BrewErrorMessage {
+    pub error_type: u8,
+    pub data: Vec<u8>,
+}
+
+/// Service messages (0xf4)
+#[derive(Debug, Clone)]
+pub struct BrewServiceMessage {
+    pub service_type: u8,
+    pub json_data: String,
+}
+
+// ─── Parsing ──────────────────────────────────────────────────────
+
+/// Parse error
+#[derive(Debug)]
+pub enum BrewParseError {
+    TooShort(usize),
+    UnknownClass(u8),
+    InvalidUtf8,
+    InvalidUuid,
+}
+
+impl std::fmt::Display for BrewParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooShort(n) => write!(f, "message too short: {} bytes", n),
+            Self::UnknownClass(c) => write!(f, "unknown message class: 0x{:02x}", c),
+            Self::InvalidUtf8 => write!(f, "invalid UTF-8 in service message"),
+            Self::InvalidUuid => write!(f, "invalid UUID in call control message"),
+        }
+    }
+}
+
+/// Read a little-endian u16 from a byte slice
+fn read_u16_le(data: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([data[offset], data[offset + 1]])
+}
+
+/// Read a little-endian u32 from a byte slice
+fn read_u32_le(data: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
+}
+
+/// Read a little-endian u64 from a byte slice
+fn read_u64_le(data: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7],
+    ])
+}
+
+/// Write a little-endian u16 to a byte vec
+fn write_u16_le(buf: &mut Vec<u8>, val: u16) {
+    buf.extend_from_slice(&val.to_le_bytes());
+}
+
+/// Write a little-endian u32 to a byte vec
+fn write_u32_le(buf: &mut Vec<u8>, val: u32) {
+    buf.extend_from_slice(&val.to_le_bytes());
+}
+
+/// Write a little-endian u64 to a byte vec
+fn write_u64_le(buf: &mut Vec<u8>, val: u64) {
+    buf.extend_from_slice(&val.to_le_bytes());
+}
+
+/// Parse a raw binary Brew message into a typed BrewMessage
+pub fn parse_brew_message(data: &[u8]) -> Result<BrewMessage, BrewParseError> {
+    if data.len() < 2 {
+        return Err(BrewParseError::TooShort(data.len()));
+    }
+
+    let kind = data[0];
+    let msg_type = data[1];
+
+    match kind {
+        BREW_CLASS_SUBSCRIBER => parse_subscriber(msg_type, data),
+        BREW_CLASS_CALL_CONTROL => parse_call_control(msg_type, data),
+        BREW_CLASS_FRAME => parse_frame(msg_type, data),
+        BREW_CLASS_ERROR => parse_error(msg_type, data),
+        BREW_CLASS_SERVICE => parse_service(msg_type, data),
+        _ => Err(BrewParseError::UnknownClass(kind)),
+    }
+}
+
+fn parse_subscriber(msg_type: u8, data: &[u8]) -> Result<BrewMessage, BrewParseError> {
+    // Minimum: kind(1) + type(1) + number(4) + time(8) + fraction(4) = 18 bytes
+    if data.len() < 18 {
+        return Err(BrewParseError::TooShort(data.len()));
+    }
+
+    let number = read_u32_le(data, 2);
+    let time = read_u64_le(data, 6);
+    let fraction = read_u32_le(data, 14);
+
+    // Remaining bytes are GSSIs (4 bytes each) for affiliate/deaffiliate
+    let mut groups = Vec::new();
+    let mut offset = 18;
+    while offset + 4 <= data.len() {
+        groups.push(read_u32_le(data, offset));
+        offset += 4;
+    }
+
+    Ok(BrewMessage::Subscriber(BrewSubscriberMessage {
+        msg_type,
+        number,
+        time,
+        fraction,
+        groups,
+    }))
+}
+
+
+fn parse_fixed_ascii(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    bytes[..end].iter().copied().filter(|b| b.is_ascii()).map(char::from).collect()
+}
+
+fn write_fixed_ascii(buf: &mut Vec<u8>, value: &str, width: usize) {
+    let bytes = value.as_bytes();
+    let copy_len = bytes.len().min(width);
+    buf.extend_from_slice(&bytes[..copy_len]);
+    if width > copy_len {
+        buf.resize(buf.len() + (width - copy_len), 0);
+    }
+}
+
+fn parse_call_control(call_state: u8, data: &[u8]) -> Result<BrewMessage, BrewParseError> {
+    // Minimum: kind(1) + type(1) + uuid(16) = 18 bytes
+    if data.len() < 18 {
+        return Err(BrewParseError::TooShort(data.len()));
+    }
+
+    let uuid_bytes: [u8; 16] = data[2..18].try_into().map_err(|_| BrewParseError::InvalidUuid)?;
+    let identifier = Uuid::from_bytes(uuid_bytes);
+
+    let payload_data = &data[18..];
+
+    let payload = match call_state {
+        CALL_STATE_GROUP_TX => {
+            // BrewGroupTransmission: source(4) + destination(4) + priority(1) + access(1) + service(2) = 12 bytes
+            if payload_data.len() < 12 {
+                return Err(BrewParseError::TooShort(data.len()));
+            }
+            BrewCallPayload::GroupTransmission(BrewGroupTransmission {
+                source: read_u32_le(payload_data, 0),
+                destination: read_u32_le(payload_data, 4),
+                priority: payload_data[8],
+                access: payload_data[9],
+                service: read_u16_le(payload_data, 10),
+            })
+        }
+
+        CALL_STATE_GROUP_IDLE | CALL_STATE_SETUP_REJECT | CALL_STATE_CALL_RELEASE => {
+            // Single byte cause
+            if payload_data.is_empty() {
+                return Err(BrewParseError::TooShort(data.len()));
+            }
+            BrewCallPayload::Cause(payload_data[0])
+        }
+
+        CALL_STATE_SETUP_REQUEST | CALL_STATE_CONNECT_REQUEST => {
+            // BrewCircularCall: source(4)+dest(4)+number(32)+11 single-byte fields = 51 bytes
+            if payload_data.len() < CIRCULAR_CALL_LEN {
+                return Err(BrewParseError::TooShort(data.len()));
+            }
+            BrewCallPayload::CircularCall(BrewCircularCall {
+                source: read_u32_le(payload_data, 0),
+                destination: read_u32_le(payload_data, 4),
+                number: parse_fixed_ascii(&payload_data[8..8 + CIRCULAR_NUMBER_LEN]),
+                priority: payload_data[40],
+                service: payload_data[41],
+                mode: payload_data[42],
+                duplex: payload_data[43],
+                method: payload_data[44],
+                communication: payload_data[45],
+                grant: payload_data[46],
+                permission: payload_data[47],
+                timeout: payload_data[48],
+                ownership: payload_data[49],
+                queued: payload_data[50],
+            })
+        }
+
+        CALL_STATE_SETUP_ACCEPT | CALL_STATE_CALL_ALERT => {
+            // No extra payload
+            BrewCallPayload::Empty
+        }
+
+        CALL_STATE_CONNECT_CONFIRM | CALL_STATE_SIMPLEX_GRANTED | CALL_STATE_SIMPLEX_IDLE => {
+            if payload_data.len() < 2 {
+                return Err(BrewParseError::TooShort(data.len()));
+            }
+            BrewCallPayload::CircularGrant(BrewCircularGrant {
+                grant: payload_data[0],
+                permission: payload_data[1],
+            })
+        }
+
+        CALL_STATE_SHORT_TRANSFER => {
+            // BrewShortData: source(4) + destination(4) + number[32](char) = 40 bytes
+            if payload_data.len() < 8 {
+                return Err(BrewParseError::TooShort(data.len()));
+            }
+            BrewCallPayload::ShortTransfer {
+                source: read_u32_le(payload_data, 0),
+                destination: read_u32_le(payload_data, 4),
+            }
+        }
+
+        _ => {
+            // Store raw for unhandled types
+            BrewCallPayload::Raw(payload_data.to_vec())
+        }
+    };
+
+    Ok(BrewMessage::CallControl(BrewCallControlMessage {
+        call_state,
+        identifier,
+        payload,
+    }))
+}
+
+fn parse_frame(frame_type: u8, data: &[u8]) -> Result<BrewMessage, BrewParseError> {
+    // kind(1) + type(1) + uuid(16) + length(2) = 20 bytes minimum
+    if data.len() < 20 {
+        return Err(BrewParseError::TooShort(data.len()));
+    }
+
+    let uuid_bytes: [u8; 16] = data[2..18].try_into().map_err(|_| BrewParseError::InvalidUuid)?;
+    let identifier = Uuid::from_bytes(uuid_bytes);
+
+    let length_bits = read_u16_le(data, 18);
+    let frame_data = data[20..].to_vec();
+
+    Ok(BrewMessage::Frame(BrewFrameMessage {
+        frame_type,
+        identifier,
+        length_bits,
+        data: frame_data,
+    }))
+}
+
+fn parse_error(error_type: u8, data: &[u8]) -> Result<BrewMessage, BrewParseError> {
+    Ok(BrewMessage::Error(BrewErrorMessage {
+        error_type,
+        data: data[2..].to_vec(),
+    }))
+}
+
+fn parse_service(service_type: u8, data: &[u8]) -> Result<BrewMessage, BrewParseError> {
+    // Data is NULL-terminated JSON
+    let json_bytes = &data[2..];
+    // Find NULL terminator or use full length
+    let end = json_bytes.iter().position(|&b| b == 0).unwrap_or(json_bytes.len());
+    let json_str = std::str::from_utf8(&json_bytes[..end]).map_err(|_| BrewParseError::InvalidUtf8)?;
+
+    Ok(BrewMessage::Service(BrewServiceMessage {
+        service_type,
+        json_data: json_str.to_string(),
+    }))
+}
+
+// ─── Building (outgoing messages) ─────────────────────────────────
+
+/// Build a subscriber registration message
+
+// ─── Circuit / individual call serializers ────────────────────────────────
+
+fn build_circular_call(call_state: u8, session_uuid: &Uuid, call: &BrewCircularCall) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2 + 16 + CIRCULAR_CALL_LEN);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(call_state);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u32_le(&mut buf, call.source);
+    write_u32_le(&mut buf, call.destination);
+    write_fixed_ascii(&mut buf, &call.number, CIRCULAR_NUMBER_LEN);
+    buf.push(call.priority);
+    buf.push(call.service);
+    buf.push(call.mode);
+    buf.push(call.duplex);
+    buf.push(call.method);
+    buf.push(call.communication);
+    buf.push(call.grant);
+    buf.push(call.permission);
+    buf.push(call.timeout);
+    buf.push(call.ownership);
+    buf.push(call.queued);
+    buf
+}
+
+/// Build SETUP_REQUEST for circuit/PBX/phone call (ETSI 14.7.1 BS→TetraPack).
+pub fn build_setup_request(session_uuid: &Uuid, call: &BrewCircularCall) -> Vec<u8> {
+    build_circular_call(CALL_STATE_SETUP_REQUEST, session_uuid, call)
+}
+
+/// Build CONNECT_REQUEST for circuit/PBX/phone call (ETSI 14.7.5 BS→TetraPack).
+pub fn build_connect_request(session_uuid: &Uuid, call: &BrewCircularCall) -> Vec<u8> {
+    build_circular_call(CALL_STATE_CONNECT_REQUEST, session_uuid, call)
+}
+
+/// Build SETUP_ACCEPT — no payload (ETSI 14.7.2 BS→TetraPack).
+pub fn build_setup_accept(session_uuid: &Uuid) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(18);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_SETUP_ACCEPT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf
+}
+
+/// Build CALL_ALERT — no payload (ETSI 14.7.3 BS→TetraPack, called MS ringing).
+pub fn build_call_alert(session_uuid: &Uuid) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(18);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_CALL_ALERT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf
+}
+
+/// Build SETUP_REJECT with disconnect cause (ETSI 14.7.2 BS→TetraPack).
+pub fn build_setup_reject(session_uuid: &Uuid, cause: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(19);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_SETUP_REJECT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf.push(cause);
+    buf
+}
+
+/// Build CONNECT_CONFIRM with grant/permission (ETSI 14.7.6 BS→TetraPack).
+pub fn build_connect_confirm(session_uuid: &Uuid, grant: u8, permission: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(20);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_CONNECT_CONFIRM);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf.push(grant);
+    buf.push(permission);
+    buf
+}
+
+/// Build CALL_RELEASE with disconnect cause (ETSI 14.7.x both directions).
+pub fn build_call_release(session_uuid: &Uuid, cause: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(19);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_CALL_RELEASE);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf.push(cause);
+    buf
+}
+
+/// Build DTMF data frame message.
+pub fn build_dtmf_frame(session_uuid: &Uuid, length_bits: u16, data: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(20 + data.len());
+    buf.push(BREW_CLASS_FRAME);
+    buf.push(FRAME_TYPE_DTMF_DATA);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u16_le(&mut buf, length_bits);
+    buf.extend_from_slice(data);
+    buf
+}
+
+pub fn build_subscriber_register(issi: u32, groups: &[u32]) -> Vec<u8> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let mut buf = Vec::with_capacity(18 + groups.len() * 4);
+    buf.push(BREW_CLASS_SUBSCRIBER);
+    buf.push(BREW_SUBSCRIBER_REGISTER);
+    write_u32_le(&mut buf, issi);
+    write_u64_le(&mut buf, now.as_secs());
+    write_u32_le(&mut buf, now.subsec_nanos());
+    buf
+}
+
+/// Build a subscriber re-registration message (for already-registered subscribers)
+pub fn build_subscriber_reregister(issi: u32) -> Vec<u8> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let mut buf = Vec::with_capacity(18);
+    buf.push(BREW_CLASS_SUBSCRIBER);
+    buf.push(BREW_SUBSCRIBER_REREGISTER);
+    write_u32_le(&mut buf, issi);
+    write_u64_le(&mut buf, now.as_secs());
+    write_u32_le(&mut buf, now.subsec_nanos());
+    buf
+}
+
+/// Build a subscriber affiliation message
+pub fn build_subscriber_affiliate(issi: u32, groups: &[u32]) -> Vec<u8> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let mut buf = Vec::with_capacity(18 + groups.len() * 4);
+    buf.push(BREW_CLASS_SUBSCRIBER);
+    buf.push(BREW_SUBSCRIBER_AFFILIATE);
+    write_u32_le(&mut buf, issi);
+    write_u64_le(&mut buf, now.as_secs());
+    write_u32_le(&mut buf, now.subsec_nanos());
+    for &gssi in groups {
+        write_u32_le(&mut buf, gssi);
+    }
+    buf
+}
+
+/// Build a subscriber deaffiliation message
+pub fn build_subscriber_deaffiliate(issi: u32, groups: &[u32]) -> Vec<u8> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let mut buf = Vec::with_capacity(18 + groups.len() * 4);
+    buf.push(BREW_CLASS_SUBSCRIBER);
+    buf.push(BREW_SUBSCRIBER_DEAFFILIATE);
+    write_u32_le(&mut buf, issi);
+    write_u64_le(&mut buf, now.as_secs());
+    write_u32_le(&mut buf, now.subsec_nanos());
+    for &gssi in groups {
+        write_u32_le(&mut buf, gssi);
+    }
+    buf
+}
+
+/// Build a subscriber deregistration message
+pub fn build_subscriber_deregister(issi: u32) -> Vec<u8> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let mut buf = Vec::with_capacity(18);
+    buf.push(BREW_CLASS_SUBSCRIBER);
+    buf.push(BREW_SUBSCRIBER_DEREGISTER);
+    write_u32_le(&mut buf, issi);
+    write_u64_le(&mut buf, now.as_secs());
+    write_u32_le(&mut buf, now.subsec_nanos());
+    buf
+}
+
+/// Build a group call transmission start message (GROUP_TX)
+/// Sent when a local radio starts transmitting on a subscribed group
+pub fn build_group_tx(session_uuid: &Uuid, source_issi: u32, dest_gssi: u32, priority: u8, service: u16) -> Vec<u8> {
+    // kind(1) + type(1) + uuid(16) + source(4) + dest(4) + priority(1) + access(1) + service(2) = 30
+    let mut buf = Vec::with_capacity(30);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_GROUP_TX);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u32_le(&mut buf, source_issi);
+    write_u32_le(&mut buf, dest_gssi);
+    buf.push(priority);
+    buf.push(0); // access = 0 (normal)
+    write_u16_le(&mut buf, service);
+    buf
+}
+
+/// Build a voice frame message (ACELP traffic channel data)
+/// `data` should be packed ACELP bits (1 bit per byte in STE format, with
+/// a leading STE header byte prepended by the caller if needed)
+pub fn build_voice_frame(session_uuid: &Uuid, length_bits: u16, data: &[u8]) -> Vec<u8> {
+    // kind(1) + type(1) + uuid(16) + length(2) + data = 20 + data.len()
+    let mut buf = Vec::with_capacity(20 + data.len());
+    buf.push(BREW_CLASS_FRAME);
+    buf.push(FRAME_TYPE_TRAFFIC_CHANNEL);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u16_le(&mut buf, length_bits);
+    buf.extend_from_slice(data);
+    buf
+}
+
+/// Build a group call idle (hangup) message
+pub fn build_group_idle(session_uuid: &Uuid, cause: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(19);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_GROUP_IDLE);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf.push(cause);
+    buf
+}
+
+/// Build a CALL_STATE_SHORT_TRANSFER message (SDS header with source/dest/number)
+pub fn build_short_transfer(session_uuid: &Uuid, source: u32, destination: u32) -> Vec<u8> {
+    // kind(1) + type(1) + uuid(16) + source(4) + destination(4) + number[32](1 byte each) = 58
+    let mut buf = Vec::with_capacity(58);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_SHORT_TRANSFER);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u32_le(&mut buf, source);
+    write_u32_le(&mut buf, destination);
+    // number field: 32 bytes, zero-filled (external subscriber number not supported)
+    buf.extend_from_slice(&[0u8; 32]);
+    buf
+}
+
+/// Build a FRAME_TYPE_SDS_TRANSFER message (SDS Type 4 PDU payload)
+pub fn build_sds_frame(session_uuid: &Uuid, length_bits: u16, data: &[u8]) -> Vec<u8> {
+    // kind(1) + type(1) + uuid(16) + length(2) + data = 20 + data.len()
+    let mut buf = Vec::with_capacity(20 + data.len());
+    buf.push(BREW_CLASS_FRAME);
+    buf.push(FRAME_TYPE_SDS_TRANSFER);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u16_le(&mut buf, length_bits);
+    buf.extend_from_slice(data);
+    buf
+}
+
+/// Build a FRAME_TYPE_SDS_REPORT message (delivery acknowledgement)
+/// Wire: kind(1) + type(1) + uuid(16) + length_bits(2) + status(1) = 21 bytes
+pub fn build_sds_report(session_uuid: &Uuid, status: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(21);
+    buf.push(BREW_CLASS_FRAME);
+    buf.push(FRAME_TYPE_SDS_REPORT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u16_le(&mut buf, 8); // length_bits = 8 (1 byte status)
+    buf.push(status);
+    buf
+}
+
+/// Build a service query (query subscriber profiles)
+pub fn build_query_subscribers(issis: &[u32]) -> Vec<u8> {
+    let json = serde_json::to_string(issis).unwrap_or_else(|_| "[]".to_string());
+    let mut buf = Vec::with_capacity(3 + json.len());
+    buf.push(BREW_CLASS_SERVICE);
+    buf.push(1); // Query subscribers type
+    buf.extend_from_slice(json.as_bytes());
+    buf.push(0); // NULL terminator
+    buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_group_tx() {
+        let uuid = Uuid::new_v4();
+        let mut data = vec![BREW_CLASS_CALL_CONTROL, CALL_STATE_GROUP_TX];
+        data.extend_from_slice(uuid.as_bytes());
+        // BrewGroupTransmission: source(4) + dest(4) + priority(1) + access(1) + service(2)
+        write_u32_le(&mut data, 1001); // source ISSI
+        write_u32_le(&mut data, 26); // destination GSSI
+        data.push(3); // priority
+        data.push(0); // access
+        write_u16_le(&mut data, 0); // service
+
+        let msg = parse_brew_message(&data).unwrap();
+        if let BrewMessage::CallControl(cc) = msg {
+            assert_eq!(cc.call_state, CALL_STATE_GROUP_TX);
+            assert_eq!(cc.identifier, uuid);
+            if let BrewCallPayload::GroupTransmission(gt) = cc.payload {
+                assert_eq!(gt.source, 1001);
+                assert_eq!(gt.destination, 26);
+                assert_eq!(gt.priority, 3);
+            } else {
+                panic!("Expected GroupTransmission payload");
+            }
+        } else {
+            panic!("Expected CallControl message");
+        }
+    }
+
+    #[test]
+    fn test_parse_voice_frame() {
+        let uuid = Uuid::new_v4();
+        let mut data = vec![BREW_CLASS_FRAME, FRAME_TYPE_TRAFFIC_CHANNEL];
+        data.extend_from_slice(uuid.as_bytes());
+        write_u16_le(&mut data, 274); // length in bits
+        // 36 bytes of fake ACELP data
+        let acelp = vec![0x80; 36];
+        data.extend_from_slice(&acelp);
+
+        let msg = parse_brew_message(&data).unwrap();
+        if let BrewMessage::Frame(frame) = msg {
+            assert_eq!(frame.frame_type, FRAME_TYPE_TRAFFIC_CHANNEL);
+            assert_eq!(frame.identifier, uuid);
+            assert_eq!(frame.length_bits, 274);
+            assert_eq!(frame.data.len(), 36);
+        } else {
+            panic!("Expected Frame message");
+        }
+    }
+
+    #[test]
+    fn test_parse_short_transfer() {
+        let uuid = Uuid::new_v4();
+        let mut data = vec![BREW_CLASS_CALL_CONTROL, CALL_STATE_SHORT_TRANSFER];
+        data.extend_from_slice(uuid.as_bytes());
+        write_u32_le(&mut data, 5001); // source
+        write_u32_le(&mut data, 6001); // destination
+        // number field (32 bytes)
+        let number_str = b"6001";
+        data.extend_from_slice(number_str);
+        data.resize(data.len() + (32 - number_str.len()), 0);
+
+        let msg = parse_brew_message(&data).unwrap();
+        if let BrewMessage::CallControl(cc) = msg {
+            assert_eq!(cc.call_state, CALL_STATE_SHORT_TRANSFER);
+            assert_eq!(cc.identifier, uuid);
+            if let BrewCallPayload::ShortTransfer { source, destination } = cc.payload {
+                assert_eq!(source, 5001);
+                assert_eq!(destination, 6001);
+            } else {
+                panic!("Expected ShortTransfer payload");
+            }
+        } else {
+            panic!("Expected CallControl message");
+        }
+    }
+
+    #[test]
+    fn test_build_parse_sds_frame() {
+        let uuid = Uuid::new_v4();
+        let payload = vec![0xAA, 0xBB, 0xCC, 0xDD];
+        let built = build_sds_frame(&uuid, 32, &payload);
+
+        let msg = parse_brew_message(&built).unwrap();
+        if let BrewMessage::Frame(frame) = msg {
+            assert_eq!(frame.frame_type, FRAME_TYPE_SDS_TRANSFER);
+            assert_eq!(frame.identifier, uuid);
+            assert_eq!(frame.length_bits, 32);
+            assert_eq!(frame.data, payload);
+        } else {
+            panic!("Expected Frame message");
+        }
+    }
+
+    #[test]
+    fn test_build_parse_short_transfer() {
+        let uuid = Uuid::new_v4();
+        let built = build_short_transfer(&uuid, 1001, 2002);
+
+        let msg = parse_brew_message(&built).unwrap();
+        if let BrewMessage::CallControl(cc) = msg {
+            assert_eq!(cc.call_state, CALL_STATE_SHORT_TRANSFER);
+            assert_eq!(cc.identifier, uuid);
+            if let BrewCallPayload::ShortTransfer { source, destination } = cc.payload {
+                assert_eq!(source, 1001);
+                assert_eq!(destination, 2002);
+            } else {
+                panic!("Expected ShortTransfer payload");
+            }
+        } else {
+            panic!("Expected CallControl message");
+        }
+    }
+
+    #[test]
+    fn test_parse_group_idle() {
+        let uuid = Uuid::new_v4();
+        let mut data = vec![BREW_CLASS_CALL_CONTROL, CALL_STATE_GROUP_IDLE];
+        data.extend_from_slice(uuid.as_bytes());
+        data.push(0); // cause = normal
+
+        let msg = parse_brew_message(&data).unwrap();
+        if let BrewMessage::CallControl(cc) = msg {
+            assert_eq!(cc.call_state, CALL_STATE_GROUP_IDLE);
+            if let BrewCallPayload::Cause(cause) = cc.payload {
+                assert_eq!(cause, 0);
+            } else {
+                panic!("Expected Cause payload");
+            }
+        } else {
+            panic!("Expected CallControl message");
+        }
+    }
+
+    #[test]
+    fn test_build_parse_sds_report() {
+        let uuid = Uuid::new_v4();
+        let built = build_sds_report(&uuid, 0);
+
+        assert_eq!(built.len(), 21);
+        assert_eq!(built[0], BREW_CLASS_FRAME);
+        assert_eq!(built[1], FRAME_TYPE_SDS_REPORT);
+
+        let msg = parse_brew_message(&built).unwrap();
+        if let BrewMessage::Frame(frame) = msg {
+            assert_eq!(frame.frame_type, FRAME_TYPE_SDS_REPORT);
+            assert_eq!(frame.identifier, uuid);
+            assert_eq!(frame.length_bits, 8);
+            assert_eq!(frame.data, vec![0]);
+        } else {
+            panic!("Expected Frame message");
+        }
+    }
+}

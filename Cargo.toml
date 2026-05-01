@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+
+members = [
+    # Core libraries
+    "crates/tetra-core",
+    "crates/tetra-saps",
+    "crates/tetra-config",
+    "crates/tetra-pdus",
+    "crates/tetra-entities",
+    
+    # Binaries
+    "bins/bluestation-bs",
+    #"bins/bluestation-telemetry",
+    #"bins/bluestation-control",
+    #"bins/pdu-tool",
+]
+
+[workspace.package]
+version = "0.5.9"
+edition = "2024"
+authors = ["Wouter Bokslag / Midnight Blue"]
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+tetra-core = { path = "crates/tetra-core" }
+tetra-config = { path = "crates/tetra-config" }
+tetra-saps = { path = "crates/tetra-saps" }
+tetra-pdus = { path = "crates/tetra-pdus" }
+tetra-entities = { path = "crates/tetra-entities" }
+
+# External dependencies
+as-any = "0.3.2"
+num = "0.4.3"
+num-complex = "0.4.6"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+rustfft = "6.4.0"
+soapysdr = "0.5.0"
+rand = "0.9.2"
+clap = { version = "4.5.53", features = ["derive"] }
+tracing = { version = "0.1.41", features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+tracing-appender = "0.2.4"
+crossbeam-channel = "0.5"
+bitcode = "0.6.9"
+tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+uuid = { version = "1", features = ["v4"] }
+ctrlc = "3"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono-tz = "0.10"
