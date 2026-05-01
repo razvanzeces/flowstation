@@ -10,17 +10,18 @@ members = [
     "crates/tetra-entities",
     
     # Binaries
-    "bins/bluestation-bs",
-    #"bins/bluestation-telemetry",
-    #"bins/bluestation-control",
+    "bins/flowstation-bs",
+    #"bins/flowstation-telemetry",
+    #"bins/flowstation-control",
     #"bins/pdu-tool",
 ]
 
 [workspace.package]
-version = "0.5.9"
+version = "0.1.0"
 edition = "2024"
-authors = ["Wouter Bokslag / Midnight Blue"]
-license = "MIT"
+authors = ["FlowStation Contributors"]
+# Fork of tetra-bluestation by Wouter Bokslag / Midnight Blue (https://github.com/MidnightBlueLabs/tetra-bluestation)
+license = "AGPL-3.0"
 
 [workspace.dependencies]
 # Internal crates

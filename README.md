@@ -1,28 +1,38 @@
 ```
-░▀█▀░█▀▀░▀█▀░█▀▄░█▀█░░░░░█▀▄░█░░░█░█░█▀▀░█▀▀░▀█▀░█▀█░▀█▀░▀█▀░█▀█░█▀█
-░░█░░█▀▀░░█░░█▀▄░█▀█░▄▄▄░█▀▄░█░░░█░█░█▀▀░▀▀█░░█░░█▀█░░█░░░█░░█░█░█░█
-░░▀░░▀▀▀░░▀░░▀░▀░▀░▀░░░░░▀▀░░▀▀▀░▀▀▀░▀▀▀░▀▀▀░░▀░░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
+░█▀▀░█░░░█▀█░█░█░█▀▀░▀█▀░█▀█░▀█▀░▀█▀░█▀█░█▀█
+░█▀▀░█░░░█░█░█▄█░▀▀█░░█░░█▀█░░█░░░█░░█░█░█░█
+░▀░░░▀▀▀░▀▀▀░▀░▀░▀▀▀░░▀░░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
 ```
 
-This is a FOSS TETRA stack aimed at providing an extensible basis for TETRA experimentation and research. At this point, it's alpha code. The stack serves a downlink base station signal, and a properly configured MS is able to receive the emitted downlink signal, connect to it, and attach to talkgroups. Voice calls are partially supported. Connectivity through Brew with the larger BrandMeister network is also optionally available. Lots of other functionality is currently not implemented, although parsing code for most TETRA protocol messages is already present. 
+**FlowStation** is a FOSS TETRA base station stack focused on stability, full-duplex voice support, and production-ready operation. It is a fork of [tetra-bluestation](https://github.com/MidnightBlueLabs/tetra-bluestation) by Wouter Bokslag / Midnight Blue, extended with:
+
+- ✅ Full-duplex individual (P2P) calls — ETSI EN 300 392-2 §14 compliant
+- ✅ Individual calls over Brew/TetraPack (circuit-switched, duplex)
+- ✅ DTMF forwarding (U-INFO) to TetraPack
+- ✅ Configurable hangtime, call timeout (T310), and UL inactivity timeout
+- ✅ Graceful FACCH steal guard — no voice on closed circuits
+- ✅ Jitter buffer flush on speaker change — clean audio transitions
+- ✅ Stable reconnect handling — all active calls released on backhaul loss
+
+## Changelog vs upstream
+
+See `CHANGELOG.md` for a full list of changes relative to tetra-bluestation.
 
 ## Documentation
 
-Project documentation for tetra-bluestation is maintained in a separate repository, as a wiki.
+Hardware, configuration, and build instructions follow the upstream documentation:
 
 https://github.com/MidnightBlueLabs/tetra-bluestation-docs/wiki
 
-The documentation repository contains:
-- Hardware and SDR considerations 
-- Configuration file reference and examples  
-- Build and runtime instructions   
-- Practical notes 
+Configuration parameters added by FlowStation are documented in `example_config/config.toml`.
 
-Contributions to the documentation follow the same pull-request-based workflow as the main codebase, see the appropriate "Contributions" chapter.
+## License
+
+AGPL-3.0 — same as upstream. See `LICENSE`.
 
 ## Acknowledgements
 
-- Thanks to Harald Welte and the osmocom crew for their amazing initial work on osmocom-tetra, without which this project would not have existed. 
-- Many thanks to Tatu Peltola, who graciously augmented rust-soapysdr with the required timestamping functionality to facilitate robust rx/tx, and also provided a rust-native Viterbi encoder/decoder class used in the LMAC.
-- Many thanks to the awesome contributers helping to make BlueStation as stable, fancy and feature-rich as can be. 
-- Thanks to Stichting NLnet, who agreed on allocating a part of the [RETETRA3 project](https://nlnet.nl/project/RETETRA3/) grant to the implementation of FOSS software for TETRA. 
+- **Wouter Bokslag / Midnight Blue** — original tetra-bluestation implementation
+- **Harald Welte and the osmocom crew** — foundational work on osmocom-tetra
+- **Tatu Peltola** — rust-soapysdr timestamping and Viterbi encoder/decoder
+- **Stichting NLnet** — [RETETRA3 project](https://nlnet.nl/project/RETETRA3/) grant support
