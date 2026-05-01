@@ -1,4 +1,4 @@
-# TETRA FlowStation example configuration file
+# TETRA BlueStation example configuration file
 # This is an example configuration file for the TETRA base station stack
 # DO NOT RUN without editing to stay within legal limits of your jurisdiction
 
@@ -26,16 +26,14 @@ backend = "SoapySdr"
 [phy_io.soapysdr]
 # Transmit tx(dl) and rx(ul) frequencies in Hz
 # !!! Make sure to also edit all related fields in the cell_info section to fit this frequency.
-tx_freq = 438025000
-rx_freq = 433025000
-
-# Adjust if your SDR has a non-negligible tuning error
-# ppm_err = 0.0
+tx_freq = 439600000
+rx_freq = 434600000
+ppm_err = 0                       # Adjust if your SDR has a non-negligible tuning error
 
 ################################################################################################
 ## OPTIONAL: specific device, antenna, gain selection                                         ##
 ## Make sure to check your device for valid settings using SoapySDRUtil --probe               ##
-## or check: https://github.com/MidnightBlueLabs/tetra-flowstation-docs/wiki/03-Configuration ##
+## or check: https://github.com/MidnightBlueLabs/tetra-bluestation-docs/wiki/03-Configuration ##
 ################################################################################################
 
 # Optional device selection arguments.
@@ -44,7 +42,6 @@ rx_freq = 433025000
 # or if your device cannot be automatically detected by enumeration.
 # For example, to use a Pluto+ with a given IP address:
 # device = "driver=plutosdr,uri=ip:192.168.42.42"
-# To select a LimeSDR with a given serial number (check with SoapySDRUtil --find):
 # device = "driver=lime,serial=123456789"
 
 # Optional antenna selection to override device-specific defaults
@@ -54,21 +51,25 @@ rx_freq = 433025000
 
 # Optional gain values to override device-specific defaults.
 # Check valid gain names with SoapySDRUtil --probe
-# For example, to increase transmit power on a LimeSDR:
-# tx_gain_pad = 50.0
-# To adjust LNA gain to optimize RX performance on a LimeSDR or SXceiver:
-# rx_gain_lna = 30.0
+tx_gain_pad = 43
+tx_gain_iamp = 5
+# tx_gain_pga = 35.0
+# tx_gain_dac = 9.0
+# tx_gain_mixer = 30.0
+rx_gain_lna = 30
+rx_gain_tia = 6
+rx_gain_pga = 10
 
 ###############################################################################
 
 # Network Information
 [net_info]
 # Mobile Country Code (MCC) - identifies your country
-mcc = 204  # Netherlands
+mcc = 901
 
 # Mobile Network Code (MNC) - identifies the TETRA network
 # MAKE SURE MNC MAY BE USED, CONSULT RELEVANT AUTHORITIES IF NEEDED
-mnc = 1337
+mnc = 9999
 
 # Cell Information
 [cell_info]
@@ -76,9 +77,9 @@ mnc = 1337
 # These parameters specify the DL and UL frequencies
 # Read the spec if in doubt. Make sure these match the tx/rx freqs as given above
 # See ETSI TS 100 392-15 V1.5.1 Clause 6: Duplex spacing
-freq_band = 4                       # 400MHz band
-main_carrier = 1521                 # + 1521 * 25kHz = 38250kHz
-duplex_spacing = 4                  # Use 5MHz spacing between ul and dl (for 400 MHz band)
+freq_band = 4
+main_carrier = 1584
+duplex_spacing = 4
 # custom_duplex_spacing = 7600000   # Don't uncomment unless you have programmed a custom duplex spacing entry in your radios
 freq_offset = 0                     # Offset from carrier. Usually 0. Options: 0, 6250, -6250, 12500.
 reverse_operation = false           # False: UL below DL. True: UL above DL.
@@ -123,7 +124,7 @@ voice_service = true
 # advanced_link = false
 
 # System code (0-15) - identifies the TETRA system version
-# system_code = 0
+system_code = 3
 
 # Sharing mode for the main control channel
 # sharing_mode = 0
@@ -137,35 +138,32 @@ voice_service = true
 # Frame 18 extension support
 # frame_18_ext = false
 
-# Max MS TX power in cell: 0=Rsvd 1=15 2=20 3=25 4=30 5=35 6=40 7=45 dBm
-# ms_txpwr_max_cell = 4
-
 # IANA timezone for D-NWRK-BROADCAST time broadcasting. When set, the BS will
 # broadcast UTC time and local time offset once per hyperframe (~61s) so MSs
 # can synchronize their clocks. Handles DST automatically.
-# timezone = "Europe/Amsterdam"
+timezone = "Europe/Bucharest"
 
 # Local SSI ranges for this cell. Traffic for these ranges will not leave the cell
 # This overrides any settings in brew section, if enabled.
-# Also, incoming brew traffic on those ranges will be dropped
-# Range end is INCLUSIVE, so the range end number IS inside the ranges
-local_ssi_ranges = [
-    [0, 90],
-]
+# Also, incoming brew traffic on those rangges will be dropped
+# Range end is exclusive, so the range end number is NOT inside the ranges
+# local_ssi_ranges = [
+#     [0, 91],
+# ]
 
 # Group call hangtime in seconds.
 # After the last speaker releases the floor (U-TX-CEASED), the call circuit stays
 # open for this many seconds so any MS can retake the floor without a new call setup.
 # After expiry, D-RELEASE is sent and the timeslot is freed.
 # Default: 5 seconds. Valid range: 0–300.
-# hangtime_secs = 5
-
+hangtime_secs = 2
+ 
 # Maximum active call duration in seconds (ETSI EN 300 392-2 §14.9.1 T310 equivalent).
 # After this time the BS sends D-RELEASE regardless of call activity.
 # Shorter values free timeslots faster when an MS leaves coverage without disconnecting.
 # Default: 120 seconds (2 minutes). Valid range: 30–300.
 # call_timeout_secs = 120
-
+ 
 # UL inactivity timeout in seconds.
 # If no voice frames are received from the transmitting MS for this duration,
 # the BS forces TX-CEASED and enters hangtime. Must exceed T.213 (1s) to handle
@@ -180,30 +178,30 @@ local_ssi_ranges = [
 # Uncomment this section to automatically load and use Brew entity
 # See: https://wiki.tetrapack.online/books/tetra/page/brew
 
-# [brew]
+[brew]
 
 # Server address
-# host = "core.tetrapack.online"
-# port = 443
+host = "core.tetraflow.ro"
+port = 9000
 
 # Use TLS (wss:// / https://)
-# tls = true
+tls = true
 
 # HTTP Digest auth credentials, as registered in BrandMeister
 # Username should be your SSID (DMR ID + 2-digit suffix).
 # Password is your BrandMeister hotspot password.
-# username = 123456700
-# password = "012345"
+username = 2260571
+password = "Syatth3M!"
 
 # Reconnection delay (seconds)
-# reconnect_delay_secs = 15
+reconnect_delay_secs = 5
 
 # Optional: additional initial latency compensation in frames for inbound Brew jitter playout.
 # Adaptive jitter buffering is always enabled; this adds fixed startup delay if needed.
 # jitter_initial_latency_frames = 0
 
 # Enable SDS forwarding between local and Brew clients. Enabled by default.
-# feature_sds_enabled = true
+feature_sds_enabled = true
 
 # Uncomment to allow only calls for select SSIs to be transmitted over Brew
 # SDS works for all SSIs, currently, but the SDS over Brew feature may be fully disabled.

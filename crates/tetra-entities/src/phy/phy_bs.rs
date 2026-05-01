@@ -1,7 +1,7 @@
 use crossbeam_channel::Sender;
 use std::panic;
 
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, BurstType, PhyBlockNum, PhyBlockType, Sap, TdmaTime, TrainingSequence};
 use tetra_pdus::phy::traits::rxtx_dev::RxBurstBits;

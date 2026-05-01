@@ -1,5 +1,5 @@
 use crate::{MessagePrio, MessageQueue, TetraEntityTrait};
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{PhyBlockNum, PhyBlockType, Sap, TdmaTime, unimplemented_log};
 use tetra_saps::tmv::TmvUnitdataInd;

@@ -1,4 +1,5 @@
-use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
+use std::collections::HashMap;
+use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log, address::SsiType};
 use tetra_saps::{
     control::call_control::Circuit,
     tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
@@ -82,6 +83,11 @@ pub struct BsChannelScheduler {
     /// The next STCH built for a matching SSI should carry random_access_flag=true to properly
     /// acknowledge the random access per ETSI 21.4.3.1.
     pending_ra_acks: [Vec<u32>; 4],
+
+    /// Map from SSI to active traffic timeslot (2–4).
+    /// Populated when a circuit is opened, cleared when closed.
+    /// Used by identify_timeslots_for_ssi to route DL signaling to the correct timeslot.
+    ssi_to_ts: HashMap<u32, u8>,
 }
 
 #[derive(Debug)]
@@ -128,6 +134,7 @@ impl BsChannelScheduler {
             circuits: CircuitMgr::new(),
             hangtime: [false, false, false, false],
             pending_ra_acks: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            ssi_to_ts: HashMap::new(),
         }
     }
 
@@ -419,10 +426,10 @@ impl BsChannelScheduler {
     }
 
     pub fn dl_enqueue_tma(&mut self, pdu: MacResource, sdu: BitBuffer, tx_reporter: Option<TxReporter>) {
-        // Get all timeslots on which a relevant MS is listening
-        // let timeslots: [u8; NUM_TIMESLOTS] = self.identify_timeslots_for_ssi(pdu.addr);
-        tracing::trace!("identify_timeslots_for_ssi not implemented yet, defaulting to ts1");
-        let timeslots: [u8; NUM_TIMESLOTS] = [1, 0, 0, 0];
+        // Route signaling to the correct timeslot based on the destination SSI.
+        // ETSI EN 300 392-2 §21.4: signaling for an MS in a traffic channel must go
+        // on that traffic channel's timeslot, not on MCCH.
+        let timeslots: [u8; NUM_TIMESLOTS] = self.identify_timeslots_for_ssi(pdu.addr);
 
         // Queue the message for all timeslots on which we should transmit this message.
         // The loop basically prevents cloning the last element.
@@ -451,6 +458,49 @@ impl BsChannelScheduler {
                 break;
             }
         }
+    }
+
+    /// Register one or more SSIs as active on a traffic timeslot.
+    /// Called when a circuit is opened so DL signaling can be routed correctly.
+    pub fn register_ssi_on_ts(&mut self, ts: u8, ssis: &[u32]) {
+        for &ssi in ssis {
+            self.ssi_to_ts.insert(ssi, ts);
+        }
+    }
+
+    /// Unregister all SSIs associated with a timeslot when the circuit is closed.
+    pub fn unregister_ts_ssis(&mut self, ts: u8) {
+        self.ssi_to_ts.retain(|_, &mut t| t != ts);
+    }
+
+    /// Find the traffic timeslot(s) on which a given SSI should receive DL signaling.
+    ///
+    /// ETSI EN 300 392-2 §21.4: signaling for an MS in a traffic channel must be sent
+    /// on the same timeslot as the traffic channel, not on the MCCH (ts1).
+    ///
+    /// Returns [ts, 0, 0, 0] where ts is the traffic timeslot if the SSI has an active
+    /// circuit, or [1, 0, 0, 0] (MCCH) if the SSI is idle.
+    /// GSSI broadcast (0xFFFFFF) always goes to ts1.
+    fn identify_timeslots_for_ssi(&self, addr: Option<TetraAddress>) -> [u8; NUM_TIMESLOTS] {
+        let Some(addr) = addr else {
+            return [1, 0, 0, 0]; // No address — broadcast on MCCH
+        };
+
+        // GSSI broadcast always on MCCH
+        if addr.ssi_type == SsiType::Gssi || addr.ssi == 0xFFFFFF {
+            return [1, 0, 0, 0];
+        }
+
+        // Look up SSI in active circuit map
+        if let Some(&ts) = self.ssi_to_ts.get(&addr.ssi) {
+            if self.circuits.is_active(Direction::Dl, ts) {
+                return [ts, 0, 0, 0];
+            }
+            // Circuit was closed but map not cleaned — fall through to MCCH
+        }
+
+        // SSI not in any active circuit — use MCCH (ts1)
+        [1, 0, 0, 0]
     }
 
     /// Consumes and returns true if a pending random access ack exists for the given SSI on

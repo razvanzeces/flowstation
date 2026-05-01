@@ -1,7 +1,7 @@
 use crate::mle::components::mle_router::MleRouter;
 use crate::mle::components::network_time::encode_tetra_network_time;
 use crate::{MessageQueue, TetraEntityTrait};
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, unimplemented_log};
 use tetra_saps::lcmc::LcmcMleUnitdataInd;

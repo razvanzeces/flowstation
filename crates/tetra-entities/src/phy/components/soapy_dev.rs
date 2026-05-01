@@ -2,7 +2,7 @@
 //! between SDR device and modulator/demodulator code.
 
 use rustfft;
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 
 use tetra_pdus::phy::traits::rxtx_dev::RxSlotBits;
 use tetra_pdus::phy::traits::rxtx_dev::RxTxDev;

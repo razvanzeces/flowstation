@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::panic;
 
 use crate::{MessageQueue, TetraEntityTrait};
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, TxReporter, unimplemented_log};
 use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;

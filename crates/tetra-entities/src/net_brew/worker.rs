@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use tetra_config::bluestation::CfgBrew;
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::CfgBrew;
+use tetra_config::flowstation::SharedConfig;
 use uuid::Uuid;
 
 use crate::net_brew;

@@ -582,10 +582,12 @@ impl CcBsSubentity {
         call: &CmceCircuit,
         peer_ts: Option<u8>,
         dl_media_source: CircuitDlMediaSource,
+        ssis: Vec<u32>,
     ) {
         let circuit = Circuit {
             direction: call.direction,
             ts: call.ts,
+            ssis,
             peer_ts,
             usage: call.usage,
             circuit_mode: call.circuit_mode,

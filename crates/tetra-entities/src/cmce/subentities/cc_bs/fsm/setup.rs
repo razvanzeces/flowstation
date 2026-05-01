@@ -51,7 +51,8 @@ impl CcBsSubentity {
         );
 
         // Signal UMAC to open DL+UL circuits.
-        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::LocalLoopback);
+        // Pass calling SSI so scheduler knows which timeslot to use for signaling.
+        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::LocalLoopback, vec![calling_party.ssi]);
 
         // Build channel allocation timeslot mask for this call.
         let mut timeslots = [false; 4];

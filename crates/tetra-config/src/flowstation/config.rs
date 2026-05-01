@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::sync::{Arc, RwLock};
 use tetra_core::freqs::FreqInfo;
 
-use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, PhyBackend, StackState};
+use crate::flowstation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, PhyBackend, StackState};
 
 use super::sec_brew::CfgBrew;
 use super::sec_telemetry::CfgTelemetry;

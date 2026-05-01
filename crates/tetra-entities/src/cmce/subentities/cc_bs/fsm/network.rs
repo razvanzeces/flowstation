@@ -335,7 +335,7 @@ impl CcBsSubentity {
             speech_service: Some(0),
             etee_encrypted: false,
         };
-        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::SwMI);
+        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::SwMI, vec![call.calling_addr.ssi]);
 
         if let Err(err) = self.fsm_individual_transition_to_active(call_id) {
             match err {
@@ -502,7 +502,7 @@ impl CcBsSubentity {
             speech_service,
             etee_encrypted,
         };
-        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::SwMI);
+        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::SwMI, vec![call.called_addr.ssi]);
 
         if let Err(err) = self.fsm_individual_transition_to_active(call_id) {
             match err {
@@ -634,7 +634,7 @@ impl CcBsSubentity {
             call_id
         );
 
-        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::LocalLoopback);
+        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::LocalLoopback, vec![source_issi]);
 
         tracing::debug!(
             "CMCE: sending D-SETUP for NEW call call_id={} gssi={} (network-initiated)",

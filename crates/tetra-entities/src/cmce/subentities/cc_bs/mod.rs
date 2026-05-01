@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::typed_pdu_fields::Type3FieldGeneric;
 use tetra_core::{
     BitBuffer, Direction, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, TimeslotOwner,

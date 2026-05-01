@@ -1,7 +1,7 @@
 use crate::net_control::ControlEndpoint;
 use crate::net_telemetry::channel::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait, net_brew};
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};

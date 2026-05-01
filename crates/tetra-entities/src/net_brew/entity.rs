@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::net_brew::components::jitter_buffer::{JitterFrame, VoiceJitterBuffer};
 use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
-use tetra_config::bluestation::{CfgBrew, SharedConfig};
+use tetra_config::flowstation::{CfgBrew, SharedConfig};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::{SapMsg, SapMsgInner, control::call_control::{CallControl, NetworkCircuitCall}, tmd::TmdCircuitDataReq};

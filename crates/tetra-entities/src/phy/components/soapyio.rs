@@ -1,5 +1,5 @@
 use soapysdr;
-use tetra_config::bluestation::{SharedConfig, StackMode, sec_phy_soapy::CfgSoapySdr};
+use tetra_config::flowstation::{SharedConfig, StackMode, sec_phy_soapy::CfgSoapySdr};
 
 use tetra_pdus::phy::traits::rxtx_dev::RxTxDevError;
 
