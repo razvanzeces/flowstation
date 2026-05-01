@@ -61,7 +61,7 @@ fn start_telemetry_worker(cfg: SharedConfig, telemetry_source: TelemetrySource) 
         basic_auth_credentials: tcfg.credentials.clone(),
         endpoint_path: "/".to_string(),
         subprotocol: Some(TELEMETRY_PROTOCOL_VERSION.to_string()),
-        user_agent: format!("BlueStation/{}", tetra_core::STACK_VERSION),
+        user_agent: format!("FlowStation/{}", tetra_core::STACK_VERSION),
         heartbeat_interval: TELEMETRY_HEARTBEAT_INTERVAL,
         heartbeat_timeout: TELEMETRY_HEARTBEAT_TIMEOUT,
         custom_root_certs,
@@ -94,7 +94,7 @@ fn start_control_worker(cfg: SharedConfig, command_dispatchers: HashMap<TetraEnt
         basic_auth_credentials: ccfg.credentials.clone(),
         endpoint_path: "/".to_string(),
         subprotocol: Some(CONTROL_PROTOCOL_VERSION.to_string()),
-        user_agent: format!("BlueStation/{}", tetra_core::STACK_VERSION),
+        user_agent: format!("FlowStation/{}", tetra_core::STACK_VERSION),
         heartbeat_interval: CONTROL_HEARTBEAT_INTERVAL,
         heartbeat_timeout: CONTROL_HEARTBEAT_TIMEOUT,
         custom_root_certs,
@@ -178,8 +178,8 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
 #[command(
     author,
     version,
-    about = "TETRA BlueStation base station stack",
-    long_about = "Runs the TETRA BlueStation base station stack using the provided TOML configuration files"
+    about = "TETRA FlowStation base station stack",
+    long_about = "Runs the TETRA FlowStation base station stack using the provided TOML configuration files"
 )]
 
 struct Args {
