@@ -20,6 +20,11 @@ pub struct Circuit {
     /// Timeslot in which this circuit exists
     pub ts: u8,
 
+    /// SSIs associated with this circuit. For group calls: all members on this ts.
+    /// For individual calls: the two parties (calling + called).
+    /// Used by UMAC scheduler to route downlink signaling to the correct timeslot.
+    pub ssis: Vec<u32>,
+
     /// Optional peer timeslot for duplex cross-routing (UL on ts -> DL on peer_ts).
     /// For full-duplex P2P calls: calling MS on ts, called MS on peer_ts, audio is crossed.
     /// None for simplex/group calls.

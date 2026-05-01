@@ -528,6 +528,7 @@ impl CcBsSubentity {
             &circuit_calling,
             duplex_peer,
             CircuitDlMediaSource::LocalLoopback,
+            vec![calling_addr.ssi, called_addr.ssi],
         );
 
         if called_ts != calling_ts {
@@ -548,6 +549,7 @@ impl CcBsSubentity {
                 &circuit_called,
                 Some(calling_ts),
                 CircuitDlMediaSource::LocalLoopback,
+                vec![called_addr.ssi, calling_addr.ssi],
             );
         }
 

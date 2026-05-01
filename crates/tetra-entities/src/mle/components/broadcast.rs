@@ -1,4 +1,4 @@
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity};
 use tetra_pdus::mle::{enums::mle_protocol_discriminator::MleProtocolDiscriminator, pdus::d_nwrk_broadcast::DNwrkBroadcast};
 use tetra_saps::{SapMsg, SapMsgInner, tla::TlaTlUnitdataReqBl};

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CfgSoapySdr, SoapySdrDto};
+use crate::flowstation::{CfgSoapySdr, SoapySdrDto};
 
 /// The PHY layer backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

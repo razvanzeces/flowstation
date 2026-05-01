@@ -1,6 +1,6 @@
 //! Device-specific SoapySDR settings
 
-use tetra_config::bluestation::{StackMode, sec_phy_soapy::*};
+use tetra_config::flowstation::{StackMode, sec_phy_soapy::*};
 
 /// Enum of all supported devices
 pub enum SupportedDevice {

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
-use tetra_config::bluestation::SecretField;
+use tetra_config::flowstation::SecretField;
 use tungstenite::{Connector, Message, WebSocket, stream::MaybeTlsStream};
 
 use super::{NetworkAddress, NetworkError, NetworkMessage, NetworkTransport};

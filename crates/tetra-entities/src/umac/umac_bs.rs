@@ -1,6 +1,6 @@
 use std::panic;
 
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};
@@ -1387,6 +1387,7 @@ impl UmacBs {
             let c = Circuit {
                 direction: d,
                 ts: circuit.ts,
+                ssis: circuit.ssis.clone(),
                 peer_ts: circuit.peer_ts,
                 usage: circuit.usage,
                 circuit_mode: circuit.circuit_mode,
@@ -1396,12 +1397,17 @@ impl UmacBs {
             };
             self.channel_scheduler.create_circuit(d, c);
 
+            // Register SSIs on this timeslot for DL signaling routing (ETSI §21.4)
+            if d == Direction::Dl {
+                self.channel_scheduler.register_ssi_on_ts(ts, &circuit.ssis);
+            }
+
             // Start UL inactivity timer when opening a UL circuit
             if d == Direction::Ul && (1..=4).contains(&ts) {
                 self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
             }
 
-            tracing::debug!("  rx_control_circuit_open: Setup {:?} circuit for ts {}", d, ts);
+            tracing::debug!("  rx_control_circuit_open: Setup {:?} circuit for ts {} ssis={:?}", d, ts, circuit.ssis);
         }
     }
 
@@ -1424,6 +1430,10 @@ impl UmacBs {
                     // Clear UL inactivity timer when closing a UL circuit
                     if d == Direction::Ul && (1..=4).contains(&ts) {
                         self.last_ul_voice[ts as usize - 1] = None;
+                    }
+                    // Unregister SSIs from this timeslot so signaling falls back to MCCH
+                    if d == Direction::Dl {
+                        self.channel_scheduler.unregister_ts_ssis(ts);
                     }
                     tracing::info!("  rx_control_circuit_close: Closed {:?} circuit for ts {}", d, ts);
                 }

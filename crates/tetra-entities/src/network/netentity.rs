@@ -1,7 +1,7 @@
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::{marker::PhantomData, thread};
 
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::{TdmaTime, tetra_common::Sap, tetra_entities::TetraEntity};
 use tetra_saps::SapMsg;
 

@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::SecretField;
+use crate::flowstation::SecretField;
 
 /// Brew protocol (TetraPack/BrandMeister) configuration
 #[derive(Debug, Clone)]

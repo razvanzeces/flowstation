@@ -1,6 +1,6 @@
 use crate::MessageQueue;
 use as_any::AsAny;
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::flowstation::SharedConfig;
 use tetra_core::{TdmaTime, tetra_entities::TetraEntity};
 use tetra_saps::SapMsg;
 

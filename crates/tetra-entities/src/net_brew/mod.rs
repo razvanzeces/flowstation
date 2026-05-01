@@ -18,7 +18,7 @@ pub use components::brew_routable::is_brew_issi_routable;
 use std::time::Duration;
 
 use crate::network::transports::websocket::{WebSocketTransport, WebSocketTransportConfig};
-use tetra_config::bluestation::CfgBrew;
+use tetra_config::flowstation::CfgBrew;
 
 pub const BREW_PROTOCOL_VERSION: &str = "brew";
 

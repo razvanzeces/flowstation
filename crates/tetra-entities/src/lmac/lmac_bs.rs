@@ -1,4 +1,4 @@
-use tetra_config::bluestation::{SharedConfig, StackMode};
+use tetra_config::flowstation::{SharedConfig, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BurstType, PhyBlockNum, PhysicalChannel, Sap, TdmaTime, TrainingSequence};
 use tetra_saps::tmv::TmvUnitdataInd;

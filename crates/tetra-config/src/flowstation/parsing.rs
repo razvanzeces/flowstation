@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
+use crate::flowstation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
 
 use super::config::{StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
