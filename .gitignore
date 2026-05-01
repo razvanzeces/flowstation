@@ -2,4 +2,3 @@
 /target
 config.toml
 # Exclude real config files with credentials
-example_config/config.toml
