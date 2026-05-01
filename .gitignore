@@ -1,3 +1,4 @@
 .vscode
 /target
 config.toml
+# Exclude real config files with credentials

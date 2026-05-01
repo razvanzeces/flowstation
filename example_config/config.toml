@@ -1,0 +1,44 @@
+# FlowStation example configuration file
+# DO NOT RUN without editing to stay within legal limits of your jurisdiction
+
+config_version = "0.6"
+
+stack_mode = "Bs"
+
+[phy_io]
+backend = "SoapySdr"
+
+[phy_io.soapysdr]
+tx_freq = 438025000
+rx_freq = 433025000
+
+[net_info]
+mcc = 204
+mnc = 1337
+
+[cell_info]
+freq_band = 4
+main_carrier = 1521
+duplex_spacing = 4
+freq_offset = 0
+reverse_operation = false
+location_area = 2
+colour_code = 1
+system_wide_services = true
+voice_service = true
+
+local_ssi_ranges = [
+    [0, 90],
+]
+
+# hangtime_secs = 5
+# call_timeout_secs = 120
+# ul_inactivity_secs = 3
+
+# [brew]
+# host = "core.tetrapack.online"
+# port = 443
+# tls = true
+# username = 1234567
+# password = "your-brandmeister-password"
+# reconnect_delay_secs = 15
