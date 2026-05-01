@@ -1,0 +1,175 @@
+ # ./target/release/tetra-bs ./bs_test.toml
+... 
+ INFO src/entities/lmac/lmac_bs.rs:77: LmacBs: initialized with stack mode Bs, mcc 204 mnc 1337 cc 1
+
+#####
+### Annotation: Below two messages are normal, we'll 'lose' some tx bytes during startup. After this, everything
+### is synchronized and running. Frequent repetitions of these errors are bad and a sign of the system not keeping up
+#####
+
+ WARN src/entities/phy/components/rxdev_soapysdr.rs:248: Lost -1024 samples, skipping 768 more samples and 1 processing blocks
+ WARN src/entities/phy/components/rxdev_soapysdr.rs:351: Too late to produce TX block 0, skipping 7 TX blocks
+
+
+#####
+### Annotation: we now receive the MS registration. The route it follows is phy -> lmac -> umac -> llc -> mle -> mm
+#####
+
+ INFO src/entities/phy/components/demodulator.rs:520: Found ExtendedTrainSeq at 124 with 0 errors
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmvSap, src: Lmac, dest: Umac, dltime:     0/08/05/3, msg: TmvUnitdataInd(TmvUnitdataInd { pdu: BitBuffer { <0 ^0 >92 ^01000000000000010011100010001000010001001001100110101110011010001010100000000010000000000000 }, logical_channel: SCH_HU, crc_pass: true, scrambling_code: 855980295 }) }
+DEBUG src/entities/umac/umac_bs.rs:634: <- MacAccess { fill_bits: true, encrypted: false, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, length_ind: None, frag_flag: None, reservation_req: None }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:238: dl_enqueue_random_access_ack: ts 1 enqueueing random access acknowledgementfor addr SSI:10001
+DEBUG src/entities/umac/umac_bs.rs:717: rx_mac_access: <010000000000000100111000100010^000100010010011001101011100110100010101000000000>100000000000000000
+DEBUG src/entities/llc/llc.rs:415: rx_prim: SapMsg { sap: TmaSap, src: Umac, dest: Llc, dltime:     0/08/05/3, msg: TmaUnitdataInd(TmaUnitdataInd { pdu: Some(BitBuffer { <6 ^6 >54 ^000100010010011001101011100110100010101000000000 }), main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, air_interface_encryption: 0, chan_change_response_req: false, chan_change_handle: None, chan_info: None }) }
+DEBUG src/entities/llc/llc.rs:280: <- BlData: BlData { has_fcs: false, ns: 0 }
+DEBUG src/entities/mle/mle.rs:482: rx_prim: SapMsg { sap: TlaSap, src: Llc, dest: Mle, dltime:     0/08/05/3, msg: TlaTlDataIndBl(TlaTlDataIndBl { address_type: 0, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, link_id: 0, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, tl_sdu: Some(BitBuffer { <11 ^11 >54 ^0010010011001101011100110100010101000000000 }), scrambling_code: 855980295, fcs_flag: false, air_interface_encryption: 0, chan_change_resp_req: false, chan_change_handle: None, chan_info: None, req_handle: 0 }) }
+TRACE src/entities/mle/mle.rs:75: rx_tla_prim: SapMsg { sap: TlaSap, src: Llc, dest: Mle, dltime:     0/08/05/3, msg: TlaTlDataIndBl(TlaTlDataIndBl { address_type: 0, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, link_id: 0, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, tl_sdu: Some(BitBuffer { <11 ^11 >54 ^0010010011001101011100110100010101000000000 }), scrambling_code: 855980295, fcs_flag: false, air_interface_encryption: 0, chan_change_resp_req: false, chan_change_handle: None, chan_info: None, req_handle: 0 }) }
+TRACE src/entities/mle/mle.rs:91: rx_tla_prim: "^0010010011001101011100110100010101000000000"
+DEBUG src/entities/mm/mm_bs.rs:258: rx_prim: SapMsg { sap: LmmSap, src: Mle, dest: Mm, dltime:     0/08/05/3, msg: LmmMleUnitdataInd(LmmMleUnitdataInd { sdu: BitBuffer { <11 ^14 >54 001^0010011001101011100110100010101000000000 }, handle: 0, received_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 } }) }
+TRACE src/entities/mm/mm_bs.rs:58: rx_location_update_demand: SapMsg { sap: LmmSap, src: Mle, dest: Mm, dltime:     0/08/05/3, msg: LmmMleUnitdataInd(LmmMleUnitdataInd { sdu: BitBuffer { <11 ^14 >54 001^0010011001101011100110100010101000000000 }, handle: 0, received_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 } }) }
+DEBUG src/entities/mm/mm_bs.rs:63: <- ULocationUpdateDemand { location_update_type: 3, request_to_append_la: false, cipher_control: false, ciphering_parameters: None, class_of_ms: Some(6082896), energy_saving_mode: None, la_information: None, ssi: None, address_extension: None, group_identity_location_demand: None, group_report_response: None, authentication_uplink: None, extended_capabilities: None, proprietary: None }
+
+#####
+### Annotation: Here, the MM has received the MS U-LOCATION-UPDATE-DEMAND, and will accept the MS on the network. The message is transmitted downwards, and queued in the MAC for transmission at the appropriate time
+#####
+
+DEBUG src/entities/mm/mm_bs.rs:98: rx_location_update_demand: -> DLocationUpdateAccept { location_update_accept_type: ItsiAttach, ssi: Some(10001), address_extension: None, subscriber_class: None, energy_saving_information: None, scch_information_and_distribution_on_18th_frame: None, new_registered_area: None, security_downlink: None, group_identity_location_accept: None, default_group_attachment_lifetime: None, authentication_downlink: None, group_identity_security_related_information: None, cell_type_control: None, proprietary: None }
+DEBUG src/entities/mle/mle.rs:482: rx_prim: SapMsg { sap: LmmSap, src: Mm, dest: Mle, dltime:     0/08/05/3, msg: LmmMleUnitdataReq(LmmMleUnitdataReq { sdu: BitBuffer { <0 ^0 >38 ^01010111100000000001001110001000100000 }, handle: 0, address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, layer2service: 0, stealing_permission: false, stealing_repeats_flag: false, encryption_flag: false, is_null_pdu: false }) }
+TRACE src/entities/mle/mle.rs:445: rx_lmm_prim: SapMsg { sap: LmmSap, src: Mm, dest: Mle, dltime:     0/08/05/3, msg: LmmMleUnitdataReq(LmmMleUnitdataReq { sdu: BitBuffer { <0 ^0 >38 ^01010111100000000001001110001000100000 }, handle: 0, address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, layer2service: 0, stealing_permission: false, stealing_repeats_flag: false, encryption_flag: false, is_null_pdu: false }) }
+TRACE src/entities/mle/mle.rs:409: rx_lmm_mle_unitdata_req: SapMsg { sap: LmmSap, src: Mm, dest: Mle, dltime:     0/08/05/3, msg: LmmMleUnitdataReq(LmmMleUnitdataReq { sdu: BitBuffer { <0 ^0 >38 ^01010111100000000001001110001000100000 }, handle: 0, address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, layer2service: 0, stealing_permission: false, stealing_repeats_flag: false, encryption_flag: false, is_null_pdu: false }) }
+DEBUG src/entities/llc/llc.rs:415: rx_prim: SapMsg { sap: TlaSap, src: Mle, dest: Llc, dltime:     0/08/05/3, msg: TlaTlDataReqBl(TlaTlDataReqBl { main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, link_id: 0, endpoint_id: 0, tl_sdu: BitBuffer { <0 ^0 >41 ^00101010111100000000001001110001000100000 }, scrambling_code: 855980295, stealing_permission: false, subscriber_class: 0, fcs_flag: false, air_interface_encryption: None, stealing_repeats_flag: None, data_class_info: None, req_handle: 0, graceful_degradation: None }) }
+ WARN src/entities/llc/llc.rs:68: unimplemented: get_expected_in_ack_n not implemented on a per-link basis at src/entities/llc/llc.rs:68
+DEBUG src/entities/llc/llc.rs:153: rx_tla_tldata_req_bl: -> BlData { has_fcs: false, ns: 0 } ^00101010111100000000001001110001000100000
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmaSap, src: Llc, dest: Umac, dltime:     0/08/05/3, msg: TmaUnitdataReq(TmaUnitdataReq { req_handle: 0, pdu: BitBuffer { <0 ^0 >46 ^0001000101010111100000000001001110001000100000 }, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 0, stealing_permission: false, subscriber_class: 0, air_interface_encryption: None, stealing_repeats_flag: None, data_category: None }) }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:244: dl_enqueue_tma: ts 1 enqueueing PDU MacResource { fill_bits: true, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 12, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None } SDU ^0001000101010111100000000001001110001000100000
+
+#####
+### Annotation: The processing part of this tick (one TDMA timeslot) is now done. We will perform all tasks that are still outstanding:
+### - LLC: Emit an ack for the received MS message
+### - MAC: Schedule that ack for the appropriate DL timeslot
+### - MAC: Schedule the D-LOCATION-UPDATE ACCEPT for the appropriate timeslot
+#####
+
+DEBUG src/entities/llc/llc.rs:437: Llc tick_end: auto-ack for ssi: 10001, n: 0
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmaSap, src: Llc, dest: Umac, dltime:     0/08/05/3, msg: TmaUnitdataReq(TmaUnitdataReq { req_handle: 0, pdu: BitBuffer { <0 ^0 >5 ^00110 }, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 1, stealing_permission: false, subscriber_class: 0, air_interface_encryption: None, stealing_repeats_flag: None, data_category: None }) }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:244: dl_enqueue_tma: ts 1 enqueueing PDU MacResource { fill_bits: false, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 6, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None } SDU ^00110
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:390: dl_integrate_sched_elems_for_timeslot: Integrating ack into resource for addr SSI:10001
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:491: finalize_ts_for_tick: Putting resource: MacResource { fill_bits: true, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 12, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None }: 46-bit sdu ^0001000101010111100000000001001110001000100000
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:491: finalize_ts_for_tick: Putting resource: MacResource { fill_bits: false, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 6, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None }: 5-bit sdu ^00110
+ 
+#####
+### Annotation: We now receive an acknowledgement of our D-LOCATION UPDATE ACCEPT
+#####
+
+INFO src/entities/phy/components/demodulator.rs:520: Found ExtendedTrainSeq at 124 with 0 errors
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmvSap, src: Lmac, dest: Umac, dltime:     0/08/07/3, msg: TmvUnitdataInd(TmvUnitdataInd { pdu: BitBuffer { <0 ^0 >92 ^01000000000000010011100010001100011000110100000001000000000000010011100010001100000010000000 }, logical_channel: SCH_HU, crc_pass: true, scrambling_code: 855980295 }) }
+DEBUG src/entities/umac/umac_bs.rs:634: <- MacAccess { fill_bits: true, encrypted: false, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, length_ind: Some(6), frag_flag: None, reservation_req: None }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:238: dl_enqueue_random_access_ack: ts 1 enqueueing random access acknowledgementfor addr SSI:10001
+DEBUG src/entities/umac/umac_bs.rs:717: rx_mac_access: <010000000000000100111000100011000110^00110>1000000010000000000000100111000100011000000100000000000
+DEBUG src/entities/umac/umac_bs.rs:634: <- MacAccess { fill_bits: true, encrypted: false, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, length_ind: Some(0), frag_flag: None, reservation_req: None }
+DEBUG src/entities/llc/llc.rs:415: rx_prim: SapMsg { sap: TmaSap, src: Umac, dest: Llc, dltime:     0/08/07/3, msg: TmaUnitdataInd(TmaUnitdataInd { pdu: Some(BitBuffer { <4 ^4 >9 ^00110 }), main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, air_interface_encryption: 0, chan_change_response_req: false, chan_change_handle: None, chan_info: None }) }
+DEBUG src/entities/llc/llc.rs:292: <- BlAck: BlAck { has_fcs: false, nr: 0 }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:405: dl_integrate_sched_elems_for_timeslot: Creating new resource for addr SSI:10001 with ack
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:491: finalize_ts_for_tick: Putting resource: MacResource { fill_bits: true, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 6, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None }: 0-bit sdu ^
+
+#####
+### Annotation: We now get a capacity request from the MS for transmission on an explicitly granted timeslot (actually, a half slot)
+### This request is registered by the channel scheduler and a response is queued for transmission on the DL
+#####
+
+ INFO src/entities/phy/components/demodulator.rs:520: Found ExtendedTrainSeq at 124 with 0 errors
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmvSap, src: Lmac, dest: Umac, dltime:     0/08/09/3, msg: TmvUnitdataInd(TmvUnitdataInd { pdu: BitBuffer { <0 ^0 >92 ^00000000000000010011100010001111000000011001011101111000000001001000000010100000000110101000 }, logical_channel: SCH_HU, crc_pass: true, scrambling_code: 855980295 }) }
+DEBUG src/entities/umac/umac_bs.rs:634: <- MacAccess { fill_bits: false, encrypted: false, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, length_ind: None, frag_flag: Some(true), reservation_req: Some(Req1Subslot) }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:238: dl_enqueue_random_access_ack: ts 1 enqueueing random access acknowledgementfor addr SSI:10001
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:120: ul_find_grant_opportunity: considering candidate ts     0/08/10/3, have []
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:193: ul_process_cap_req: addr SSI:10001, res_req Req1Subslot, requested_cap 1, is_halfslot true, grant_op: Some((0, [    0/08/10/3]))
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:232: dl_enqueue_grant: ts 1 enqueueing PDU BasicSlotgrant { capacity_allocation: FirstSubslotGranted, granting_delay: CapAllocAtNextOpportunity } for addr SSI:10001
+DEBUG src/entities/umac/umac_bs.rs:717: rx_mac_access: <000000000000000100111000100011110000^00011001011101111000000001001000000010100000000110101000>0000
+DEBUG src/entities/umac/subcomp/defrag.rs:103: Defrag buffer 0 first: ssi: 10001, t_first: 1, t_last: 1, num_frags: 1: 00011001011101111000000001001000000010100000000110101000^
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:405: dl_integrate_sched_elems_for_timeslot: Creating new resource for addr SSI:10001 with ack
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:386: dl_integrate_sched_elems_for_timeslot: Integrating grant BasicSlotgrant { capacity_allocation: FirstSubslotGranted, granting_delay: CapAllocAtNextOpportunity } into resource for addr SSI:10001
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:491: finalize_ts_for_tick: Putting resource: MacResource { fill_bits: true, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 7, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: Some(BasicSlotgrant { capacity_allocation: FirstSubslotGranted, granting_delay: CapAllocAtNextOpportunity }), chan_alloc_element: None }: 0-bit sdu ^
+
+
+#####
+### We now receive a U-ATTACH-DETACH-GROUP-IDENTITY from the MS, signalling to which talkgroup he wishes to attach
+#####
+
+ INFO src/entities/phy/components/demodulator.rs:520: Found ExtendedTrainSeq at 124 with 0 errors
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmvSap, src: Lmac, dest: Umac, dltime:     0/08/10/3, msg: TmvUnitdataInd(TmvUnitdataInd { pdu: BitBuffer { <0 ^0 >92 ^11000111100111000001000001000000000000010011100010001100000010000000000000000000000000000000 }, logical_channel: SCH_HU, crc_pass: true, scrambling_code: 855980295 }) }
+DEBUG src/entities/umac/umac_bs.rs:910: <- MacEndHu { fill_bits: true, length_ind: Some(3), reservation_req: None }
+DEBUG src/entities/umac/subcomp/defrag.rs:156: Defrag buffer 0 last: ssi: 10001, t_first: 1, t_last: 1, num_frags: 2: 00011001011101111000000001001000000010100000000110101000110011100000^
+DEBUG src/entities/umac/umac_bs.rs:976: rx_mac_end_hu: sdu: "^00011001011101111000000001001000000010100000000110101000110011100000"
+DEBUG src/entities/llc/llc.rs:415: rx_prim: SapMsg { sap: TmaSap, src: Umac, dest: Llc, dltime:     0/08/10/3, msg: TmaUnitdataInd(TmaUnitdataInd { pdu: Some(BitBuffer { <0 ^0 >68 ^00011001011101111000000001001000000010100000000110101000110011100000 }), main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, air_interface_encryption: 0, chan_change_response_req: false, chan_change_handle: None, chan_info: None }) }
+DEBUG src/entities/llc/llc.rs:280: <- BlData: BlData { has_fcs: false, ns: 1 }
+DEBUG src/entities/mle/mle.rs:482: rx_prim: SapMsg { sap: TlaSap, src: Llc, dest: Mle, dltime:     0/08/10/3, msg: TlaTlDataIndBl(TlaTlDataIndBl { address_type: 0, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, link_id: 0, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, tl_sdu: Some(BitBuffer { <5 ^5 >68 ^001011101111000000001001000000010100000000110101000110011100000 }), scrambling_code: 855980295, fcs_flag: false, air_interface_encryption: 0, chan_change_resp_req: false, chan_change_handle: None, chan_info: None, req_handle: 0 }) }
+TRACE src/entities/mle/mle.rs:75: rx_tla_prim: SapMsg { sap: TlaSap, src: Llc, dest: Mle, dltime:     0/08/10/3, msg: TlaTlDataIndBl(TlaTlDataIndBl { address_type: 0, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, link_id: 0, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, tl_sdu: Some(BitBuffer { <5 ^5 >68 ^001011101111000000001001000000010100000000110101000110011100000 }), scrambling_code: 855980295, fcs_flag: false, air_interface_encryption: 0, chan_change_resp_req: false, chan_change_handle: None, chan_info: None, req_handle: 0 }) }
+TRACE src/entities/mle/mle.rs:91: rx_tla_prim: "^001011101111000000001001000000010100000000110101000110011100000"
+DEBUG src/entities/mm/mm_bs.rs:258: rx_prim: SapMsg { sap: LmmSap, src: Mle, dest: Mm, dltime:     0/08/10/3, msg: LmmMleUnitdataInd(LmmMleUnitdataInd { sdu: BitBuffer { <5 ^8 >68 001^011101111000000001001000000010100000000110101000110011100000 }, handle: 0, received_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 } }) }
+TRACE src/entities/mm/mm_bs.rs:128: rx_u_attach_detach_group_identity: SapMsg { sap: LmmSap, src: Mle, dest: Mm, dltime:     0/08/10/3, msg: LmmMleUnitdataInd(LmmMleUnitdataInd { sdu: BitBuffer { <5 ^8 >68 001^011101111000000001001000000010100000000110101000110011100000 }, handle: 0, received_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 } }) }
+DEBUG src/entities/mm/mm_bs.rs:134: <- UAttachDetachGroupIdentity { group_identity_report: false, group_identity_attach_detach_mode: true, group_report_response: None, group_identity_uplink: Some([GroupIdentityUplink { class_of_usage: Some(4), group_identity_detachment_uplink: None, gssi: Some(870000), address_extension: None, vgssi: None }]), proprietary: None }
+
+#####
+### Annotation: The MM registers the group attachment and sends a D-ATTACH-DETACH-GROUP-IDENTITY ACK, which includes a copy of the now-attached group. 
+#####
+
+DEBUG src/entities/mm/mm_bs.rs:174: rx_u_attach_detach_group_identity: -> DAttachDetachGroupIdentityAcknowledgement { group_identity_accept_reject: 0, reserved: false, proprietary: None, group_identity_downlink: Some([GroupIdentityDownlink { group_identity_attachment: Some(GroupIdentityAttachment { group_identity_attachment_lifetime: 3, class_of_usage: 4 }), group_identity_detachment_uplink: None, gssi: Some(870000), address_extension: None, vgssi: None }]), group_identity_security_related_information: None }
+DEBUG src/entities/mle/mle.rs:482: rx_prim: SapMsg { sap: LmmSap, src: Mm, dest: Mle, dltime:     0/08/10/3, msg: LmmMleUnitdataReq(LmmMleUnitdataReq { sdu: BitBuffer { <0 ^0 >62 ^10110011011100000100110000001011100000000110101000110011100000 }, handle: 0, address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, layer2service: 0, stealing_permission: false, stealing_repeats_flag: false, encryption_flag: false, is_null_pdu: false }) }
+TRACE src/entities/mle/mle.rs:445: rx_lmm_prim: SapMsg { sap: LmmSap, src: Mm, dest: Mle, dltime:     0/08/10/3, msg: LmmMleUnitdataReq(LmmMleUnitdataReq { sdu: BitBuffer { <0 ^0 >62 ^10110011011100000100110000001011100000000110101000110011100000 }, handle: 0, address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, layer2service: 0, stealing_permission: false, stealing_repeats_flag: false, encryption_flag: false, is_null_pdu: false }) }
+TRACE src/entities/mle/mle.rs:409: rx_lmm_mle_unitdata_req: SapMsg { sap: LmmSap, src: Mm, dest: Mle, dltime:     0/08/10/3, msg: LmmMleUnitdataReq(LmmMleUnitdataReq { sdu: BitBuffer { <0 ^0 >62 ^10110011011100000100110000001011100000000110101000110011100000 }, handle: 0, address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, layer2service: 0, stealing_permission: false, stealing_repeats_flag: false, encryption_flag: false, is_null_pdu: false }) }
+DEBUG src/entities/llc/llc.rs:415: rx_prim: SapMsg { sap: TlaSap, src: Mle, dest: Llc, dltime:     0/08/10/3, msg: TlaTlDataReqBl(TlaTlDataReqBl { main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, link_id: 0, endpoint_id: 0, tl_sdu: BitBuffer { <0 ^0 >65 ^00110110011011100000100110000001011100000000110101000110011100000 }, scrambling_code: 855980295, stealing_permission: false, subscriber_class: 0, fcs_flag: false, air_interface_encryption: None, stealing_repeats_flag: None, data_class_info: None, req_handle: 0, graceful_degradation: None }) }
+ WARN src/entities/llc/llc.rs:68: unimplemented: get_expected_in_ack_n not implemented on a per-link basis at src/entities/llc/llc.rs:68
+DEBUG src/entities/llc/llc.rs:153: rx_tla_tldata_req_bl: -> BlData { has_fcs: false, ns: 1 } ^00110110011011100000100110000001011100000000110101000110011100000
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmaSap, src: Llc, dest: Umac, dltime:     0/08/10/3, msg: TmaUnitdataReq(TmaUnitdataReq { req_handle: 0, pdu: BitBuffer { <0 ^0 >70 ^0001100110110011011100000100110000001011100000000110101000110011100000 }, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 0, stealing_permission: false, subscriber_class: 0, air_interface_encryption: None, stealing_repeats_flag: None, data_category: None }) }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:244: dl_enqueue_tma: ts 1 enqueueing PDU MacResource { fill_bits: true, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 15, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None } SDU ^0001100110110011011100000100110000001011100000000110101000110011100000
+DEBUG src/entities/llc/llc.rs:437: Llc tick_end: auto-ack for ssi: 10001, n: 1
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmaSap, src: Llc, dest: Umac, dltime:     0/08/10/3, msg: TmaUnitdataReq(TmaUnitdataReq { req_handle: 0, pdu: BitBuffer { <0 ^0 >5 ^00111 }, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 1, stealing_permission: false, subscriber_class: 0, air_interface_encryption: None, stealing_repeats_flag: None, data_category: None }) }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:244: dl_enqueue_tma: ts 1 enqueueing PDU MacResource { fill_bits: false, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 6, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None } SDU ^00111
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:491: finalize_ts_for_tick: Putting resource: MacResource { fill_bits: true, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 15, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None }: 70-bit sdu ^0001100110110011011100000100110000001011100000000110101000110011100000
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:491: finalize_ts_for_tick: Putting resource: MacResource { fill_bits: false, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 6, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None }: 5-bit sdu ^00111
+
+
+#####
+### Annotation: The MS acknowledges our D-ATTACH-DETACH-GROUP-IDENTITY ACK through an LLC-layer BL-ACK. We respond to it by confirming reception of it's random access message. 
+##### 
+
+ INFO src/entities/phy/components/demodulator.rs:520: Found ExtendedTrainSeq at 124 with 0 errors
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmvSap, src: Lmac, dest: Umac, dltime:     0/08/11/3, msg: TmvUnitdataInd(TmvUnitdataInd { pdu: BitBuffer { <0 ^0 >92 ^01000000000000010011100010001100011000111100000001000000000000010011100010001100000010000000 }, logical_channel: SCH_HU, crc_pass: true, scrambling_code: 855980295 }) }
+DEBUG src/entities/umac/umac_bs.rs:634: <- MacAccess { fill_bits: true, encrypted: false, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, length_ind: Some(6), frag_flag: None, reservation_req: None }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:238: dl_enqueue_random_access_ack: ts 1 enqueueing random access acknowledgementfor addr SSI:10001
+DEBUG src/entities/umac/umac_bs.rs:717: rx_mac_access: <010000000000000100111000100011000110^00111>1000000010000000000000100111000100011000000100000000000
+DEBUG src/entities/umac/umac_bs.rs:634: <- MacAccess { fill_bits: true, encrypted: false, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, length_ind: Some(0), frag_flag: None, reservation_req: None }
+DEBUG src/entities/llc/llc.rs:415: rx_prim: SapMsg { sap: TmaSap, src: Umac, dest: Llc, dltime:     0/08/11/3, msg: TmaUnitdataInd(TmaUnitdataInd { pdu: Some(BitBuffer { <4 ^4 >9 ^00111 }), main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, air_interface_encryption: 0, chan_change_response_req: false, chan_change_handle: None, chan_info: None }) }
+DEBUG src/entities/llc/llc.rs:292: <- BlAck: BlAck { has_fcs: false, nr: 1 }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:405: dl_integrate_sched_elems_for_timeslot: Creating new resource for addr SSI:10001 with ack
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:491: finalize_ts_for_tick: Putting resource: MacResource { fill_bits: true, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 6, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None }: 0-bit sdu ^
+
+
+#####
+### Annotation: Our MS is now fully registered on the network and has attached to its groups
+#####
+
+
+#####
+### Annotation: The MS is now told by the user to disconnect. We receive a U-ITSI DETACH message, which is automatically acknowledged by the LLC (since a BL-DATA was sent, demanding an LLC ACK)
+#####
+
+ INFO src/entities/phy/components/demodulator.rs:520: Found ExtendedTrainSeq at 124 with 0 errors
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmvSap, src: Lmac, dest: Umac, dltime:     0/11/06/3, msg: TmvUnitdataInd(TmvUnitdataInd { pdu: BitBuffer { <0 ^0 >92 ^01000000000000010011100010001000010001000111001100110000010100111001010000000000000000000000 }, logical_channel: SCH_HU, crc_pass: true, scrambling_code: 855980295 }) }
+DEBUG src/entities/umac/umac_bs.rs:634: <- MacAccess { fill_bits: true, encrypted: false, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, length_ind: None, frag_flag: None, reservation_req: None }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:238: dl_enqueue_random_access_ack: ts 1 enqueueing random access acknowledgementfor addr SSI:10001
+DEBUG src/entities/umac/umac_bs.rs:717: rx_mac_access: <010000000000000100111000100010^000100010001110011001100000101001110010>100000000000000000000000000
+DEBUG src/entities/llc/llc.rs:415: rx_prim: SapMsg { sap: TmaSap, src: Umac, dest: Llc, dltime:     0/11/06/3, msg: TmaUnitdataInd(TmaUnitdataInd { pdu: Some(BitBuffer { <6 ^6 >45 ^000100010001110011001100000101001110010 }), main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, air_interface_encryption: 0, chan_change_response_req: false, chan_change_handle: None, chan_info: None }) }
+DEBUG src/entities/llc/llc.rs:280: <- BlData: BlData { has_fcs: false, ns: 0 }
+DEBUG src/entities/mle/mle.rs:482: rx_prim: SapMsg { sap: TlaSap, src: Llc, dest: Mle, dltime:     0/11/06/3, msg: TlaTlDataIndBl(TlaTlDataIndBl { address_type: 0, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, link_id: 0, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, tl_sdu: Some(BitBuffer { <11 ^11 >45 ^0010001110011001100000101001110010 }), scrambling_code: 855980295, fcs_flag: false, air_interface_encryption: 0, chan_change_resp_req: false, chan_change_handle: None, chan_info: None, req_handle: 0 }) }
+TRACE src/entities/mle/mle.rs:75: rx_tla_prim: SapMsg { sap: TlaSap, src: Llc, dest: Mle, dltime:     0/11/06/3, msg: TlaTlDataIndBl(TlaTlDataIndBl { address_type: 0, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, link_id: 0, endpoint_id: 0, new_endpoint_id: None, css_endpoint_id: None, tl_sdu: Some(BitBuffer { <11 ^11 >45 ^0010001110011001100000101001110010 }), scrambling_code: 855980295, fcs_flag: false, air_interface_encryption: 0, chan_change_resp_req: false, chan_change_handle: None, chan_info: None, req_handle: 0 }) }
+TRACE src/entities/mle/mle.rs:91: rx_tla_prim: "^0010001110011001100000101001110010"
+DEBUG src/entities/mm/mm_bs.rs:258: rx_prim: SapMsg { sap: LmmSap, src: Mle, dest: Mm, dltime:     0/11/06/3, msg: LmmMleUnitdataInd(LmmMleUnitdataInd { sdu: BitBuffer { <11 ^14 >45 001^0001110011001100000101001110010 }, handle: 0, received_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 } }) }
+TRACE src/entities/mm/mm_bs.rs:33: rx_u_itsi_detach: SapMsg { sap: LmmSap, src: Mle, dest: Mm, dltime:     0/11/06/3, msg: LmmMleUnitdataInd(LmmMleUnitdataInd { sdu: BitBuffer { <11 ^14 >45 001^0001110011001100000101001110010 }, handle: 0, received_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 } }) }
+DEBUG src/entities/mm/mm_bs.rs:38: <- UItsiDetach { address_extension: Some(3343673), proprietary: None }
+DEBUG src/entities/llc/llc.rs:437: Llc tick_end: auto-ack for ssi: 10001, n: 0
+DEBUG src/entities/umac/umac_bs.rs:1126: rx_prim: SapMsg { sap: TmaSap, src: Llc, dest: Umac, dltime:     0/11/06/3, msg: TmaUnitdataReq(TmaUnitdataReq { req_handle: 0, pdu: BitBuffer { <0 ^0 >5 ^00110 }, main_address: TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }, scrambling_code: 855980295, endpoint_id: 1, stealing_permission: false, subscriber_class: 0, air_interface_encryption: None, stealing_repeats_flag: None, data_category: None }) }
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:244: dl_enqueue_tma: ts 1 enqueueing PDU MacResource { fill_bits: false, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 6, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None } SDU ^00110
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:390: dl_integrate_sched_elems_for_timeslot: Integrating ack into resource for addr SSI:10001
+DEBUG src/entities/umac/subcomp/bs_channel_scheduler.rs:491: finalize_ts_for_tick: Putting resource: MacResource { fill_bits: false, pos_of_grant: 0, encryption_mode: 0, random_access_flag: true, length_ind: 6, addr: Some(TetraAddress { encrypted: false, ssi_type: Ssi, ssi: 10001 }), event_label: None, usage_marker: None, power_control_element: None, slot_granting_element: None, chan_alloc_element: None }: 5-bit sdu ^00110
+
