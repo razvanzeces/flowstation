@@ -73,12 +73,14 @@ impl CcBsSubentity {
             let mut ceased_sdu = BitBuffer::new_autoexpand(30);
             ceased_pdu.to_bitbuf(&mut ceased_sdu).expect("Failed to serialize DTxCeased");
             ceased_sdu.seek(0);
-            let ceased_msg = Self::build_sapmsg_stealing(ceased_sdu, sender, sender_ts, Some(sender_usage));
+            // Former speaker becomes listener: DL-only so they receive the peer's audio.
+            let ceased_msg = Self::build_sapmsg_stealing_ul_dl(ceased_sdu, sender, sender_ts, Some(sender_usage), UlDlAssignment::Dl);
             queue.push_back(ceased_msg);
 
             // 2) D-TX-GRANTED(Granted) to peer so it immediately gets the floor and can press PTT.
             // Without this explicit grant, radios that received GrantedToOtherUser in D-CONNECT
             // will not enable PTT after a D-TX-CEASED — they require an explicit D-TX-GRANTED.
+            // Use UL-only so the new speaker transmits but does not loop back its own audio.
             tracing::info!("-> D-TX GRANTED Granted (individual simplex, FACCH) call_id={} to peer ISSI {}", call_id, peer_addr.ssi);
             let granted_pdu = DTxGranted {
                 call_identifier: call_id,
@@ -87,8 +89,8 @@ impl CcBsSubentity {
                 encryption_control: false,
                 reserved: false,
                 notification_indicator: None,
-                transmitting_party_type_identifier: None,
-                transmitting_party_address_ssi: None,
+                transmitting_party_type_identifier: Some(1),
+                transmitting_party_address_ssi: Some(peer_addr.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
                 facility: None,
@@ -98,8 +100,73 @@ impl CcBsSubentity {
             let mut granted_sdu = BitBuffer::new_autoexpand(50);
             granted_pdu.to_bitbuf(&mut granted_sdu).expect("Failed to serialize DTxGranted");
             granted_sdu.seek(0);
-            let granted_msg = Self::build_sapmsg_stealing(granted_sdu, peer_addr, peer_ts, Some(peer_usage));
+            // New speaker gets UL-only assignment so they transmit.
+            let granted_msg = Self::build_sapmsg_stealing_ul_dl(granted_sdu, peer_addr, peer_ts, Some(peer_usage), UlDlAssignment::Ul);
             queue.push_back(granted_msg);
+
+            // 3) D-TX-GRANTED(GrantedToOtherUser) back to former sender so it knows the peer
+            // now holds the floor and it is the listener. This mirrors what U-TX-DEMAND sends
+            // and keeps both radios in sync on who has UL vs DL for the remainder of the call.
+            tracing::info!("-> D-TX GRANTED GrantedToOtherUser (individual simplex, FACCH) call_id={} to former sender ISSI {} (now listener)", call_id, sender.ssi);
+            let gtou_pdu = DTxGranted {
+                call_identifier: call_id,
+                transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
+                transmission_request_permission: false,
+                encryption_control: false,
+                reserved: false,
+                notification_indicator: None,
+                transmitting_party_type_identifier: Some(1),
+                transmitting_party_address_ssi: Some(peer_addr.ssi as u64),
+                transmitting_party_extension: None,
+                external_subscriber_number: None,
+                facility: None,
+                dm_ms_address: None,
+                proprietary: None,
+            };
+            let mut gtou_sdu = BitBuffer::new_autoexpand(50);
+            gtou_pdu.to_bitbuf(&mut gtou_sdu).expect("Failed to serialize DTxGranted GrantedToOtherUser");
+            gtou_sdu.seek(0);
+            // Former sender is now listener: DL-only assignment (already set by ceased_msg above,
+            // but the explicit D-TX-GRANTED ensures the radio re-enables its PTT request button).
+            let gtou_msg = Self::build_sapmsg_stealing_ul_dl(gtou_sdu, sender, sender_ts, Some(sender_usage), UlDlAssignment::Dl);
+            queue.push_back(gtou_msg);
+
+            // 4) Notify UMAC that the floor has been granted to the peer.
+            // This resets the UL inactivity timer on the timeslot so UMAC doesn't
+            // prematurely detect inactivity and close the circuit before the new
+            // speaker begins transmitting.
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                    call_id,
+                    source_issi: peer_addr.ssi,
+                    dest_gssi: sender.ssi,
+                    ts: peer_ts,
+                }),
+            });
+
+            // 5) Notify Brew that the floor has been granted to the peer.
+            // Without this, Brew detects audio inactivity on the timeslot and sends
+            // a CALL_RELEASE, tearing down the circuit before the handoff completes.
+            if (call.called_over_brew || call.calling_over_brew)
+                && let Some(brew_uuid) = call.brew_uuid
+            {
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                        call_id,
+                        source_issi: peer_addr.ssi,
+                        dest_gssi: sender.ssi,
+                        ts: peer_ts,
+                    }),
+                });
+                let _ = brew_uuid; // suppress unused warning
+            }
+
             return;
         }
 
