@@ -542,7 +542,7 @@ impl CcBsSubentity {
         brew_uuid: uuid::Uuid,
         source_issi: u32,
         dest_gssi: u32,
-        _priority: u8,
+        priority: u8,
     ) {
         assert!(net_brew::is_brew_gssi_routable(&self.config, dest_gssi));
 
@@ -570,6 +570,30 @@ impl CcBsSubentity {
             .find(|(_, c)| c.dest_gssi == dest_gssi)
             .map(|(id, c)| (*id, c.source_issi))
         {
+            // If a local MS currently holds the floor, protect it against network preemption
+            // unless the incoming call has strictly higher priority (lower numeric value = higher priority).
+            // ETSI EN 300 392-2 §14.8: priority 0 is lowest, 15 is highest (emergency).
+            if let Some(call) = self.active_calls.get(&call_id) {
+                if call.tx_active && matches!(call.origin, crate::cmce::subentities::cc_bs::call::CallOrigin::Local { .. }) {
+                    // call_priority field doesn't exist on ActiveCall — use 0 as default (normal).
+                    // Incoming network call must have STRICTLY higher priority to preempt a local MS.
+                    if priority == 0 {
+                        tracing::info!(
+                            "CMCE: ignoring network speaker change gssi={} src={} — \
+                             local MS {} holds floor at equal/higher priority (incoming prio={})",
+                            dest_gssi, source_issi, call.source_issi, priority
+                        );
+                        queue.push_back(SapMsg {
+                            sap: Sap::Control,
+                            src: TetraEntity::Cmce,
+                            dest: TetraEntity::Brew,
+                            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+                        });
+                        return;
+                    }
+                }
+            }
+
             tracing::info!(
                 "CMCE: network call speaker change gssi={} new_speaker={} (was {})",
                 dest_gssi,
