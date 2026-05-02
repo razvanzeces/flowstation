@@ -1272,13 +1272,13 @@ impl UmacBs {
                 }
 
                 // Determine DL target timeslot:
-                //   - Full-duplex P2P (local): UL on `ts` is cross-routed to peer MS's DL on `peer_ts`.
+                //   - Full-duplex P2P (local): UL on `ts` cross-routed to peer MS's DL on `peer_ts`.
                 //   - Group / simplex (LocalLoopback, no peer_ts): same-ts loopback so all members hear.
-                //   - Circuit call via Brew/TetraPack (SwMI, no peer_ts): suppress local loopback entirely.
+                //   - Circuit call via Brew/TetraPack (SwMI, no peer_ts): suppress local loopback.
                 //     DL audio comes from Brew via TmdCircuitDataReq; looping back UL here causes the
                 //     calling MS to hear their own voice instead of the remote party.
-                // Refresh the peer's UL inactivity timer too, so the remote MS isn't timed out
-                // while only the other party is talking.
+                // Refresh the peer's UL inactivity timer so the remote MS isn't timed out while
+                // only the other party is talking.
                 let dl_target_ts = match self.channel_scheduler.ul_circuit_peer_ts(ts) {
                     Some(peer_ts) => {
                         if (1..=4).contains(&peer_ts)
@@ -1292,8 +1292,8 @@ impl UmacBs {
                     None => {
                         use tetra_saps::control::call_control::CircuitDlMediaSource;
                         if self.channel_scheduler.ul_circuit_dl_media_source(ts) == CircuitDlMediaSource::SwMI {
-                            // Circuit call: DL audio comes from Brew, not local loopback.
-                            // Suppress UL->DL loopback to prevent caller hearing their own voice.
+                            // Circuit call via Brew: DL comes from TetraPack, not local loopback.
+                            // Suppress UL->DL reflection so the caller doesn't hear their own voice.
                             tracing::trace!("rx_tmd_prim: circuit call ts={}, suppressing local UL loopback (SwMI)", ts);
                             return;
                         }

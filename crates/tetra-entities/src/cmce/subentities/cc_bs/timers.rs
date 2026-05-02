@@ -147,6 +147,11 @@ impl CcBsSubentity {
                             }
                         }
 
+                        // Capture peer_ts before removing individual_calls (duplex P2P has two TS).
+                        let peer_ts = self.individual_calls.get(&call_id).and_then(|ind| {
+                            if ind.called_ts != ind.calling_ts { Some(ind.called_ts) } else { None }
+                        });
+
                         // Clean up call state
                         self.cached_setups.remove(&call_id);
                         self.active_calls.remove(&call_id);
@@ -155,6 +160,15 @@ impl CcBsSubentity {
                         // Signal UMAC to release the circuit
                         Self::signal_umac_circuit_close(queue, circuit);
                         self.release_timeslot(ts);
+
+                        // For duplex P2P the call has two timeslots. The peer circuit will get
+                        // its own SendClose from circuit_mgr, but individual_calls is already
+                        // gone by then so its timeslot allocator entry would leak. Release it now.
+                        if let Some(p_ts) = peer_ts {
+                            if p_ts != ts {
+                                self.release_timeslot(p_ts);
+                            }
+                        }
                     }
                 }
             }

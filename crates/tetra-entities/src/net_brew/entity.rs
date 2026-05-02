@@ -776,8 +776,8 @@ impl BrewEntity {
         for ts in ts_to_remove {
             self.ul_forwarded.remove(&ts);
         }
-        // Also remove from active_calls — circuit calls are registered there by
-        // NetworkCircuitMediaReady so that DL audio from TetraPack reaches the MS.
+        // Remove from active_calls — circuit calls are registered there by NetworkCircuitMediaReady
+        // so that DL audio from TetraPack reaches the MS. Clean up here to avoid stale entries.
         self.active_calls.remove(&brew_uuid);
         if had_jitter || had_ts {
             tracing::info!("BrewEntity: dropped circuit uuid={}", brew_uuid);
@@ -908,24 +908,22 @@ impl TetraEntityTrait for BrewEntity {
             }
             SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady { brew_uuid, call_id, ts }) => {
                 tracing::info!("BrewEntity: circuit media ready uuid={} call_id={} ts={}", brew_uuid, call_id, ts);
-                // Register UL forwarding: UL voice on `ts` gets sent to TetraPack.
+                // Register UL forwarding: voice on `ts` gets sent to TetraPack.
                 self.ul_forwarded.insert(
                     ts,
                     UlForwardedCall {
                         uuid: brew_uuid,
                         call_id,
                         source_issi: 0,
-                        dest_gssi: 0, // not used for circuit calls
+                        dest_gssi: 0,
                         kind: UlForwardKind::Circuit,
                         frame_count: 0,
                     },
                 );
-                // Register in active_calls with ts already known, so that DL voice frames
-                // received from TetraPack (handle_voice_frame + drain_jitter_playout) are
-                // actually delivered to the MS on this timeslot.
-                // Without this, handle_voice_frame drops incoming DL audio silently because
-                // the uuid is not found in active_calls, causing the caller to hear only
-                // their own loopback echo instead of the remote party.
+                // Register in active_calls with ts already known so that DL voice frames received
+                // from TetraPack (handle_voice_frame + drain_jitter_playout) are delivered to the MS.
+                // Without this entry handle_voice_frame silently drops all incoming DL audio because
+                // it looks up the uuid in active_calls and finds nothing.
                 self.active_calls.entry(brew_uuid).or_insert_with(|| ActiveCall {
                     uuid: brew_uuid,
                     call_id: Some(call_id),
@@ -935,7 +933,6 @@ impl TetraEntityTrait for BrewEntity {
                     dest_gssi: 0,
                     frame_count: 0,
                 });
-                // Ensure jitter buffer exists
                 self.dl_jitter
                     .entry(brew_uuid)
                     .or_insert_with(|| VoiceJitterBuffer::with_initial_latency(

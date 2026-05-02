@@ -342,8 +342,18 @@ impl CircuitMgr {
                 .map(|circuit| (circuit.direction, circuit.ts, circuit.call_id)),
         );
         for (dir, ts, call_id) in to_close {
-            let circuit = self.close_circuit(dir, ts).unwrap(); // TODO FIXME not so sure about this one
-            tasks.get_or_insert_with(Vec::new).push(CircuitMgrCmd::SendClose(call_id, circuit));
+            match self.close_circuit(dir, ts) {
+                Ok(circuit) => {
+                    tasks.get_or_insert_with(Vec::new).push(CircuitMgrCmd::SendClose(call_id, circuit));
+                }
+                Err(_) => {
+                    // Already closed by normal release path racing with the expiry timer — safe to ignore.
+                    tracing::debug!(
+                        "circuit_mgr: expiry close skipped for call_id={} ts={} dir={:?} (already closed)",
+                        call_id, ts, dir
+                    );
+                }
+            }
         }
         tasks
     }

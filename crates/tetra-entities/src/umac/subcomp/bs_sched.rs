@@ -506,9 +506,9 @@ impl BsChannelScheduler {
         self.circuits.ul[ts as usize - 1].as_ref().and_then(|c| c.peer_ts)
     }
 
-    /// Return the DL media source for the UL circuit on `ts`.
+    /// Return the DL media source policy for the UL circuit on `ts`.
     /// `LocalLoopback` = reflect UL back to DL (group/simplex calls).
-    /// `SwMI` = DL audio comes from Brew; suppress local loopback.
+    /// `SwMI` = DL audio comes from Brew/TetraPack; suppress local loopback.
     pub fn ul_circuit_dl_media_source(&self, ts: u8) -> CircuitDlMediaSource {
         if !(1..=4).contains(&ts) {
             return CircuitDlMediaSource::LocalLoopback;
