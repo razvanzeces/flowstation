@@ -1,6 +1,6 @@
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
 use tetra_saps::{
-    control::call_control::Circuit,
+    control::call_control::{Circuit, CircuitDlMediaSource},
     tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
 };
 
@@ -504,6 +504,19 @@ impl BsChannelScheduler {
             return None;
         }
         self.circuits.ul[ts as usize - 1].as_ref().and_then(|c| c.peer_ts)
+    }
+
+    /// Return the DL media source for the UL circuit on `ts`.
+    /// `LocalLoopback` = reflect UL back to DL (group/simplex calls).
+    /// `SwMI` = DL audio comes from Brew; suppress local loopback.
+    pub fn ul_circuit_dl_media_source(&self, ts: u8) -> CircuitDlMediaSource {
+        if !(1..=4).contains(&ts) {
+            return CircuitDlMediaSource::LocalLoopback;
+        }
+        self.circuits.ul[ts as usize - 1]
+            .as_ref()
+            .map(|c| c.dl_media_source)
+            .unwrap_or(CircuitDlMediaSource::LocalLoopback)
     }
 
     pub fn close_circuit(&mut self, dir: Direction, ts: u8) -> Option<Circuit> {
