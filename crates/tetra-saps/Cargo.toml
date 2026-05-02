@@ -1,0 +1,9 @@
+[package]
+name = "tetra-saps"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tetra-core = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
