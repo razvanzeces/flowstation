@@ -112,6 +112,9 @@ pub struct BrewEntity {
     active_calls: HashMap<Uuid, ActiveCall>,
     /// Per-call jitter/playout buffer for downlink voice from Brew.
     dl_jitter: HashMap<Uuid, VoiceJitterBuffer>,
+    /// Jitter buffers that are draining after GROUP_IDLE — kept alive until empty so the
+    /// last frames of a transmission are played out instead of being silently discarded.
+    draining_jitter: HashMap<Uuid, (u8, VoiceJitterBuffer)>,
 
     /// DL calls in hangtime keyed by dest_gssi — circuit stays open, waiting for
     /// new speaker or timeout. Only one hanging call per GSSI.
@@ -164,6 +167,7 @@ impl BrewEntity {
             command_sender,
             active_calls: HashMap::new(),
             dl_jitter: HashMap::new(),
+            draining_jitter: HashMap::new(),
             hanging_calls: HashMap::new(),
             ul_forwarded: HashMap::new(),
             subscriber_groups: HashMap::new(),
@@ -569,7 +573,20 @@ impl BrewEntity {
             tracing::debug!("BrewEntity: GROUP_IDLE for unknown uuid={}", uuid);
             return;
         };
-        self.dl_jitter.remove(&uuid);
+
+        // Move jitter buffer to draining instead of dropping it — remaining frames
+        // will continue to be played out until the buffer empties naturally.
+        if let Some(jitter) = self.dl_jitter.remove(&uuid) {
+            if let Some(ts) = call.ts {
+                if !jitter.is_empty() {
+                    tracing::debug!(
+                        "BrewEntity: GROUP_IDLE uuid={} moving {} buffered frames to drain",
+                        uuid, jitter.len()
+                    );
+                    self.draining_jitter.insert(uuid, (ts, jitter));
+                }
+            }
+        }
 
         tracing::info!(
             "BrewEntity: group call ended uuid={} call_id={:?} gssi={} frames={}",
@@ -693,6 +710,28 @@ impl BrewEntity {
             }
         }
 
+        // Also drain buffers from calls that ended (GROUP_IDLE) but still have frames buffered.
+        let finished: Vec<Uuid> = self
+            .draining_jitter
+            .iter_mut()
+            .filter_map(|(uuid, (ts, jitter))| {
+                if *ts != self.dltime.t {
+                    return None;
+                }
+                match jitter.pop_drain() {
+                    Some(frame) => {
+                        to_send.push((*ts, *uuid, 0, frame));
+                        None
+                    }
+                    None => Some(*uuid),
+                }
+            })
+            .collect();
+        for uuid in finished {
+            tracing::debug!("BrewEntity: drain complete for uuid={}", uuid);
+            self.draining_jitter.remove(&uuid);
+        }
+
         for (ts, uuid, target_frames, frame) in to_send {
             tracing::trace!(
                 "BrewEntity: playout uuid={} ts={} rx_seq={} age_ms={} target_frames={}",
@@ -731,6 +770,7 @@ impl BrewEntity {
         // Clear hanging call tracking
         self.hanging_calls.clear();
         self.dl_jitter.clear();
+        self.draining_jitter.clear();
     }
 
     /// Handle NetworkCallReady response from CMCE
@@ -761,6 +801,7 @@ impl BrewEntity {
         // Flush and remove jitter buffer immediately — prevents DL voice frames
         // from being sent to UMAC after the circuit is already closed.
         let had_jitter = self.dl_jitter.remove(&brew_uuid).is_some();
+        self.draining_jitter.remove(&brew_uuid);
         let ts_to_remove: Vec<u8> = self
             .ul_forwarded
             .iter()

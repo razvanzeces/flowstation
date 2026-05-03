@@ -122,6 +122,21 @@ impl VoiceJitterBuffer {
         self.target_frames.max(BREW_JITTER_MIN_FRAMES)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Pop a frame unconditionally — used when draining after GROUP_IDLE.
+    /// Unlike pop_ready, this does not wait for target_frames to accumulate;
+    /// it returns None only when the buffer is truly empty.
+    pub fn pop_drain(&mut self) -> Option<JitterFrame> {
+        self.frames.pop_front()
+    }
+
     fn recompute_target(&mut self) {
         let jitter_component = ((self.jitter_us_ewma * 2.0) / BREW_EXPECTED_FRAME_INTERVAL_US).ceil() as usize;
         let target = BREW_JITTER_BASE_FRAMES + self.initial_latency_frames + jitter_component + self.underrun_boost;

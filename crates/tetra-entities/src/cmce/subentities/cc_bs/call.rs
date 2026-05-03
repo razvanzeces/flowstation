@@ -164,6 +164,14 @@ impl ActiveCall {
         self.hangtime_start = Some(now);
     }
 
+    /// Reset the call timeout clock. Called when a new network speaker takes the floor so that
+    /// the 120s (T2m) window is measured from the latest transmission, not from call creation.
+    /// Without this, a conversation with multiple back-to-back speakers always expires at
+    /// `created_at + timeout` regardless of how recently the last speaker started talking.
+    pub(super) fn reset_timeout(&mut self, now: TdmaTime) {
+        self.created_at = now;
+    }
+
     pub(super) fn grant_floor(&mut self, source_issi: u32, speaker_addr: Option<TetraAddress>) {
         self.source_issi = source_issi;
         self.tx_active = true;
@@ -252,6 +260,9 @@ pub(super) struct IndividualCall {
     pub(super) network_call: Option<NetworkCircuitCall>,
     /// True once CONNECT_REQUEST has been sent for Brew-originated setup.
     pub(super) connect_request_sent: bool,
+    /// SSI of the party currently holding the floor (simplex P2P only).
+    /// None until the call is active. Used by UL inactivity timeout to force TX-CEASED.
+    pub(super) floor_holder: Option<u32>,
 }
 
 impl IndividualCall {

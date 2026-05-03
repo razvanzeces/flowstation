@@ -304,6 +304,7 @@ impl CcBsSubentity {
         Self::validate_group_transition(call_id, state, GroupEvent::NetworkCallStart)?;
 
         call.grant_floor(source_issi, None);
+        call.reset_timeout(self.dltime);
         call.brew_uuid = Some(brew_uuid);
         if let CallOrigin::Network { brew_uuid: old_uuid } = call.origin
             && old_uuid != brew_uuid
