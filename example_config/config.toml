@@ -1,0 +1,204 @@
+# Fișier de configurare FlowStation TETRA
+# NU PORNI fără a edita pentru a respecta limitele legale din jurisdicția ta
+
+config_version = "0.6"
+
+# Modul de operare al stivei: "Bs" (Stație de Bază), "Ms" (Stație Mobilă), sau "Mon" (Monitor)
+stack_mode = "Bs"
+
+# Decomentează pentru a înregistra log detaliat. Fișierele cresc rapid și generează încărcare suplimentară.
+# debug_log = "./verbose_log.txt"
+
+###############################################################################
+
+# Configurare intrare/ieșire strat PHY
+
+[phy_io]
+
+# Tip intrare: setat la SoapySdr.
+backend = "SoapySdr"
+
+# COD DEBUG/TESTARE. Fișierele de captură cresc rapid.
+# dl_tx_file = "./dl_output.bin"    # Debug; decomentează pentru a salva eșantioanele RF DL generate
+# ul_rx_file = "./ul_output.bin"    # Debug; decomentează pentru a salva eșantioanele RF UL primite
+
+[phy_io.soapysdr]
+# Frecvențele de transmisie tx(dl) și recepție rx(ul) în Hz
+# !!! Asigură-te că editezi și câmpurile corespunzătoare din secțiunea cell_info.
+tx_freq = 438025000
+rx_freq = 433025000
+
+# Ajustează dacă SDR-ul tău are o eroare de acordare non-neglijabilă
+# ppm_err = 0.0
+
+################################################################################################
+## OPȚIONAL: selecție specifică dispozitiv, antenă, câștig                                   ##
+## Verifică dispozitivul tău cu SoapySDRUtil --probe                                         ##
+## sau: https://github.com/MidnightBlueLabs/tetra-bluestation-docs/wiki/03-Configuration     ##
+################################################################################################
+
+# Argumente opționale de selectare dispozitiv.
+# Dacă nu este specificat, primul dispozitiv compatibil găsit este selectat automat.
+# Exemplu pentru Pluto+ cu o adresă IP dată:
+# device = "driver=plutosdr,uri=ip:192.168.42.42"
+# Pentru LimeSDR cu număr de serie dat (verifică cu SoapySDRUtil --find):
+# device = "driver=lime,serial=123456789"
+
+# Selecție opțională antenă (suprascrie valorile implicite ale dispozitivului)
+# Verifică numele antenelor cu SoapySDRUtil --probe
+# rx_antenna = "LNAW"
+# tx_antenna = "BAND2"
+
+# Valori opționale de câștig (suprascriu valorile implicite ale dispozitivului)
+# Verifică numele câștigurilor valide cu SoapySDRUtil --probe
+# Exemplu pentru creșterea puterii de transmisie pe LimeSDR:
+# tx_gain_pad = 50.0
+# Ajustare câștig LNA pentru optimizare recepție pe LimeSDR sau SXceiver:
+# rx_gain_lna = 30.0
+
+###############################################################################
+
+# Informații rețea
+[net_info]
+# Codul de țară mobil (MCC) - identifică țara ta
+mcc = 204  # Olanda
+
+# Codul de rețea mobil (MNC) - identifică rețeaua TETRA
+# ASIGURĂ-TE CĂ MNC POATE FI FOLOSIT, CONSULTĂ AUTORITĂȚILE RELEVANTE DACĂ E NECESAR
+mnc = 1337
+
+# Informații celulă
+[cell_info]
+
+# Acești parametri specifică frecvențele DL și UL
+# Citește specificația dacă ai dubii. Asigură-te că se potrivesc cu tx/rx de mai sus.
+# Vezi ETSI TS 100 392-15 V1.5.1 Clauza 6: Spațiere duplex
+freq_band = 4                       # Banda 400MHz
+main_carrier = 1521                 # + 1521 * 25kHz = 38250kHz
+duplex_spacing = 4                  # Folosește spațiere 5MHz între ul și dl (pentru banda 400 MHz)
+# custom_duplex_spacing = 7600000   # Nu decomenta decât dacă ai programat o intrare de spațiere duplex personalizată în radiourile tale
+freq_offset = 0                     # Offset față de purtătoare. De obicei 0. Opțiuni: 0, 6250, -6250, 12500 Hz.
+reverse_operation = false           # False: UL sub DL. True: UL deasupra DL.
+
+# Identificator zonă de locație
+location_area = 2
+
+# Cod culoare (0-63), ajută la distingerea celulelor adiacente pe aceeași frecvență
+colour_code = 1
+
+# Fus orar IANA pentru difuzarea timpului prin D-NWRK-BROADCAST. Când este setat, BS va
+# difuza ora UTC și decalajul față de ora locală o dată pe hipercadru (~61s) pentru ca
+# radiourile să-și poată sincroniza ceasurile. Gestionează automat ora de vară.
+# timezone = "Europe/Bucharest"
+
+# Intervale SSI locale ale acestei celule. Traficul pentru aceste intervale nu va părăsi celula.
+# Suprascrie orice setări din secțiunea brew, dacă este activată.
+# De asemenea, traficul brew incoming pe aceste intervale va fi respins.
+# Sfârșitul intervalului este INCLUSIV — numărul de sfârșit SE AFLĂ în interval.
+local_ssi_ranges = [
+    [0, 90],
+]
+
+###############################################################################
+
+# OPȚIONAL: Parametri suplimentari celulă
+
+# Difuzare celule vecine
+# neighbor_cell_broadcast = 0
+
+# Suport intrare tardivă - permite alăturarea la apeluri de grup în desfășurare
+# late_entry_supported = true
+
+# Clasa abonat - definește ce clase MS pot accesa această celulă
+# subscriber_class = 0xFFFF
+
+# Înregistrare și mobilitate
+# registration = true
+# deregistration = true
+# priority_cell = false
+# no_minimum_mode = false
+# migration = false
+
+# Indicatori disponibilitate servicii
+system_wide_services = true  # Dacă false, radiourile vor opera în mod de rezervă (ignorat când Brew este activat)
+voice_service = true
+# circuit_mode_data_service = true
+# sndcp_service = true
+# aie_service = false
+# advanced_link = false
+
+# Cod sistem (0-15) - identifică versiunea sistemului TETRA
+# system_code = 0
+
+# Modul de partajare pentru canalul principal de control
+# sharing_mode = 0
+
+# Cadre rezervate pentru alocarea de sloturi de timp
+# ts_reserved_frames = 0
+
+# Transmisie Discontinuă (DTX) pe planul utilizator
+# u_plane_dtx = false
+
+# Suport extensie cadru 18
+# frame_18_ext = false
+
+# Putere maximă TX a MS în celulă: 0=Rezervat 1=15 2=20 3=25 4=30 5=35 6=40 7=45 dBm
+# ms_txpwr_max_cell = 4
+
+# Durata de menținere a apelurilor de grup (hangtime) în secunde.
+# Cât timp rămâne deschis circuitul unui apel de grup inactiv după ce ultimul vorbitor
+# eliberează floor-ul, înainte ca apelul să fie deconectat.
+# Pe durata hangtime-ului, orice MS poate relua floor-ul fără un nou ciclu D-SETUP/D-CONNECT.
+# Implicit: 5 secunde. Interval valid: 0–300.
+# hangtime_secs = 5
+
+# Durata maximă a unui apel activ în secunde (echivalent ETSI T310, EN 300 392-2 §14.9.1).
+# După acest timp, BS trimite D-RELEASE indiferent de activitatea apelului.
+# Valori mai mici eliberează mai rapid sloturile când MS iese din acoperire fără să deconecteze.
+# Implicit: 120 secunde (2 minute). Interval valid: 30–300.
+# call_timeout_secs = 120
+
+# Timeout inactivitate UL în secunde: dacă nu se primesc cadre vocale de la MS-ul care
+# transmite pe durata aceasta, BS forțează TX-CEASED și intră în hangtime.
+# Trebuie să fie mai mare decât T.213 (1s) pentru a tolera DTX și estompare RF scurtă.
+# Implicit: 3 secunde. Interval valid: 1–30.
+# ul_inactivity_secs = 3
+
+###############################################################################
+
+# Protocol Brew: Conectare la serverul TetraPack/BrandMeister prin Protocolul TETRA Homebrew.
+# Toate grupurile la care radiourile se afiliază sunt transmise la Brew ca afilieri.
+# Decomentează această secțiune pentru a activa automat entitatea Brew.
+# Vezi: https://wiki.tetrapack.online/books/tetra/page/brew
+
+# [brew]
+
+# Adresa serverului
+# host = "core.tetraflow.ro"
+# port = 9000
+
+# Folosește TLS (wss:// / https://)
+# tls = true
+
+# Credențiale autentificare HTTP Digest, înregistrate în BrandMeister.
+# Username ar trebui să fie SSID-ul tău (DMR ID + sufix de 2 cifre).
+# Parola este parola de hotspot BrandMeister.
+# username = 123456700
+# password = "012345"
+
+# Întârziere reconectare (secunde)
+# reconnect_delay_secs = 15
+
+# OPȚIONAL: latență inițială suplimentară în cadre pentru redarea jitter-ului Brew inbound.
+# Buffering-ul adaptiv de jitter este întotdeauna activat; aceasta adaugă o întârziere fixă
+# la pornire dacă este necesară.
+# Implicit: 0. Crește dacă auzi artefacte audio la începutul transmisiilor.
+# jitter_initial_latency_frames = 0
+
+# Activează transmiterea SDS între clienții locali și Brew. Activat implicit.
+# feature_sds_enabled = true
+
+# Decomentează pentru a permite doar apeluri pentru SSI-uri selectate să fie transmise prin Brew.
+# SDS funcționează pentru toate SSI-urile momentan.
+# Dacă lăsat comentat, toate apelurile (în afara local_ssi_ranges) sunt permise prin Brew.
+# whitelisted_ssis = [91]

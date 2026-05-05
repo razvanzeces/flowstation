@@ -1,0 +1,57 @@
+# Sample systemd service file for bluestation-bs
+#
+# Installation: (as root or with sudo)
+# - adapt your user/group and paths, sample assumes:
+#   - user/group are both "user",
+#   - installation in /home/user/tetra-bluestation
+#   - configuration in /home/user/bluestation-bs-config.toml
+# - copy file to "/etc/systemd/system"
+# - execute "systemctl daemon-reload"
+#
+# Usage:
+# - start service with "systemctl start bluestation-bs"
+# - show state with "systemctl status bluestation-bs"
+# - stop service with "systemctl stop bluestation-bs"
+# - to enable start at boot, execute: "systemctl enable bluestation-bs"
+# - to disable start at boot, execute: "systemctl disable bluestation-bs"
+# - see log with "journalctl -u bluestation-bs --output=cat -f"
+
+[Unit]
+Description=TETRA BlueStation base station service
+# network-online.target ensures the interface is UP and routable,
+# not just "declared active" like network.target.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=user
+Group=user
+Type=simple
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=73
+WorkingDirectory=/home/user/tetra-bluestation/
+
+# Reset the SXceiver/SoapySDR USB device before each start to prevent
+# stale hardware timestamp state causing "Too late to produce TX block" skips
+# on software restarts (as opposed to hard power cycles).
+# This unbinds and rebinds the USB device, forcing a clean hardware reset.
+# Adjust the USB path to match your device: find it with:
+#   udevadm info -q path -n /dev/bus/usb/$(lsusb | grep -i sxceiver | awk '{print $2"/"$4}' | tr -d ':')
+# or simply: ls /sys/bus/usb/devices/
+ExecStartPre=/bin/sh -c 'for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname $dev); [ -f "$dir/authorized" ] && echo 0 > "$dir/authorized" && sleep 0.5 && echo 1 > "$dir/authorized"; done; sleep 1'
+
+ExecStart=/home/user/tetra-bluestation/target/release/bluestation-bs /home/user/bluestation-bs-config.toml
+KillSignal=SIGINT
+
+# Restart automatically on crash or unexpected exit.
+# on-failure covers: non-zero exit, killed by signal, timeout.
+# Does NOT restart on clean exit (systemctl stop) or SIGINT (graceful shutdown).
+Restart=on-failure
+RestartSec=10
+
+# Remove start rate limiting entirely — let RestartSec govern the pace.
+# Without this, systemd stops trying after 5 restarts in 10s (the default).
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
