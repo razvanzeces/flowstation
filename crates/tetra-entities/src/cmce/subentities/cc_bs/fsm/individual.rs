@@ -470,9 +470,9 @@ impl CcBsSubentity {
         }
 
         // D-CONNECT to calling MS:
-        //   - Simplex: GrantedToOtherUser — the called MS answers first and speaks first.
+        //   - Simplex: GrantedToOtherUser - the called MS answers first and speaks first.
         //     Caller must send U-TX-DEMAND to get the floor.
-        //   - Duplex: Granted — both MS may speak simultaneously.
+        //   - Duplex: Granted - both MS may speak simultaneously.
         // transmission_request_permission=false = 0 = ALLOWED to request transmission (ETSI 14.8.43).
         let calling_grant = if simplex_duplex {
             TransmissionGrant::Granted
@@ -500,6 +500,7 @@ impl CcBsSubentity {
         d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
         connect_sdu.seek(0);
 
+        // --- STEP 1: DConnect via FACCH stealing (terminal already on TCH) ---
         let connect_msg = SapMsg {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
@@ -512,18 +513,45 @@ impl CcBsSubentity {
                 layer2service: Layer2Service::Unacknowledged,
                 pdu_prio: 0,
                 layer2_qos: 0,
-                stealing_permission: false,
-                stealing_repeats_flag: false,
-                chan_alloc: Some(chan_alloc_calling),
+                stealing_permission: true,
+                stealing_repeats_flag: true,
+                chan_alloc: Some(chan_alloc_calling.clone()),
                 main_address: calling_addr,
                 tx_reporter: None,
             }),
         };
         queue.push_back(connect_msg);
 
+        // --- STEP 2: DConnect via MCCH as fallback (terminal still on control channel) ---
+        let mut connect_sdu2 = BitBuffer::new_autoexpand(30);
+        d_connect
+            .to_bitbuf(&mut connect_sdu2)
+            .expect("Failed to serialize DConnect (fallback)");
+        connect_sdu2.seek(0);
+        let connect_msg2 = SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu: connect_sdu2,
+                handle: calling_handle,
+                endpoint_id: calling_endpoint_id,
+                link_id: calling_link_id,
+                layer2service: Layer2Service::Unacknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                chan_alloc: Some(chan_alloc_calling.clone()),
+                main_address: calling_addr,
+                tx_reporter: None,
+            }),
+        };
+        queue.push_back(connect_msg2);
+
         // D-CONNECT-ACKNOWLEDGE to called MS:
-        //   - Simplex: Granted — the called MS answered, it speaks first.
-        //   - Duplex: Granted — both MS may speak simultaneously.
+        //   - Simplex: Granted - the called MS answered, it speaks first.
+        //   - Duplex: Granted - both MS may speak simultaneously.
         // transmission_request_permission=false = 0 = ALLOWED to request transmission (ETSI 14.8.43).
         let d_connect_ack = DConnectAcknowledge {
             call_identifier: call_id,
@@ -542,6 +570,7 @@ impl CcBsSubentity {
             .expect("Failed to serialize DConnectAcknowledge");
         ack_sdu.seek(0);
 
+        // --- STEP 1: DConnectAcknowledge via FACCH stealing (terminal already on TCH) ---
         let ack_msg = SapMsg {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
@@ -554,14 +583,41 @@ impl CcBsSubentity {
                 layer2service: Layer2Service::Unacknowledged,
                 pdu_prio: 0,
                 layer2_qos: 0,
-                stealing_permission: false,
-                stealing_repeats_flag: false,
-                chan_alloc: Some(chan_alloc_called),
+                stealing_permission: true,
+                stealing_repeats_flag: true,
+                chan_alloc: Some(chan_alloc_called.clone()),
                 main_address: called_addr,
                 tx_reporter: None,
             }),
         };
         queue.push_back(ack_msg);
+
+        // --- STEP 2: DConnectAcknowledge via MCCH as fallback (terminal still on control channel) ---
+        let mut ack_sdu2 = BitBuffer::new_autoexpand(28);
+        d_connect_ack
+            .to_bitbuf(&mut ack_sdu2)
+            .expect("Failed to serialize DConnectAcknowledge (fallback)");
+        ack_sdu2.seek(0);
+        let ack_msg2 = SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu: ack_sdu2,
+                handle,
+                endpoint_id,
+                link_id,
+                layer2service: Layer2Service::Unacknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                chan_alloc: Some(chan_alloc_called.clone()),
+                main_address: called_addr,
+                tx_reporter: None,
+            }),
+        };
+        queue.push_back(ack_msg2);
 
         if let Err(err) = self.fsm_individual_transition_to_active(call_id) {
             match err {
