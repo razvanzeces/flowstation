@@ -39,7 +39,7 @@ impl CmceBs {
 
         // Handle the incoming unit data indication
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!();
+            tracing::error!("BUG: unexpected message or state -- routing error"); return;
         };
         let Some(bits) = prim.sdu.peek_bits(5) else {
             tracing::warn!("insufficient bits: {}", prim.sdu.dump_bin());
@@ -102,7 +102,7 @@ impl TetraEntityTrait for CmceBs {
                         cep.respond(response);
                     }
                     _ => {
-                        panic!("Unsupported command {:?}", cmd);
+                        tracing::warn!("CMCE: ignoring unsupported control command {:?}", cmd);
                     }
                 }
             }
@@ -119,7 +119,7 @@ impl TetraEntityTrait for CmceBs {
                     self.rx_lcmc_mle_unitdata_ind(queue, message);
                 }
                 _ => {
-                    panic!("Unexpected message on LcmcSap: {:?}", message.msg);
+                    tracing::warn!("CMCE: unexpected message on LcmcSap: {:?}, ignoring", message.msg);
                 }
             },
             Sap::Control => match message.msg {
@@ -133,11 +133,11 @@ impl TetraEntityTrait for CmceBs {
                     self.sds.rx_sds_from_brew(queue, message);
                 }
                 _ => {
-                    panic!("Unexpected control message: {:?}", message.msg);
+                    tracing::warn!("CMCE: unexpected control message: {:?}, ignoring", message.msg);
                 }
             },
             _ => {
-                panic!("Unexpected SAP: {:?}", message.sap);
+                tracing::warn!("CMCE: unexpected SAP {:?}, ignoring", message.sap);
             }
         }
     }

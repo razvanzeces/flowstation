@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::panic;
 
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::SharedConfig;
@@ -195,7 +194,7 @@ impl Llc {
                 self.rx_tma_report_ind(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }
@@ -203,8 +202,8 @@ impl Llc {
     fn rx_tla_tlunitdata_req_bl(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
         tracing::trace!("rx_tla_tlunitdata_req_bl");
         let SapMsgInner::TlaTlUnitdataReqBl(mut prim) = message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let mut pdu_buf = BitBuffer::new_autoexpand(32);
         let pdu = BlUdata { has_fcs: false };
@@ -253,14 +252,16 @@ impl Llc {
     fn rx_tla_tldata_req_bl(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
         tracing::trace!("rx_tla_tldata_req_bl");
         let SapMsgInner::TlaTlDataReqBl(mut prim) = message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         if prim.stealing_permission {
-            panic!("Can't send BL-DATA for STCH message");
+            tracing::error!("LLC: BL-DATA requested for STCH message (stealing_permission=true) — not supported, dropping");
+            return;
         }
         if prim.main_address.ssi_type == SsiType::Gssi {
-            panic!("Can't send BL-DATA for GSSI-addressed message. ");
+            tracing::error!("LLC: BL-DATA requested for GSSI-addressed message — not supported, dropping");
+            return;
         }
 
         // If an ack still needs to be sent, get the relevant expected sequence number
@@ -352,7 +353,7 @@ impl Llc {
             SapMsgInner::TlaTlUnitdataReqBl(_) => {
                 self.rx_tla_tlunitdata_req_bl(queue, message);
             }
-            _ => panic!(),
+            _ => { tracing::warn!("unhandled match variant, ignoring"); }
         }
     }
 
@@ -370,7 +371,8 @@ impl Llc {
         // Determine which type of TL-SDU we have
         let pdu_type = if let SapMsgInner::TmaUnitdataInd(prim) = &mut message.msg {
             let Some(pdu) = prim.pdu.as_ref() else {
-                panic!("no pdu");
+                tracing::warn!("LLC: rx_tma_unitdata_ind received message with no pdu, ignoring");
+                return;
             };
             let Some(bits) = pdu.peek_bits(4) else {
                 tracing::warn!("insufficient bits: {}", pdu.dump_bin());
@@ -383,7 +385,7 @@ impl Llc {
 
             pdu_type
         } else {
-            panic!();
+            tracing::error!("BUG: unexpected message or state -- routing error"); return;
         };
 
         // Call handler function
@@ -410,7 +412,7 @@ impl Llc {
             }
 
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }
@@ -420,10 +422,11 @@ impl Llc {
 
         // Get header bits (again) and prepare MLE message
         let SapMsgInner::TmaUnitdataInd(prim) = &mut message.msg else {
-            panic!();
+            tracing::error!("BUG: unexpected message or state -- routing error"); return;
         };
         let Some(mut pdu) = prim.pdu.take() else {
-            panic!("no pdu");
+            tracing::warn!("LLC: rx_tma_unitdata_ind_bl received message with no pdu, ignoring");
+            return;
         };
         let Some(bits) = pdu.peek_bits(4) else {
             tracing::warn!("insufficient bits: {}", pdu.dump_bin());
@@ -477,7 +480,7 @@ impl Llc {
                 }
             },
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         };
 
@@ -781,7 +784,7 @@ impl TetraEntityTrait for Llc {
             Sap::TlaSap => {
                 self.rx_tla_prim(queue, message);
             }
-            _ => panic!(),
+            _ => { tracing::warn!("unhandled match variant, ignoring"); }
         }
     }
 

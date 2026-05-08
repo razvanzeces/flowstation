@@ -95,8 +95,8 @@ impl MmBs {
     fn rx_u_itsi_detach(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_itsi_detach");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let pdu = match UItsiDetach::from_bitbuf(&mut prim.sdu) {
             Ok(pdu) => {
@@ -133,8 +133,8 @@ impl MmBs {
     fn rx_u_location_update_demand(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_location_update_demand");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let pdu = match ULocationUpdateDemand::from_bitbuf(&mut prim.sdu) {
             Ok(pdu) => {
@@ -328,8 +328,8 @@ impl MmBs {
     fn rx_u_mm_status(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_mm_status");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let pdu = match UMmStatus::from_bitbuf(&mut prim.sdu) {
             Ok(pdu) => {
@@ -440,8 +440,8 @@ impl MmBs {
     fn rx_u_attach_detach_group_identity(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_attach_detach_group_identity");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let issi = prim.received_address.ssi;
 
@@ -545,8 +545,8 @@ impl MmBs {
     fn rx_lmm_mle_unitdata_ind(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         // unimplemented_log!("rx_lmm_mle_unitdata_ind for MM component");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let Some(bits) = prim.sdu.peek_bits(4) else {
             tracing::warn!("insufficient bits: {}", prim.sdu.dump_bin());
@@ -855,7 +855,7 @@ impl TetraEntityTrait for MmBs {
                     //     cep.respond(ControlResponse::CommandAResponse { handle, result: parameter * 2 });
                     // }
                     _ => {
-                        panic!("Unsupported command {:?}", cmd);
+                        tracing::warn!("MM: ignoring unsupported control command {:?}", cmd);
                     }
                 }
             }
@@ -873,7 +873,7 @@ impl TetraEntityTrait for MmBs {
                         self.rx_lmm_mle_unitdata_ind(queue, message);
                     }
                     _ => {
-                        panic!();
+                        tracing::error!("BUG: unexpected message or state -- routing error"); return;
                     }
                 }
             }
@@ -888,7 +888,7 @@ impl TetraEntityTrait for MmBs {
                 }
             }
             _ => {
-                panic!("mm_bs: unexpected SAP {:?}", message.sap);
+                tracing::warn!("MM: unexpected SAP {:?}, ignoring", message.sap);
             }
         }
     }

@@ -16,7 +16,7 @@ impl CcMsSubentity {
         tracing::trace!("route_rd_deliver");
 
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!();
+            tracing::error!("BUG: unexpected message or state -- routing error"); return;
         };
         let Some(bits) = prim.sdu.peek_bits(5) else {
             tracing::warn!("insufficient bits: {}", prim.sdu.dump_bin());
@@ -73,7 +73,7 @@ impl CcMsSubentity {
                 unimplemented_log!("{}", pdu_type);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }

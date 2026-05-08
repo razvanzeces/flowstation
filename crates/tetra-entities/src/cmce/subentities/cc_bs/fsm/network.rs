@@ -545,7 +545,20 @@ impl CcBsSubentity {
         dest_gssi: u32,
         priority: u8,
     ) {
-        assert!(net_brew::is_brew_gssi_routable(&self.config, dest_gssi));
+        if !net_brew::is_brew_gssi_routable(&self.config, dest_gssi) {
+            tracing::warn!(
+                "CMCE: fsm_on_network_call_start called for non-routable gssi={}, uuid={}, dropping",
+                dest_gssi,
+                brew_uuid
+            );
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+            });
+            return;
+        }
 
         if !self.has_listener(dest_gssi) {
             tracing::info!(

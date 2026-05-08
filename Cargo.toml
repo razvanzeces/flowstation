@@ -17,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 authors = ["Razvan Zeces / TetraFlow.RO"]
 license = "MIT"

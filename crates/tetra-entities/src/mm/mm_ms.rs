@@ -18,8 +18,8 @@ impl MmMs {
 
     fn rx_lmm_mle_unitdata_ind(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let Some(bits) = prim.sdu.peek_bits(4) else {
             tracing::warn!("insufficient bits: {}", prim.sdu.dump_bin());
@@ -70,7 +70,7 @@ impl TetraEntityTrait for MmMs {
                 self.rx_lmm_mle_unitdata_ind(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }

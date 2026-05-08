@@ -121,21 +121,18 @@ impl LmacBs {
         match blk.burst_type {
             BurstType::CUB => {
                 // CUB is always SCH/HU
-                assert!(
-                    blk.train_type == TrainingSequence::ExtendedTrainSeq,
-                    "CUB must have extended training sequence"
-                );
+                if blk.train_type != TrainingSequence::ExtendedTrainSeq {
+                    tracing::warn!("LMAC: CUB without ExtendedTrainSeq (got {:?}), treating as SchHu", blk.train_type);
+                }
                 LogicalChannel::SchHu
             }
             BurstType::NUB => {
                 match blk.train_type {
                     TrainingSequence::NormalTrainSeq1 => {
                         // TCH or SCH/F
-                        assert!(
-                            blk.block_num == PhyBlockNum::Both,
-                            "NUB with NormalTrainSeq1 must have one large block, got {:?}",
-                            blk.block_num
-                        );
+                        if blk.block_num != PhyBlockNum::Both {
+                            tracing::warn!("LMAC: NUB/NormalTrainSeq1 unexpected block_num {:?} (expected Both)", blk.block_num);
+                        }
                         if burst_is_traffic {
                             // Only support TCH/S speech channel for now
                             LogicalChannel::TchS
@@ -164,13 +161,14 @@ impl LmacBs {
                                 LogicalChannel::TchS
                             }
                         } else {
-                            panic!("NUB with NormalTrainSeq2 must have two blocks, got {:?}", blk.block_num);
+                            tracing::warn!("LMAC: NUB/NormalTrainSeq2 unexpected block_num {:?}, treating as Stch", blk.block_num);
+                            LogicalChannel::Stch
                         }
                     }
-                    _ => panic!(),
+                    _ => unreachable!("BUG: unhandled match variant -- should never be reached")
                 }
             }
-            _ => panic!(),
+            _ => unreachable!("BUG: unhandled match variant -- should never be reached")
         }
     }
 
@@ -211,11 +209,10 @@ impl LmacBs {
     }
 
     fn rx_blk_control(&mut self, queue: &mut MessageQueue, blk: TpUnitdataInd, lchan: LogicalChannel) {
-        assert!(
-            lchan.is_control_channel(),
-            "rx_blk_cp: lchan {:?} is not a signalling channel",
-            lchan
-        );
+        if !lchan.is_control_channel() {
+            tracing::warn!("LMAC: rx_blk_control called with non-signalling channel {:?}, ignoring", lchan);
+            return;
+        }
 
         let block_num = blk.block_num;
         let (type1bits, crc_pass) = errorcontrol::decode_cp(lchan, blk, Some(self.scrambling_code));
@@ -257,7 +254,7 @@ impl LmacBs {
     fn rx_tp_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         tracing::debug!("rx_tp_prim: msg {:?}", message);
 
-        let SapMsgInner::TpUnitdataInd(prim) = message.msg else { panic!() };
+        let SapMsgInner::TpUnitdataInd(prim) = message.msg else { tracing::error!("BUG: unexpected message or state -- routing error"); return; };
 
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
         let ts_idx = msg_dltime.t as usize - 1;
@@ -284,15 +281,15 @@ impl LmacBs {
                 self.rx_blk_control(queue, prim, lchan);
             }
             _ => {
-                panic!()
-            }
+                    tracing::error!("BUG: unexpected message or state -- routing error"); return;
+                }
         }
     }
 
     fn rx_tmv_configure_req(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
         let SapMsgInner::TmvConfigureReq(prim) = &message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         if let Some(stolen) = prim.blk2_stolen {
             self.blk2_stolen = stolen;
         }
@@ -302,46 +299,60 @@ impl LmacBs {
     fn rx_tmv_unitdata_req_slot(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::debug!("rx_tmv_unitdata_req_slot");
         let SapMsgInner::TmvUnitdataReq(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         // Update per-timeslot UL physical channel indicator
         let ts_idx = prim.ts.t as usize - 1;
         self.uplink_phy_chan[ts_idx] = prim.ul_phy_chan;
 
-        assert!(prim.bbk.is_some(), "rx_tmv_unitdata_req_slot: bbk must be present");
-        assert!(prim.blk1.is_some(), "rx_tmv_unitdata_req_slot: blk1 must be present");
-
-        let bbk = prim.bbk.take().unwrap(); // Guaranteed for BS stack
-        let blk1 = prim.blk1.take().unwrap(); // Guaranteed for BS stack
+        let Some(bbk) = prim.bbk.take() else {
+            tracing::error!("LMAC: rx_tmv_unitdata_req_slot: bbk missing, dropping slot");
+            return;
+        };
+        let Some(blk1) = prim.blk1.take() else {
+            tracing::error!("LMAC: rx_tmv_unitdata_req_slot: blk1 missing, dropping slot");
+            return;
+        };
         let blk2 = prim.blk2.take();
 
         // Determine train and burst type
         let (burst_type, train_type) = match blk1.logical_channel {
             LogicalChannel::Bsch => {
                 // Synchronization Downlink Burst
-                assert!(blk2.is_some());
+                if blk2.is_none() {
+                    tracing::warn!("LMAC: Bsch slot missing blk2, dropping");
+                    return;
+                }
                 (BurstType::SDB, TrainingSequence::SyncTrainSeq)
             }
 
             LogicalChannel::SchF => {
                 // Single full block
-                assert!(blk2.is_none());
+                if blk2.is_some() {
+                    tracing::warn!("LMAC: SchF slot has unexpected blk2, ignoring blk2");
+                }
                 (BurstType::NDB, TrainingSequence::NormalTrainSeq1)
             }
             LogicalChannel::TchS | LogicalChannel::Tch24 | LogicalChannel::Tch48 | LogicalChannel::Tch72 => {
                 // Traffic burst
-                // TODO FIXME: we could say, if blk2 is some, then it's traffic with the
-                // first block stolen. Then, we still need to know if blk2 is also stolen
-                assert!(blk2.is_none());
+                if blk2.is_some() {
+                    tracing::warn!("LMAC: TCH slot has unexpected blk2, ignoring blk2");
+                }
                 (BurstType::NDB, TrainingSequence::NormalTrainSeq1)
             }
             LogicalChannel::SchHd | LogicalChannel::Stch | LogicalChannel::Bnch => {
                 // Two half-blocks
-                assert!(blk2.is_some());
+                if blk2.is_none() {
+                    tracing::warn!("LMAC: {:?} slot missing blk2, dropping", blk1.logical_channel);
+                    return;
+                }
                 (BurstType::NDB, TrainingSequence::NormalTrainSeq2)
             }
-            _ => panic!("rx_tmv_unitdata_req_slot: unsupported logical channel {:?}", blk1.logical_channel),
+            _ => {
+                tracing::warn!("LMAC: unsupported logical channel {:?} in rx_tmv_unitdata_req_slot, dropping", blk1.logical_channel);
+                return;
+            }
         };
 
         let mut prim_phy = TpUnitdataReqSlot {
@@ -391,7 +402,7 @@ impl LmacBs {
             //     self.rx_control(queue, message);
             // }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }
@@ -436,7 +447,7 @@ impl TetraEntityTrait for LmacBs {
             // Sap::Control => {
             //     self.rx_control(queue, message);
             // }
-            _ => panic!(),
+            _ => unreachable!("BUG: unhandled match variant -- should never be reached")
         }
     }
 

@@ -5,7 +5,8 @@ impl CcBsSubentity {
         tracing::trace!("route_xx_deliver");
 
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!();
+            tracing::error!("route_xx_deliver: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
         let Some(bits) = prim.sdu.peek_bits(5) else {
             tracing::warn!("insufficient bits: {}", prim.sdu.dump_bin());
@@ -29,14 +30,15 @@ impl CcBsSubentity {
                 unimplemented_log!("{}", pdu_type);
             }
             _ => {
-                panic!();
+                tracing::warn!("route_xx_deliver: unhandled PDU type {:?}, ignoring", pdu_type);
             }
         }
     }
 
     pub fn rx_call_control(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         let SapMsgInner::CmceCallControl(call_control) = message.msg else {
-            panic!("Expected CmceCallControl message");
+            tracing::error!("rx_call_control: expected CmceCallControl, got unexpected SAP message type");
+            return;
         };
 
         match call_control {
@@ -91,7 +93,8 @@ impl CcBsSubentity {
     pub(super) fn rx_u_setup(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_setup: {:?}", message);
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
+            tracing::error!("rx_u_setup: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
         let calling_party = prim.received_tetra_address;
 
@@ -111,7 +114,8 @@ impl CcBsSubentity {
 
     pub(super) fn rx_u_tx_ceased(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
+            tracing::error!("rx_u_tx_ceased: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
 
         let sender = prim.received_tetra_address;
@@ -131,7 +135,8 @@ impl CcBsSubentity {
 
     pub(super) fn rx_u_tx_demand(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
+            tracing::error!("rx_u_tx_demand: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
 
         let requesting_party = prim.received_tetra_address;
@@ -151,7 +156,8 @@ impl CcBsSubentity {
 
     pub(super) fn rx_u_release(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
+            tracing::error!("rx_u_release: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
 
         let sender = prim.received_tetra_address;
@@ -171,7 +177,8 @@ impl CcBsSubentity {
 
     pub(super) fn rx_u_disconnect(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
+            tracing::error!("rx_u_disconnect: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
 
         let sender = prim.received_tetra_address;
@@ -195,7 +202,8 @@ impl CcBsSubentity {
 
     pub(super) fn rx_u_alert(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
+            tracing::error!("rx_u_alert: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
 
         let pdu = match UAlert::from_bitbuf(&mut prim.sdu) {
@@ -215,7 +223,8 @@ impl CcBsSubentity {
     /// Handle U-CONNECT for an individual call.
     pub(super) fn rx_u_connect(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
+            tracing::error!("rx_u_connect: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
 
         let pdu = match UConnect::from_bitbuf(&mut prim.sdu) {
@@ -241,7 +250,8 @@ impl CcBsSubentity {
 
     pub(super) fn rx_u_info(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!()
+            tracing::error!("rx_u_info: expected LcmcMleUnitdataInd, got unexpected SAP message type");
+            return;
         };
 
         let pdu = match UInfo::from_bitbuf(&mut prim.sdu) {

@@ -73,7 +73,9 @@ impl CircuitMgr {
             Direction::Dl => self.dl[ts as usize - 1].is_some(),
             Direction::Ul => {
                 let dl_is_both = if let Some(dl) = &self.dl[ts as usize - 1] {
-                    assert!(self.ul_only[ts as usize - 1].is_none());
+                    if self.ul_only[ts as usize - 1].is_some() {
+                        tracing::warn!("CMCE: circuit_mgr ts={} has both dl and ul_only set simultaneously (invariant violation)", ts);
+                    }
                     dl.direction == Direction::Both
                 } else {
                     false
@@ -81,7 +83,10 @@ impl CircuitMgr {
                 self.ul_only[ts as usize - 1].is_some() || dl_is_both
             }
 
-            _ => panic!("can only use with specific ul/dl direction"),
+            _ => {
+                tracing::error!("CMCE: is_active_dir called with non-specific direction {:?}, returning false", dir);
+                false
+            }
         }
     }
 
@@ -267,7 +272,7 @@ impl CircuitMgr {
                 let circuit = self.ul_only[ts as usize - 1].take();
                 circuit.ok_or(CircuitErr::CircuitNotActive)
             }
-            _ => panic!(),
+            _ => unreachable!("BUG: unhandled match variant -- should never be reached")
         }
     }
 
@@ -298,7 +303,7 @@ impl CircuitMgr {
                 self.ul_only[ts as usize - 1] = Some(circuit);
                 Ok(self.ul_only[ts as usize - 1].as_ref().unwrap())
             }
-            _ => panic!(),
+            _ => unreachable!("BUG: unhandled match variant -- should never be reached")
         }
     }
 

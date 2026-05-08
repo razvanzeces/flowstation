@@ -17,8 +17,8 @@ impl CcBsSubentity {
                 calling_party.ssi
             );
             let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
-                panic!()
-            };
+                    tracing::error!("BUG: unexpected message or state -- routing error"); return;
+                };
             let reject_call_id = self.circuits.get_next_call_id();
             let sdu = Self::build_d_release(reject_call_id, DisconnectCause::IncompatibleTrafficCase);
             let msg = Self::build_sapmsg_direct(sdu, calling_party, prim.handle, prim.link_id, prim.endpoint_id);

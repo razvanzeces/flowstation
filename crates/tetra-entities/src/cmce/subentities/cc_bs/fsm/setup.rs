@@ -59,8 +59,8 @@ impl CcBsSubentity {
 
         // Extract UL message routing info for individually-addressed responses.
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         let ul_handle = prim.handle;
         let ul_link_id = prim.link_id;
         let ul_endpoint_id = prim.endpoint_id;
@@ -197,8 +197,8 @@ impl CcBsSubentity {
         calling_party: TetraAddress,
     ) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let is_issi_address = pdu.called_party_type_identifier == tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier::Ssi || pdu.called_party_type_identifier == tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier::Tsi;
         if !is_issi_address && !net_brew::is_active(&self.config) {
@@ -421,8 +421,8 @@ impl CcBsSubentity {
         called_addr: TetraAddress,
     ) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         let mut network_call = Self::build_network_circuit_call_from_u_setup(pdu, calling_party.ssi);
 
         if !net_brew::is_active(&self.config) {

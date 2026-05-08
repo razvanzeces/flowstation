@@ -33,7 +33,7 @@ impl SdsBsSubentity {
         tracing::trace!("SDS route_rf_deliver");
 
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!();
+            tracing::error!("BUG: unexpected message or state -- routing error"); return;
         };
         let calling_party = prim.received_tetra_address;
 
@@ -54,7 +54,11 @@ impl SdsBsSubentity {
         }
 
         // Extract destination SSI (guaranteed present after feature check)
-        let dest_ssi = pdu.called_party_ssi.unwrap() as u32;
+        let Some(dest_ssi_raw) = pdu.called_party_ssi else {
+            tracing::warn!("SDS: U-SDS-DATA missing called_party_ssi after feature check, dropping");
+            return;
+        };
+        let dest_ssi = dest_ssi_raw as u32;
         let source_ssi = calling_party.ssi;
 
         tracing::info!(
@@ -94,7 +98,8 @@ impl SdsBsSubentity {
     /// Handle incoming SDS data from Brew entity (network-originated SDS)
     pub fn rx_sds_from_brew(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         let SapMsgInner::CmceSdsData(sds) = message.msg else {
-            panic!("Expected CmceSdsData message");
+            tracing::error!("SDS: rx_sds_from_brew expected CmceSdsData, got unexpected message type");
+            return;
         };
 
         tracing::info!(
@@ -125,7 +130,8 @@ impl SdsBsSubentity {
             payload,
         } = message
         else {
-            panic!("Expected SendSds command");
+            tracing::error!("SDS: rx_sds_from_control expected SendSds command, got unexpected command type");
+            return false;
         };
 
         tracing::info!(
@@ -159,7 +165,7 @@ impl SdsBsSubentity {
         tracing::trace!("SDS route_status_deliver");
 
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!();
+            tracing::error!("BUG: unexpected message or state -- routing error"); return;
         };
         let calling_party = prim.received_tetra_address;
 
@@ -180,7 +186,11 @@ impl SdsBsSubentity {
         }
 
         // Extract destination SSI (guaranteed present after feature check)
-        let dest_ssi = pdu.called_party_ssi.unwrap() as u32;
+        let Some(dest_ssi_raw) = pdu.called_party_ssi else {
+            tracing::warn!("SDS: U-STATUS missing called_party_ssi after feature check, dropping");
+            return;
+        };
+        let dest_ssi = dest_ssi_raw as u32;
 
         let source_ssi = calling_party.ssi;
 
@@ -316,7 +326,7 @@ impl SdsBsSubentity {
         let layer2service = match dest_ssi_type {
             SsiType::Issi => Layer2Service::Acknowledged,
             SsiType::Gssi => Layer2Service::Unacknowledged,
-            _ => panic!(),
+            _ => unreachable!("BUG: unhandled match variant -- should never be reached")
         };
         let msg = SapMsg {
             sap: Sap::LcmcSap,

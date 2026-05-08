@@ -172,7 +172,7 @@ pub fn build_ndb(
         TrainingSequence::NormalTrainSeq2 => {
             type5[244..266].copy_from_slice(&bitseq::p);
         }
-        _ => panic!(),
+        _ => { tracing::warn!("unhandled match variant, ignoring"); }
     }
 
     // Scrambled broadcast bits (second part)

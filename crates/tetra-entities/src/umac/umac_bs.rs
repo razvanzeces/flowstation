@@ -1,5 +1,3 @@
-use std::panic;
-
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
@@ -267,15 +265,15 @@ impl UmacBs {
                 self.rx_tmv_unitdata_ind(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }
 
     pub fn rx_tmv_unitdata_ind(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         tracing::trace!("rx_tmv_unitdata_ind: {:?}", prim.logical_channel);
 
         match prim.logical_channel {
@@ -311,7 +309,7 @@ impl UmacBs {
         loop {
             // let (lchan, block_num) = match &message.msg {
             //     SapMsgInner::TmvUnitdataInd(prim) => (prim.logical_channel, prim.block_num),
-            //     _ => panic!(),
+            //     _ => { tracing::warn!("unhandled match variant, ignoring"); }
             // };
 
             // Handle STCH MAC-DATA spanning block1+block2 (length_ind=0b111110)
@@ -333,8 +331,8 @@ impl UmacBs {
 
             // Extract info from inner block
             let SapMsgInner::TmvUnitdataInd(prim) = &message.msg else {
-                panic!()
-            };
+                    tracing::error!("BUG: unexpected message or state -- routing error"); return;
+                };
             let Some(bits) = prim.pdu.peek_bits(3) else {
                 tracing::warn!("insufficient bits: {}", prim.pdu.dump_bin());
                 return;
@@ -387,7 +385,7 @@ impl UmacBs {
                     match pdu_type {
                         0 => self.rx_mac_access(queue, &mut message),
                         1 => self.rx_mac_end_hu(queue, &mut message),
-                        _ => panic!(),
+                        _ => { tracing::warn!("unhandled match variant, ignoring"); }
                     }
                 }
 
@@ -418,8 +416,8 @@ impl UmacBs {
     fn rx_mac_data(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) {
         tracing::trace!("rx_mac_data");
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
 
         let pdu = match MacData::from_bitbuf(&mut prim.pdu) {
@@ -457,7 +455,10 @@ impl UmacBs {
                         // Start of fragmentation
                         (prim.pdu.get_len(), true, false, false)
                     }
-                    _ => panic!("rx_mac_data: Invalid length_ind {}", len_ind),
+                    _ => {
+                        tracing::warn!("UMAC: rx_mac_data: unexpected length_ind {:#08b}, dropping PDU", len_ind);
+                        return;
+                    }
                 }
             } else {
                 // We have a capacity request
@@ -578,8 +579,8 @@ impl UmacBs {
     fn rx_mac_access(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) {
         tracing::trace!("rx_mac_access");
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
 
         let pdu = match MacAccess::from_bitbuf(&mut prim.pdu) {
@@ -600,8 +601,8 @@ impl UmacBs {
         } else if let Some(addr) = pdu.addr {
             addr
         } else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         // Compute len and extract flags
         let mut pdu_len_bits;
@@ -733,8 +734,8 @@ impl UmacBs {
     fn rx_mac_frag_ul(&mut self, _queue: &mut MessageQueue, message: &mut SapMsg) {
         tracing::trace!("rx_mac_frag_ul");
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
 
         // Parse header and optional ChanAlloc
@@ -782,8 +783,8 @@ impl UmacBs {
     fn rx_mac_end_ul(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) {
         tracing::trace!("rx_mac_end_ul");
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
 
         // Parse header and optional ChanAlloc
@@ -890,8 +891,8 @@ impl UmacBs {
     fn rx_mac_end_hu(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) {
         tracing::trace!("rx_mac_end_hu");
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
 
         // Parse header and optional ChanAlloc
@@ -1011,8 +1012,8 @@ impl UmacBs {
 
         // Extract sdu and parse pdu
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let pdu = match MacUSignal::from_bitbuf(&mut prim.pdu) {
             Ok(pdu) => {
@@ -1068,8 +1069,8 @@ impl UmacBs {
 
         // Extract sdu and parse pdu
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let _pdu = match MacUBlck::from_bitbuf(&mut prim.pdu) {
             Ok(pdu) => {
@@ -1091,7 +1092,7 @@ impl UmacBs {
         tracing::trace!("rx_ul_tma_unitdata_req");
 
         // Extract sdu
-        let SapMsgInner::TmaUnitdataReq(prim) = message.msg else { panic!() };
+        let SapMsgInner::TmaUnitdataReq(prim) = message.msg else { tracing::error!("BUG: unexpected message or state -- routing error"); return; };
         let mut sdu = prim.pdu;
 
         // ── FACCH/Stealing path ──────────────────────────────────────────
@@ -1213,13 +1214,13 @@ impl UmacBs {
             SapMsgInner::TmaUnitdataReq(_) => {
                 self.rx_ul_tma_unitdata_req(queue, message);
             }
-            _ => panic!(),
+            _ => { tracing::warn!("unhandled match variant, ignoring"); }
         }
     }
 
     fn rx_tlmb_prim(&mut self, _queue: &mut MessageQueue, _message: SapMsg) {
         tracing::trace!("rx_tlmb_prim");
-        panic!()
+        tracing::error!("BUG: unexpected message or state -- routing error"); return;
     }
 
     fn rx_tmd_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
@@ -1395,7 +1396,7 @@ impl UmacBs {
     // }
 
     fn rx_control_circuit_open(&mut self, _queue: &mut MessageQueue, prim: CallControl) {
-        let CallControl::Open(circuit) = prim else { panic!() };
+        let CallControl::Open(circuit) = prim else { tracing::error!("BUG: unexpected message or state -- routing error"); return; };
         let ts = circuit.ts;
         let dir = circuit.direction;
 
@@ -1439,7 +1440,7 @@ impl UmacBs {
     }
 
     fn rx_control_circuit_close(&mut self, _queue: &mut MessageQueue, prim: CallControl) {
-        let CallControl::Close(dir, ts) = prim else { panic!() };
+        let CallControl::Close(dir, ts) = prim else { tracing::error!("BUG: unexpected message or state -- routing error"); return; };
 
         // Direction::Both needs to be split into separate DL and UL close operations
         let dirs: Vec<Direction> = match dir {
@@ -1512,8 +1513,8 @@ impl UmacBs {
     fn rx_control(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         tracing::trace!("rx_control");
         let SapMsgInner::CmceCallControl(prim) = message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         match prim {
             CallControl::Open(_) => {
@@ -1599,8 +1600,8 @@ impl TetraEntityTrait for UmacBs {
                 self.rx_control(queue, message);
             }
             _ => {
-                panic!()
-            }
+                    tracing::error!("BUG: unexpected message or state -- routing error"); return;
+                }
         }
     }
 

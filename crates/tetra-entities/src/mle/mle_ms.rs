@@ -37,7 +37,7 @@ impl MleMs {
             match message.msg {
                 SapMsgInner::TlaTlDataIndBl(prim) => prim.tl_sdu,
                 _ => {
-                    panic!();
+                    tracing::error!("BUG: unexpected message or state -- routing error"); return;
                 }
             }
         };
@@ -94,7 +94,7 @@ impl MleMs {
                 self.rx_tla_unitdata_ind_bl(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }
@@ -102,10 +102,16 @@ impl MleMs {
     fn rx_tla_data_ind_bl(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         // Take ownership of bitbuf and read protocol discriminator
         let SapMsgInner::TlaTlDataIndBl(prim) = &mut message.msg else {
-            panic!()
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
+        let Some(mut sdu) = prim.tl_sdu.take() else {
+            tracing::warn!("MLE: received message with no tl_sdu, ignoring");
+            return;
         };
-        let Some(mut sdu) = prim.tl_sdu.take() else { panic!("no tl_sdu") };
-        assert!(sdu.get_pos() == 0); // We should be at the start of the MAC PDU
+        if sdu.get_pos() != 0 {
+            tracing::warn!("MLE: sdu not at start position (pos={}), seeking to 0", sdu.get_pos());
+            sdu.seek(0);
+        }
         let Some(bits) = sdu.read_bits(3) else {
             tracing::warn!("insufficient bits: {}", sdu.dump_bin());
             return;
@@ -193,10 +199,16 @@ impl MleMs {
 
         // Take ownership of bitbuf and read protocol discriminator
         let SapMsgInner::TlaTlUnitdataIndBl(prim) = &mut message.msg else {
-            panic!()
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
+        let Some(mut sdu) = prim.tl_sdu.take() else {
+            tracing::warn!("MLE: received message with no tl_sdu, ignoring");
+            return;
         };
-        let Some(mut sdu) = prim.tl_sdu.take() else { panic!("no tl_sdu") };
-        assert!(sdu.get_pos() == 0); // We should be at the start of the MAC PDU
+        if sdu.get_pos() != 0 {
+            tracing::warn!("MLE: sdu not at start position (pos={}), seeking to 0", sdu.get_pos());
+            sdu.seek(0);
+        }
 
         let Some(bits) = sdu.read_bits(3) else {
             tracing::warn!("insufficient bits: {}", sdu.dump_bin());
@@ -288,7 +300,7 @@ impl MleMs {
                 self.rx_tlmb_tl_sync_ind(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }
@@ -297,8 +309,8 @@ impl MleMs {
         tracing::trace!("rx_tlmb_tl_sysinfo_ind");
 
         let SapMsgInner::TlmbSysinfoInd(inner) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         // Parse the TL-SDU
         let _pdu = match DMleSysinfo::from_bitbuf(&mut inner.tl_sdu) {
@@ -356,8 +368,8 @@ impl MleMs {
         tracing::trace!("rx_tlmb_tl_sync_ind");
 
         let SapMsgInner::TlmbSyncInd(inner) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         // Parse the TL-SDU
         let _pdu = match DMleSync::from_bitbuf(&mut inner.tl_sdu) {
@@ -427,8 +439,8 @@ impl MleMs {
     fn rx_lmm_mle_unitdata_req(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_lmm_mle_unitdata_req");
         let SapMsgInner::LmmMleUnitdataReq(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let mle_prot_discriminator = MleProtocolDiscriminator::Mm;
         let sdu_len = prim.sdu.get_len();
@@ -470,7 +482,7 @@ impl MleMs {
             SapMsgInner::LmmMleUnitdataReq(_prim) => {
                 self.rx_lmm_mle_unitdata_req(queue, message);
             }
-            _ => panic!(),
+            _ => { tracing::warn!("unhandled match variant, ignoring"); }
         }
     }
 
@@ -487,8 +499,8 @@ impl MleMs {
     fn rx_lcmc_mle_unitdata_req(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_lcmc_mle_unitdata_req");
         let SapMsgInner::LcmcMleUnitdataReq(prim) = &mut message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let mle_prot_discriminator = MleProtocolDiscriminator::Cmce;
         let sdu_len = prim.sdu.get_len();
@@ -534,7 +546,7 @@ impl MleMs {
             SapMsgInner::LcmcMleUnitdataReq(_) => {
                 self.rx_lcmc_mle_unitdata_req(queue, message);
             }
-            _ => panic!(),
+            _ => { tracing::warn!("unhandled match variant, ignoring"); }
         }
     }
 }
@@ -568,7 +580,7 @@ impl TetraEntityTrait for MleMs {
                 self.rx_lcmc_prim(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }

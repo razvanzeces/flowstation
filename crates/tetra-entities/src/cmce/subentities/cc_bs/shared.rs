@@ -309,8 +309,8 @@ impl CcBsSubentity {
         tracing::trace!("send_d_call_proceeding");
 
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
 
         let pdu_response = DCallProceeding {
             call_identifier: call_id,

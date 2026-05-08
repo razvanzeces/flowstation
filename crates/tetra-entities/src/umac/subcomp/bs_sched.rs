@@ -687,7 +687,7 @@ impl BsChannelScheduler {
             let addr = match &elem {
                 DlSchedElem::Grant(addr, _) => addr,
                 DlSchedElem::RandomAccessAck(addr) => addr,
-                _ => panic!(),
+                _ => unreachable!("BUG: unhandled match variant -- should never be reached")
             };
             let mac_resource = self.dl_get_scheduled_resource_for_ssi(ts, addr);
             match mac_resource {
@@ -709,7 +709,7 @@ impl BsChannelScheduler {
                             );
                             pdu.random_access_flag = true;
                         }
-                        _ => panic!(),
+                        _ => unreachable!("BUG: unhandled match variant -- should never be reached")
                     }
                 }
                 None => {
@@ -731,14 +731,14 @@ impl BsChannelScheduler {
                             );
                             Self::dl_make_minimal_resource(addr, None, true)
                         }
-                        _ => panic!(),
+                        _ => unreachable!("BUG: unhandled match variant -- should never be reached")
                     };
 
                     // Push new resource into the queue. These do not need a tx_reporter
                     let dlsched_res = DlSchedElem::Resource(pdu, BitBuffer::new(0), None);
                     self.dltx_queues[ts.t as usize - 1].push(dlsched_res);
                 }
-                _ => panic!(),
+                _ => unreachable!("BUG: unhandled match variant -- should never be reached")
             }
         }
     }
@@ -791,7 +791,9 @@ impl BsChannelScheduler {
                             }
                         }
 
-                        _ => panic!("finalize_ts_for_tick: Unexpected DlSchedElem type: {:?}", sched_elem),
+                        _ => {
+                            tracing::error!("UMAC: finalize_ts_for_tick: unexpected DlSchedElem type {:?}, skipping", sched_elem);
+                        }
                     }
                 }
                 None => {
@@ -1164,7 +1166,14 @@ impl BsChannelScheduler {
                         };
                     }
                 }
-                _ => panic!("finalize_ts_for_tick: invalid timeslot {}", ts.t),
+                _ => {
+                    tracing::error!("UMAC: generate_bbk_block: invalid timeslot {} (expected 1-4)", ts.t);
+                    return TmvUnitdataReq {
+                        logical_channel: LogicalChannel::Aach,
+                        mac_block: BitBuffer::new(14),
+                        scrambling_code: self.scrambling_code,
+                    };
+                }
             }
 
             aach.to_bitbuf(&mut aach_bb);
@@ -1222,7 +1231,7 @@ impl BsChannelScheduler {
                             scrambling_code: self.scrambling_code,
                         }
                     }
-                    _ => panic!(), // never happens
+                    _ => unreachable!("BUG: unhandled match variant -- should never be reached") // never happens
                 }
             }
             (1..=17, 2..=4) | (18, _) => {
@@ -1236,7 +1245,7 @@ impl BsChannelScheduler {
                     scrambling_code: scrambler::SCRAMB_INIT,
                 }
             }
-            _ => panic!(), // never happens
+            _ => unreachable!("BUG: unhandled match variant -- should never be reached") // never happens
         }
     }
 
@@ -1507,8 +1516,8 @@ mod tests {
         sched.dump_ul_schedule(true);
         let resreq2 = ReservationRequirement::Req3Slots;
         let Some(grant2) = sched.ul_process_cap_req(1, addr, &resreq2) else {
-            panic!()
-        };
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            };
         tracing::info!("grant2: {:?}", grant2);
         sched.dump_ul_schedule(true);
 

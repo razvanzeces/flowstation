@@ -33,7 +33,7 @@ impl CmceMs {
 
         // Handle the incoming unit data indication
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
-            panic!();
+            tracing::error!("BUG: unexpected message or state -- routing error"); return;
         };
         let Some(bits) = prim.sdu.peek_bits(5) else {
             tracing::warn!("insufficient bits: {}", prim.sdu.dump_bin());
@@ -68,7 +68,7 @@ impl CmceMs {
                 self.cc.route_rd_deliver(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }
@@ -95,7 +95,7 @@ impl TetraEntityTrait for CmceMs {
                 self.rx_unitdata_ind(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }

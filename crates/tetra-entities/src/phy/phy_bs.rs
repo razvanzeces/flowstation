@@ -1,5 +1,4 @@
 use crossbeam_channel::Sender;
-use std::panic;
 
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
@@ -132,7 +131,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 Self::send_rxblock_to_lmac(queue, train_seq, BurstType::CUB, PhyBlockType::SSN1, PhyBlockNum::Block1, blk);
             }
 
-            _ => panic!(),
+            _ => unreachable!("BUG: unhandled match variant -- should never be reached")
         }
     }
 
@@ -143,7 +142,7 @@ impl<D: RxTxDev> PhyBs<D> {
 
         self.tick += 1;
 
-        let SapMsgInner::TpUnitdataReq(prim) = message.msg else { panic!() };
+        let SapMsgInner::TpUnitdataReq(prim) = message.msg else { tracing::error!("BUG: unexpected message or state -- routing error"); return; };
 
         // Generate block (from file or from LMAC data)
         let mut dl_burst = [0u8; TIMESLOT_TYPE4_BITS];
@@ -188,12 +187,15 @@ impl<D: RxTxDev> PhyBs<D> {
                             prim.blk1.unwrap().to_bitarr(&mut blk1); // Guaranteed for NDB
                             prim.blk2.unwrap().to_bitarr(&mut blk2); // Guaranteed for NDB trainseq 2
                         }
-                        _ => panic!("Unsupported training sequence for NDB burst"),
+                        _ => {
+                            tracing::warn!("PHY: unsupported training sequence {:?} for NDB burst, dropping", prim.train_type);
+                            return;
+                        }
                     }
 
                     slotter::build_ndb(prim.train_type, &blk1, &bbk, &blk2)
                 }
-                _ => panic!(),
+                _ => unreachable!("BUG: unhandled match variant -- should never be reached")
             };
         }
 
@@ -286,7 +288,7 @@ impl<D: RxTxDev + Send + 'static> TetraEntityTrait for PhyBs<D> {
                 self.rx_tpc_prim(queue, message);
             }
             _ => {
-                panic!();
+                tracing::error!("BUG: unexpected message or state -- routing error"); return;
             }
         }
     }

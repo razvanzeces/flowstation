@@ -171,7 +171,10 @@ pub fn dec_sb1(in_buf: &[u8], out_buf: &mut [u8], sym_count: usize) {
             0x00 => -1, // strong '0'
             0x01 => 1,  // strong '1'
             0xff => 0,  // erasure / puncture
-            _ => panic!("viterbi_dec_sb1_wrapper: invalid input"),
+            _ => {
+                tracing::warn!("LMAC viterbi: unexpected soft-bit value {:#04x}, treating as erasure", b);
+                0 // erasure
+            }
         })
         .collect();
 

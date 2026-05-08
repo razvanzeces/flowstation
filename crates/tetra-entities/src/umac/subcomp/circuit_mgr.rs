@@ -24,7 +24,10 @@ impl CircuitMgr {
         match dir {
             Direction::Dl => self.dl[ts as usize - 1].is_some(),
             Direction::Ul => self.ul[ts as usize - 1].is_some(),
-            _ => panic!("can only use with specific ul/dl direction"),
+            _ => {
+                tracing::error!("UMAC CircuitMgr: called with non-specific direction {:?}", dir);
+                return Default::default();
+            }
         }
     }
 
@@ -44,7 +47,10 @@ impl CircuitMgr {
                     None
                 }
             }
-            _ => panic!("can only use with specific ul/dl direction"),
+            _ => {
+                tracing::error!("UMAC CircuitMgr: called with non-specific direction {:?}", dir);
+                return Default::default();
+            }
         }
     }
 
@@ -56,7 +62,10 @@ impl CircuitMgr {
                 self.dl[ts as usize - 1].take()
             }
             Direction::Ul => self.ul[ts as usize - 1].take(),
-            _ => panic!("can only use with specific ul/dl direction"),
+            _ => {
+                tracing::error!("UMAC CircuitMgr: called with non-specific direction {:?}", dir);
+                return Default::default();
+            }
         }
     }
 
@@ -80,7 +89,10 @@ impl CircuitMgr {
                 self.dl[ts as usize - 1] = Some(circuit);
             }
             Direction::Ul => self.ul[ts as usize - 1] = Some(circuit),
-            _ => panic!("can only use with specific ul/dl direction"),
+            _ => {
+                tracing::error!("UMAC CircuitMgr: called with non-specific direction {:?}", dir);
+                return Default::default();
+            }
         }
     }
 
