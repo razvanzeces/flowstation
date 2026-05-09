@@ -7,6 +7,7 @@ use serde::Deserialize;
 use toml::Value;
 
 use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
+use crate::bluestation::sec_cell::CfgNeighborCellCa;
 
 use super::config::{StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
@@ -16,7 +17,49 @@ use super::{PhyIoDto, phy_dto_to_cfg};
 
 /// Build `StackConfig` from a TOML configuration file
 pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::Error>> {
-    let root: TomlConfigRoot = toml::from_str(toml_str)?;
+    // Parse once as raw Value so we can extract neighbor_cells_ca before
+    // deserializing into typed DTOs. This avoids a conflict between serde's
+    // #[flatten] HashMap (used for unrecognised-field detection) and an array-of-
+    // tables field: the flatten map would capture neighbor_cells_ca as an opaque
+    // Value, causing the "unrecognised field" check to fire.
+    let mut raw: toml::Table = toml::from_str(toml_str)?;
+
+    // Extract neighbor_cells_ca from cell_info before typed deserialisation.
+    let neighbor_cells_ca: Vec<CfgNeighborCellCa> = raw
+        .get_mut("cell_info")
+        .and_then(|ci| {
+            if let Value::Table(t) = ci {
+                t.remove("neighbor_cells_ca")
+            } else {
+                None
+            }
+        })
+        .map(|v| {
+            // v is a Value::Array of Value::Table — deserialise via serde
+            v.try_into::<Vec<toml::Table>>()
+                .map_err(|e| format!("cell_info.neighbor_cells_ca: {}", e))
+                .and_then(|tables| {
+                    tables
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            Value::Table(t)
+                                .try_into::<CfgNeighborCellCa>()
+                                .map_err(|e| format!("cell_info.neighbor_cells_ca[{}]: {}", i, e))
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    if neighbor_cells_ca.len() > 7 {
+        return Err("cell_info.neighbor_cells_ca: at most 7 entries allowed".into());
+    }
+
+    // Now deserialise the (mutated) Value into the typed root — neighbor_cells_ca
+    // has been removed so it will not appear in the flatten HashMap.
+    let root: TomlConfigRoot = Value::Table(raw).try_into()?;
 
     // Various sanity checks
     let expected_config_version = "0.6";
@@ -65,13 +108,17 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         }
     }
 
+    // Build cell config, then inject the separately-parsed neighbor cells
+    let mut cell_cfg = cell_dto_to_cfg(root.cell_info);
+    cell_cfg.neighbor_cells_ca = neighbor_cells_ca;
+
     // Build config from required and optional values
     let mut cfg = StackConfig {
         stack_mode: root.stack_mode,
         debug_log: root.debug_log,
         phy_io: phy_dto_to_cfg(root.phy_io),
         net: net_dto_to_cfg(root.net_info),
-        cell: cell_dto_to_cfg(root.cell_info),
+        cell: cell_cfg,
         brew: None,
         telemetry: None,
         control: None,
@@ -134,4 +181,91 @@ struct TomlConfigRoot {
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_toml(extra_cell: &str) -> String {
+        format!(
+            r#"
+config_version = "0.6"
+stack_mode = "Bs"
+
+[phy_io]
+backend = "None"
+
+[net_info]
+mcc = 901
+mnc = 9999
+
+[cell_info]
+main_carrier = 1584
+freq_band = 4
+freq_offset = 0
+duplex_spacing = 4
+location_area = 1
+{}
+"#,
+            extra_cell
+        )
+    }
+
+    #[test]
+    fn test_no_neighbor_cells() {
+        let toml = minimal_toml("");
+        let cfg = from_toml_str(&toml).expect("parse failed");
+        assert_eq!(cfg.cell.neighbor_cells_ca.len(), 0);
+    }
+
+    #[test]
+    fn test_two_neighbor_cells() {
+        let toml = minimal_toml(r#"
+neighbor_cell_broadcast = 2
+
+[[cell_info.neighbor_cells_ca]]
+cell_identifier_ca = 1
+cell_reselection_types_supported = 0
+neighbor_cell_synchronized = false
+cell_load_ca = 0
+main_carrier_number = 1585
+mcc = 901
+mnc = 9999
+location_area = 1
+
+[[cell_info.neighbor_cells_ca]]
+cell_identifier_ca = 2
+cell_reselection_types_supported = 0
+neighbor_cell_synchronized = false
+cell_load_ca = 1
+main_carrier_number = 1586
+"#);
+        let cfg = from_toml_str(&toml).expect("parse failed");
+        assert_eq!(cfg.cell.neighbor_cells_ca.len(), 2);
+        assert_eq!(cfg.cell.neighbor_cells_ca[0].cell_identifier_ca, 1);
+        assert_eq!(cfg.cell.neighbor_cells_ca[0].main_carrier_number, 1585);
+        assert_eq!(cfg.cell.neighbor_cells_ca[1].cell_identifier_ca, 2);
+        assert_eq!(cfg.cell.neighbor_cells_ca[1].cell_load_ca, 1);
+        assert_eq!(cfg.cell.neighbor_cell_broadcast, 2);
+    }
+
+    #[test]
+    fn test_too_many_neighbor_cells_rejected() {
+        // 8 entries — should fail validation
+        let entries: String = (1u8..=8)
+            .map(|i| format!(
+                "\n[[cell_info.neighbor_cells_ca]]\ncell_identifier_ca = {}\ncell_reselection_types_supported = 0\nneighbor_cell_synchronized = false\ncell_load_ca = 0\nmain_carrier_number = {}\n",
+                i, 1584 + i as u16
+            ))
+            .collect();
+        let toml = minimal_toml(&entries);
+        assert!(from_toml_str(&toml).is_err(), "should reject >7 neighbours");
+    }
+
+    #[test]
+    fn test_unrecognized_cell_info_field_still_rejected() {
+        let toml = minimal_toml("bogus_field = 42");
+        assert!(from_toml_str(&toml).is_err(), "should reject unknown field");
+    }
 }

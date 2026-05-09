@@ -133,6 +133,64 @@ impl StackConfig {
             }
         }
 
+        // Validate neighbor cells
+        if self.cell.neighbor_cells_ca.len() > 7 {
+            return Err("cell.neighbor_cells_ca supports at most 7 entries");
+        }
+
+        // Check for duplicate cell_identifier_ca and main_carrier_number
+        {
+            let mut seen_ids = std::collections::HashSet::new();
+            let mut seen_carriers = std::collections::HashSet::new();
+            for cell in &self.cell.neighbor_cells_ca {
+                if !seen_ids.insert(cell.cell_identifier_ca) {
+                    return Err("cell.neighbor_cells_ca: duplicate cell_identifier_ca — each neighbour must have a unique identifier");
+                }
+                if !seen_carriers.insert(cell.main_carrier_number) {
+                    return Err("cell.neighbor_cells_ca: duplicate main_carrier_number — each neighbour must be on a different carrier");
+                }
+            }
+        }
+
+        for cell in &self.cell.neighbor_cells_ca {
+            if cell.cell_identifier_ca > 0x1F {
+                return Err("cell.neighbor_cells_ca: cell_identifier_ca must be 0-31");
+            }
+            if cell.cell_reselection_types_supported > 0x3 {
+                return Err("cell.neighbor_cells_ca: cell_reselection_types_supported must be 0-3");
+            }
+            if cell.cell_load_ca > 0x3 {
+                return Err("cell.neighbor_cells_ca: cell_load_ca must be 0-3");
+            }
+            if cell.main_carrier_number > 0xFFF {
+                return Err("cell.neighbor_cells_ca: main_carrier_number must be 0-4095");
+            }
+            if let Some(v) = cell.main_carrier_number_extension {
+                if v > 0x3FF { return Err("cell.neighbor_cells_ca: main_carrier_number_extension must be 0-1023"); }
+            }
+            if let Some(v) = cell.mcc {
+                if v > 0x3FF { return Err("cell.neighbor_cells_ca: mcc must be 0-1023"); }
+            }
+            if let Some(v) = cell.mnc {
+                if v > 0x3FFF { return Err("cell.neighbor_cells_ca: mnc must be 0-16383"); }
+            }
+            if let Some(v) = cell.location_area {
+                if v > 0x3FFF { return Err("cell.neighbor_cells_ca: location_area must be 0-16383"); }
+            }
+            if let Some(v) = cell.maximum_ms_transmit_power {
+                if v > 0x7 { return Err("cell.neighbor_cells_ca: maximum_ms_transmit_power must be 0-7"); }
+            }
+            if let Some(v) = cell.minimum_rx_access_level {
+                if v > 0xF { return Err("cell.neighbor_cells_ca: minimum_rx_access_level must be 0-15"); }
+            }
+            if let Some(v) = cell.timeshare_cell_information_or_security_parameters {
+                if v > 0x1F { return Err("cell.neighbor_cells_ca: timeshare_cell_information_or_security_parameters must be 0-31"); }
+            }
+            if let Some(v) = cell.tdma_frame_offset {
+                if v > 0x3F { return Err("cell.neighbor_cells_ca: tdma_frame_offset must be 0-63"); }
+            }
+        }
+
         Ok(())
     }
 }

@@ -1,6 +1,12 @@
 use tetra_config::bluestation::SharedConfig;
+use tetra_config::bluestation::sec_cell::CfgBsServiceDetails;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity};
-use tetra_pdus::mle::{enums::mle_protocol_discriminator::MleProtocolDiscriminator, pdus::d_nwrk_broadcast::DNwrkBroadcast};
+use tetra_pdus::mle::{
+    enums::mle_protocol_discriminator::MleProtocolDiscriminator,
+    fields::bs_service_details::BsServiceDetails,
+    fields::neighbour_cell_information_for_ca::NeighbourCellInformationForCa,
+    pdus::d_nwrk_broadcast::DNwrkBroadcast,
+};
 use tetra_saps::{SapMsg, SapMsgInner, tla::TlaTlUnitdataReqBl};
 
 use crate::{MessageQueue, mle::components::network_time};
@@ -43,7 +49,7 @@ impl MleBroadcast {
         }
     }
 
-    /// Deterines the next type for the next broadcast message
+    /// Determines the next type for the next broadcast message
     fn determine_next_broadcast_type(&self) -> BroadcastType {
         match self.last_broadcast_type {
             BroadcastType::None => {
@@ -62,16 +68,54 @@ impl MleBroadcast {
         let tz = self.time_broadcast.as_deref().unwrap();
         let time_value = network_time::encode_tetra_network_time(tz).unwrap();
 
+        // Build neighbor cell list from config
+        let cfg = self.config.config();
+        let neighbour_cells: Vec<NeighbourCellInformationForCa> = cfg
+            .cell
+            .neighbor_cells_ca
+            .iter()
+            .map(|c| NeighbourCellInformationForCa {
+                cell_identifier_ca: c.cell_identifier_ca,
+                cell_reselection_types_supported: c.cell_reselection_types_supported,
+                neighbour_cell_synchronized: c.neighbor_cell_synchronized,
+                cell_load_ca: c.cell_load_ca,
+                main_carrier_number: c.main_carrier_number,
+                main_carrier_number_extension: c.main_carrier_number_extension,
+                mcc: c.mcc,
+                mnc: c.mnc,
+                location_area: c.location_area,
+                maximum_ms_transmit_power: c.maximum_ms_transmit_power,
+                minimum_rx_access_level: c.minimum_rx_access_level,
+                subscriber_class: c.subscriber_class,
+                bs_service_details: c.bs_service_details.as_ref().map(cfg_to_bs_service_details),
+                timeshare_cell_information_or_security_parameters: c
+                    .timeshare_cell_information_or_security_parameters,
+                tdma_frame_offset: c.tdma_frame_offset,
+            })
+            .collect();
+
+        let neighbour_count = neighbour_cells.len() as u8;
+
+        // Per ETSI EN 300 392-2 clause 18.4.1.4.1 note 2:
+        // number_of_ca_neighbour_cells shall be ABSENT (None) when there are no neighbour cells.
+        // Some(0) has different semantics — it means "explicitly zero", not "no info".
+        let number_of_ca_neighbour_cells = if neighbour_count > 0 {
+            Some(neighbour_count)
+        } else {
+            None
+        };
+
         let pdu = DNwrkBroadcast {
             cell_re_select_parameters: 0,
             cell_load_ca: 0,
             tetra_network_time: Some(time_value),
-            number_of_ca_neighbour_cells: Some(0),
-            neighbour_cell_information_for_ca: None,
+            number_of_ca_neighbour_cells,
+            neighbour_cell_information_for_ca: neighbour_cells,
         };
 
-        // Serialize the PDU (includes 3-bit MLE PDU type)
-        let mut pdu_buf = BitBuffer::new(128);
+        // Use autoexpand buffer — with up to 7 fully-populated neighbour cells the PDU
+        // can exceed 900 bits, so a fixed-size buffer would silently corrupt the output.
+        let mut pdu_buf = BitBuffer::new_autoexpand(256);
         if let Err(e) = pdu.to_bitbuf(&mut pdu_buf) {
             tracing::warn!("Failed to serialize D-NWRK-BROADCAST: {:?}", e);
             return;
@@ -92,7 +136,7 @@ impl MleBroadcast {
             msg: SapMsgInner::TlaTlUnitdataReqBl(TlaTlUnitdataReqBl {
                 main_address: TetraAddress {
                     ssi: 0xFFFFFF,
-                    ssi_type: SsiType::Gssi, // TODO FIXME is this actually the SMI?
+                    ssi_type: SsiType::Gssi,
                 },
                 link_id: 0,
                 endpoint_id: 0,
@@ -101,13 +145,8 @@ impl MleBroadcast {
                 subscriber_class: 0,
                 fcs_flag: false,
                 air_interface_encryption: None,
-                // scrambling_code: todo!(), // TODO should be added here to make sysinfo/sync in mle
-                // pdu_prio: todo!(),
-                // data_prio: todo!(),
                 packet_data_flag: false,
                 n_tlsdu_repeats: 0,
-                // scheduled_data_status: todo!(),
-                // max_schedule_interval: todo!(),
                 data_class_info: None,
                 req_handle: 0,
                 chan_alloc: None,
@@ -115,6 +154,25 @@ impl MleBroadcast {
             }),
         };
         queue.push_back(sapmsg);
-        tracing::info!("D-NWRK-BROADCAST sent (tz={}, time=0x{:012X})", tz, time_value);
+        tracing::info!(
+            "D-NWRK-BROADCAST sent (tz={}, time=0x{:012X}, neighbours={})",
+            tz, time_value, neighbour_count
+        );
+    }
+}
+
+fn cfg_to_bs_service_details(c: &CfgBsServiceDetails) -> BsServiceDetails {
+    BsServiceDetails {
+        registration: c.registration,
+        deregistration: c.deregistration,
+        priority_cell: c.priority_cell,
+        no_minimum_mode: c.no_minimum_mode,
+        migration: c.migration,
+        system_wide_services: c.system_wide_services,
+        voice_service: c.voice_service,
+        circuit_mode_data_service: c.circuit_mode_data_service,
+        sndcp_service: c.sndcp_service,
+        aie_service: c.aie_service,
+        advanced_link: c.advanced_link,
     }
 }

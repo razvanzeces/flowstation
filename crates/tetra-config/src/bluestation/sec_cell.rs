@@ -4,6 +4,70 @@ use std::collections::HashMap;
 use tetra_core::ranges::{SortedDisjointSsiRanges, SsiRange};
 use toml::Value;
 
+/// Service details for a neighbor cell — mirrors BsServiceDetails but for config parsing.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CfgBsServiceDetails {
+    #[serde(default)]
+    pub registration: bool,
+    #[serde(default)]
+    pub deregistration: bool,
+    #[serde(default)]
+    pub priority_cell: bool,
+    #[serde(default)]
+    pub no_minimum_mode: bool,
+    #[serde(default)]
+    pub migration: bool,
+    #[serde(default)]
+    pub system_wide_services: bool,
+    #[serde(default)]
+    pub voice_service: bool,
+    #[serde(default)]
+    pub circuit_mode_data_service: bool,
+    #[serde(default)]
+    pub sndcp_service: bool,
+    #[serde(default)]
+    pub aie_service: bool,
+    #[serde(default)]
+    pub advanced_link: bool,
+}
+
+/// Configuration for a single CA neighbor cell, included in D-NWRK-BROADCAST.
+/// Per ETSI EN 300 392-2 clause 18.5.17 / Table 18.64.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CfgNeighborCellCa {
+    /// 5 bits — cell identifier within the CA cluster (0-31)
+    pub cell_identifier_ca: u8,
+    /// 2 bits — cell reselection types supported (0-3)
+    pub cell_reselection_types_supported: u8,
+    /// 1 bit — true if this neighbor is time-synchronized with us
+    pub neighbor_cell_synchronized: bool,
+    /// 2 bits — current load indicator (0=low, 3=high)
+    pub cell_load_ca: u8,
+    /// 12 bits — main carrier number of the neighbor cell (0-4095)
+    pub main_carrier_number: u16,
+
+    /// Optional: carrier number extension (10 bits, 0-1023)
+    pub main_carrier_number_extension: Option<u16>,
+    /// Optional: MCC of the neighbor (10 bits, 0-1023)
+    pub mcc: Option<u16>,
+    /// Optional: MNC of the neighbor (14 bits, 0-16383)
+    pub mnc: Option<u16>,
+    /// Optional: location area of the neighbor (14 bits, 0-16383)
+    pub location_area: Option<u16>,
+    /// Optional: max MS TX power allowed in neighbor cell (3 bits, 0-7)
+    pub maximum_ms_transmit_power: Option<u8>,
+    /// Optional: minimum RX level for access (4 bits, 0-15)
+    pub minimum_rx_access_level: Option<u8>,
+    /// Optional: subscriber class mask (16 bits)
+    pub subscriber_class: Option<u16>,
+    /// Optional: BS service details for the neighbor cell
+    pub bs_service_details: Option<CfgBsServiceDetails>,
+    /// Optional: timeshare/security parameters (5 bits, 0-31)
+    pub timeshare_cell_information_or_security_parameters: Option<u8>,
+    /// Optional: TDMA frame offset relative to this cell (6 bits, 0-63)
+    pub tdma_frame_offset: Option<u8>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CfgCellInfo {
     // 2 bits, from 18.4.2.1 D-MLE-SYNC
@@ -59,6 +123,10 @@ pub struct CfgCellInfo {
     /// IANA timezone name (e.g. "Europe/Amsterdam"). When set, enables D-NWRK-BROADCAST
     /// time broadcasting so MSs can synchronize their clocks.
     pub timezone: Option<String>,
+
+    /// Neighbor cells to include in D-NWRK-BROADCAST for cell reselection.
+    /// Up to 7 entries. MSs use this list to find alternative cells when signal degrades.
+    pub neighbor_cells_ca: Vec<CfgNeighborCellCa>,
 
     /// Group call hangtime in seconds: how long an idle group call circuit stays open
     /// after the last speaker releases the floor, before the call is torn down.
@@ -118,6 +186,11 @@ pub struct CellInfoDto {
 
     pub timezone: Option<String>,
 
+    /// Neighbor cells for D-NWRK-BROADCAST. Up to 7 entries.
+    /// Parsed separately in parsing.rs from toml::Value to avoid serde flatten conflict.
+    #[serde(skip)]
+    pub neighbor_cells_ca: Vec<CfgNeighborCellCa>,
+
     /// Group call hangtime in seconds. Default: 5.
     pub hangtime_secs: Option<u32>,
 
@@ -166,6 +239,7 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
             .map(SortedDisjointSsiRanges::from_vec_tuple)
             .unwrap_or(default_tetrapack_local_ranges()),
         timezone: ci.timezone,
+        neighbor_cells_ca: ci.neighbor_cells_ca,
         hangtime_secs: ci.hangtime_secs.unwrap_or(5).clamp(0, 300),
         call_timeout_secs: ci.call_timeout_secs.unwrap_or(120).clamp(30, 300),
         ul_inactivity_secs: ci.ul_inactivity_secs.unwrap_or(3).clamp(1, 30),

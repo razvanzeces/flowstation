@@ -820,10 +820,12 @@ impl CcBsSubentity {
         let send_called_leg = !call.called_over_brew;
 
         const SETUP_RELEASE_REPEATS: usize = 3;
-        let was_active = call.is_active();
 
-        if was_active {
-            // On active call: deliver via FACCH on traffic channel (send twice for reliability).
+        if call.is_active() {
+            // On active call: deliver on MCCH without chan_alloc (send twice for reliability).
+            // Do NOT use FACCH stealing with chan_alloc — the MS would try to execute the
+            // channel allocation while processing the release, leaving it stuck on the
+            // assigned timeslot after the circuit is already closed.
             for _ in 0..2 {
                 let sdu_calling = if let Some(cached) = self.cached_setups.get(&call_id) {
                     Self::build_d_release_from_d_setup(&cached.pdu, disconnect_cause)
@@ -836,21 +838,11 @@ impl CcBsSubentity {
                     Self::build_d_release(call_id, disconnect_cause)
                 };
                 if send_calling_leg {
-                    let prim_calling = Self::build_sapmsg_stealing(
-                        sdu_calling,
-                        call.calling_addr,
-                        call.calling_ts,
-                        Some(call.calling_usage),
-                    );
+                    let prim_calling = Self::build_sapmsg(sdu_calling, None, call.calling_addr, Layer2Service::Unacknowledged, None);
                     queue.push_back(prim_calling);
                 }
                 if send_called_leg {
-                    let prim_called = Self::build_sapmsg_stealing(
-                        sdu_called,
-                        call.called_addr,
-                        call.called_ts,
-                        Some(call.called_usage),
-                    );
+                    let prim_called = Self::build_sapmsg(sdu_called, None, call.called_addr, Layer2Service::Unacknowledged, None);
                     queue.push_back(prim_called);
                 }
             }
@@ -882,27 +874,11 @@ impl CcBsSubentity {
         }
 
         // Close circuits for both legs (may be the same ts for simplex/Brew).
-        // For active calls, enter hangtime first so that the FACCH D-RELEASE messages
-        // enqueued above can still be delivered on the traffic channel. The UMAC will
-        // switch from traffic mode to signalling mode (hangtime) and the D-RELEASE
-        // will be sent via FACCH stealing in the next frame(s). After the hangtime
-        // period expires, the circuit will be fully closed.
-        // For setup-phase calls, close immediately (no traffic channel to steal from).
         let mut ts_list = vec![call.calling_ts];
         if call.called_ts != call.calling_ts {
             ts_list.push(call.called_ts);
         }
         for ts in ts_list {
-            if was_active {
-                // Signal hangtime first so FACCH stealing can still deliver the D-RELEASE.
-                queue.push_back(SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Cmce,
-                    dest: TetraEntity::Umac,
-                    msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { ts, call_id }),
-                });
-            }
-
             if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
                 Self::signal_umac_circuit_close(queue, circuit);
             }
