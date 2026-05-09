@@ -190,7 +190,10 @@ impl UmacBs {
         let mle_sync_pdu = DMleSync {
             mcc: c.net.mcc,
             mnc: c.net.mnc,
-            neighbor_cell_broadcast: 2, // Broadcast supported, but enquiry not supported
+            // Per ETSI EN 300 392-2 Table 18.17:
+            // 0 = no broadcast, 1 = broadcast+enquiry, 2 = broadcast only, 3 = reserved
+            // Set dynamically: 2 if neighbor cells are configured, 0 otherwise.
+            neighbor_cell_broadcast: c.cell.neighbor_cell_broadcast,
             cell_load_ca: 0,            // TODO implement dynamic setting. 0 = info unavailable
             late_entry_supported: c.cell.late_entry_supported,
         };
@@ -833,8 +836,8 @@ impl UmacBs {
         // Get slot owner from schedule, decrypt if needed
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
         let Some(slot_owner) = self.channel_scheduler.ul_get_slot_owner(msg_dltime, prim.block_num) else {
-            tracing::warn!("rx_mac_end_ul: Received MAC-END-UL for unassigned block {:?}", prim.block_num);
-            self.channel_scheduler.dump_ul_schedule_full(true);
+            // Common with scan-list terminals that transmit on UL without waiting for a grant
+            tracing::debug!("rx_mac_end_ul: Received MAC-END-UL for unassigned block {:?}", prim.block_num);
             return;
         };
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {

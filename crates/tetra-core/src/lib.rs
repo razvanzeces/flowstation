@@ -2,10 +2,13 @@
 //!
 //! This crate provides fundamental types and utilities used across the TETRA stack
 
-/// Git version string, set at compile time
-pub const GIT_VERSION: &str = git_version::git_version!(fallback = "unknown");
-/// Stack version followed by git version string, e.g., "0.1.0-aabbccdd"
-pub const STACK_VERSION: &str = const_format::formatcp!("{}-{}", env!("CARGO_PKG_VERSION"), GIT_VERSION);
+/// Short git commit hash, set at compile time (e.g. "g2aad62c")
+pub const GIT_HASH: &str = git_version::git_version!(
+    args = ["--always", "--dirty=-modified", "--match=", "--abbrev=8"],
+    fallback = "unknown"
+);
+/// Full stack version string, e.g. "v0.0.6-g2aad62c"
+pub const STACK_VERSION: &str = const_format::formatcp!("v{}-{}", env!("CARGO_PKG_VERSION"), GIT_HASH);
 
 pub mod address;
 pub mod bitbuffer;
