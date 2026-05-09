@@ -29,6 +29,9 @@ pub struct MmClientProperties {
     /// Required for sending downlink MM PDUs (D-LOCATION-UPDATE-COMMAND etc.)
     /// to this MS. Set to 0 until the first location update is received.
     pub last_handle: u32,
+    /// Terminal Equipment Identity (60-bit hardware ID, like IMEI).
+    /// Set when the MS sends U-TEI-PROVIDE. None if not yet received.
+    pub tei: Option<u64>,
     // pub last_seen: TdmaTime,
 }
 
@@ -41,6 +44,7 @@ impl MmClientProperties {
             energy_saving_mode: EnergySavingMode::StayAlive,
             class_of_ms: None,
             last_handle: 0,
+            tei: None,
             // last_seen: TdmaTime::default(),
         }
     }
@@ -105,6 +109,17 @@ impl MmClientMgr {
     pub fn set_client_class_of_ms(&mut self, issi: u32, class: Option<ClassOfMs>) -> Result<(), ClientMgrErr> {
         if let Some(client) = self.clients.get_mut(&issi) {
             client.class_of_ms = class;
+            Ok(())
+        } else {
+            Err(ClientMgrErr::ClientNotFound { issi })
+        }
+    }
+
+    /// Store the TEI (Terminal Equipment Identity) received from U-TEI-PROVIDE.
+    /// If the ISSI is not registered yet, the TEI is silently ignored (can't fail critically).
+    pub fn set_client_tei(&mut self, issi: u32, tei: u64) -> Result<(), ClientMgrErr> {
+        if let Some(client) = self.clients.get_mut(&issi) {
+            client.tei = Some(tei);
             Ok(())
         } else {
             Err(ClientMgrErr::ClientNotFound { issi })

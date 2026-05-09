@@ -82,6 +82,11 @@ pub struct BsChannelScheduler {
     /// The next STCH built for a matching SSI should carry random_access_flag=true to properly
     /// acknowledge the random access per ETSI 21.4.3.1.
     pending_ra_acks: [Vec<u32>; 4],
+
+    /// True if a MAC-RESOURCE PDU with a chan_alloc element has already been enqueued for ts1
+    /// in the current frame. The second such PDU (e.g. DConnectAck MCCH) must be deferred to
+    /// the next frame to avoid exceeding the 216-bit slot capacity (DConnect+DConnectAck=223 bits).
+    mcch_chan_alloc_sent_this_frame: bool,
 }
 
 #[derive(Debug)]
@@ -128,6 +133,7 @@ impl BsChannelScheduler {
             circuits: CircuitMgr::new(),
             hangtime: [false, false, false, false],
             pending_ra_acks: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            mcch_chan_alloc_sent_this_frame: false,
         }
     }
 
@@ -258,6 +264,12 @@ impl BsChannelScheduler {
 
             if candidate_t.is_mandatory_clch() {
                 // Not an opportunity; skip
+                continue;
+            }
+
+            if candidate_t.f == 18 {
+                // Skip frame 18 — ACCESS-ASSIGN marks UL as CommonOnly on this frame,
+                // and timing at the multiframe boundary causes grant delivery to fail.
                 continue;
             }
 
@@ -431,15 +443,34 @@ impl BsChannelScheduler {
             let next_ts = if i < NUM_TIMESLOTS - 1 { timeslots[i + 1] } else { 0 };
             assert!(ts > 0);
 
+            // If this PDU carries a chan_alloc element (DConnect/DConnectAck MCCH), check if we
+            // already sent one this frame. DConnect MCCH (113 bits) + DConnectAck MCCH (110 bits)
+            // = 223 bits > 216-bit slot capacity. Defer the second one to the next frame.
+            let deferred = if pdu.chan_alloc_element.is_some() {
+                if self.mcch_chan_alloc_sent_this_frame {
+                    true // Defer this one to next frame
+                } else {
+                    self.mcch_chan_alloc_sent_this_frame = true;
+                    false // First one goes normally
+                }
+            } else {
+                false
+            };
+
             tracing::debug!(
-                "dl_enqueue_tma: ts {} enqueueing {} PDU {:?} SDU {}",
-                if tx_reporter.is_some() { "reported" } else { "" },
+                "dl_enqueue_tma: ts {}{} enqueueing PDU {:?} SDU {}",
                 ts,
+                if tx_reporter.is_some() { " reported" } else { "" },
                 pdu,
                 sdu.dump_bin(),
             );
 
-            if next_ts > 0 {
+            if deferred {
+                tracing::debug!("dl_enqueue_tma: ts {} deferring chan_alloc PDU to next frame (slot capacity)", ts);
+                let elem = DlSchedElem::Resource(pdu, sdu, tx_reporter);
+                self.dltx_next_slot_queue.push(elem);
+                break;
+            } else if next_ts > 0 {
                 // There is another ts for which we need to transmit this message.
                 // Clone the message now and push it to the current ts.
                 let elem = DlSchedElem::Resource(pdu.clone(), sdu.clone(), tx_reporter.clone());
@@ -476,6 +507,15 @@ impl BsChannelScheduler {
     fn dl_enqueue_tma_frag_next_frame(&mut self, fragger: BsFragger) {
         tracing::debug!("dl_enqueue_tma_frag_next_frame: enqueueing {:?}", fragger);
         let elem = DlSchedElem::FragBuf(fragger);
+        self.dltx_next_slot_queue.push(elem);
+    }
+
+    /// Enqueue a TMA PDU to be transmitted on the NEXT frame (ts1, frame N+1).
+    /// Use this to deliberately separate two MCCH messages that would overflow the slot
+    /// if sent together (e.g. DConnect MCCH + DConnectAck MCCH = 223 bits > 216-bit slot).
+    pub fn dl_enqueue_tma_next_frame(&mut self, pdu: MacResource, sdu: BitBuffer, tx_reporter: Option<TxReporter>) {
+        tracing::debug!("dl_enqueue_tma_next_frame: deferring PDU {:?} SDU {} to next frame", pdu, sdu.dump_bin());
+        let elem = DlSchedElem::Resource(pdu, sdu, tx_reporter);
         self.dltx_next_slot_queue.push(elem);
     }
 
@@ -908,6 +948,13 @@ impl BsChannelScheduler {
     /// Increments cur_ts by one timeslot.
     /// Caller should check timestamp of returned DlTxElem to prevent desync
     pub fn finalize_ts_for_tick(&mut self) -> TmvUnitdataReqSlot {
+        // Reset the per-frame chan_alloc flag when we start processing ts1 (MCCH slot).
+        // This allows the next DConnect MCCH to go normally while the subsequent DConnectAck
+        // MCCH is deferred to the following frame.
+        if self.cur_dltime.add_timeslots(MACSCHED_TX_AHEAD as i32).t == 1 {
+            self.mcch_chan_alloc_sent_this_frame = false;
+        }
+
         // We finalize a FUTURE slot: cur_ts plus some number of timeslots
         let ts = self.cur_dltime.add_timeslots(MACSCHED_TX_AHEAD as i32);
         self.precomps.mac_sync.time = ts;

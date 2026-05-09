@@ -30,6 +30,7 @@ use tetra_pdus::mm::pdus::u_attach_detach_group_identity::UAttachDetachGroupIden
 use tetra_pdus::mm::pdus::u_itsi_detach::UItsiDetach;
 use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
 use tetra_pdus::mm::pdus::u_mm_status::UMmStatus;
+use tetra_pdus::mm::pdus::u_tei_provide::UTeiProvide;
 
 pub struct MmBs {
     config: SharedConfig,
@@ -174,23 +175,47 @@ impl MmBs {
             return;
         }
 
-        // Handle Energy Saving Mode request (clause 23.7.6)
-        // Always override to StayAlive. DL scheduler does not track per-MS monitoring
-        // patterns, so non-StayAlive modes would cause missed downlink messages.
+        // Handle Energy Saving Mode request (clause 23.7.6).
+        // We honour the mode requested by the MS (capped at Eg3 for safety).
+        // LLC retransmissions ensure DL messages are delivered even when the MS is sleeping:
+        // the BS retransmits on the next monitoring window automatically.
+        // frame_number and multiframe_number are derived from ISSI to spread MSs evenly
+        // across monitoring slots and avoid simultaneous wake-ups.
         // Per clause 16.7.1 NOTE 1: "The BS may allocate a different energy saving mode
         // than requested and the BS assumes that the allocated value will be used."
         let esi = if let Some(esm) = pdu.energy_saving_mode {
-            if esm != EnergySavingMode::StayAlive {
-                tracing::debug!(
-                    "MS {} requested energy saving mode {:?}, overriding to StayAlive",
-                    prim.received_address.ssi,
-                    esm,
-                );
+            // Cap at Eg3 (~3s max delay) to avoid excessive call setup latency
+            let granted_esm = match esm {
+                EnergySavingMode::StayAlive => EnergySavingMode::StayAlive,
+                EnergySavingMode::Eg1 => EnergySavingMode::Eg1,
+                EnergySavingMode::Eg2 => EnergySavingMode::Eg2,
+                EnergySavingMode::Eg3 => EnergySavingMode::Eg3,
+                // Cap Eg4-Eg7 to Eg3
+                _ => EnergySavingMode::Eg3,
+            };
+
+            if granted_esm != esm {
+                tracing::debug!("MS {} requested {:?}, capping to {:?}", prim.received_address.ssi, esm, granted_esm);
             }
+
+            let (frame_number, multiframe_number) = if granted_esm == EnergySavingMode::StayAlive {
+                (None, None)
+            } else {
+                // Spread MSs evenly: frame 0-17, multiframe offset within Eg cycle
+                let cycle_len = granted_esm as u8 + 1; // Eg1=2, Eg2=3, Eg3=4
+                let frame_num = (prim.received_address.ssi % 18) as u8;
+                let mframe_num = ((prim.received_address.ssi / 18) % cycle_len as u32) as u8;
+                tracing::info!(
+                    "MS {} granted {:?}: monitoring frame={} multiframe={}",
+                    prim.received_address.ssi, granted_esm, frame_num, mframe_num
+                );
+                (Some(frame_num), Some(mframe_num))
+            };
+
             Some(EnergySavingInformation {
-                energy_saving_mode: EnergySavingMode::StayAlive,
-                frame_number: None,
-                multiframe_number: None,
+                energy_saving_mode: granted_esm,
+                frame_number,
+                multiframe_number,
             })
         } else {
             None
@@ -199,6 +224,20 @@ impl MmBs {
         // Try to register the client
         let issi = prim.received_address.ssi;
         let handle = prim.handle;
+
+        // ISSI whitelist check — reject if whitelist is non-empty and ISSI not in it
+        if !self.config.config().security.is_issi_allowed(issi) {
+            tracing::warn!("MM: ISSI {} not in whitelist, rejecting registration", issi);
+            Self::send_d_location_update_reject(
+                queue,
+                issi,
+                handle,
+                pdu.location_update_type,
+                pdu.address_extension,
+            );
+            return;
+        }
+
         let is_new = !self.client_mgr.client_is_known(issi);
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
@@ -226,7 +265,7 @@ impl MmBs {
         let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
 
         // Process optional GroupIdentityLocationDemand field
-        let has_groups = pdu.group_identity_location_demand.is_some();
+        let _has_groups = pdu.group_identity_location_demand.is_some();
         let gila = if let Some(gild) = pdu.group_identity_location_demand {
             // ETSI Table 16.49 (clause 16.10.17): mode=1 means "detach all currently
             // attached group identities and attach group identities defined in the
@@ -317,10 +356,12 @@ impl MmBs {
         };
         queue.push_back(msg);
 
-        // If this is an unknown returning radio (not ITSI attach), force it to
-        // re-register with full group report via D-LOCATION UPDATE COMMAND
-        if is_new && pdu.location_update_type != LocationUpdateType::ItsiAttach && !has_groups {
-            tracing::info!("Sending D-LOCATION UPDATE COMMAND to returning MS {} to request group report", issi);
+        // For any new registration, send D-LOCATION-UPDATE-COMMAND to:
+        // 1. Request full group report (if radio didn't include groups)
+        // 2. Prompt the MS to send U-TEI-PROVIDE (Motorola radios respond with TEI on re-registration)
+        // No loop risk: on the second U-LOCATION-UPDATE-DEMAND, is_new=false so we don't send again.
+        if is_new {
+            tracing::info!("Sending D-LOCATION UPDATE COMMAND to MS {} to prompt TEI and group report", issi);
             Self::send_d_location_update_command(queue, issi, handle);
         }
     }
@@ -568,7 +609,7 @@ impl MmBs {
             MmPduTypeUl::UInformationProvide => unimplemented_log!("UInformationProvide"),
             MmPduTypeUl::UAttachDetachGroupIdentity => self.rx_u_attach_detach_group_identity(queue, message),
             MmPduTypeUl::UAttachDetachGroupIdentityAcknowledgement => unimplemented_log!("UAttachDetachGroupIdentityAcknowledgement"),
-            MmPduTypeUl::UTeiProvide => unimplemented_log!("UTeiProvide"),
+            MmPduTypeUl::UTeiProvide => self.rx_u_tei_provide(queue, message),
             MmPduTypeUl::UDisableStatus => unimplemented_log!("UDisableStatus"),
             MmPduTypeUl::MmPduFunctionNotSupported => unimplemented_log!("MmPduFunctionNotSupported"),
         };
@@ -771,6 +812,37 @@ impl MmBs {
         supported
     }
 
+    fn rx_u_tei_provide(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
+        tracing::trace!("rx_u_tei_provide");
+        let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
+            tracing::error!("BUG: unexpected message or state -- routing error"); return;
+        };
+
+        let pdu = match UTeiProvide::from_bitbuf(&mut prim.sdu) {
+            Ok(pdu) => {
+                tracing::debug!("<- {:?}", pdu);
+                pdu
+            }
+            Err(e) => {
+                tracing::warn!("Failed parsing UTeiProvide: {:?} {}", e, prim.sdu.dump_bin());
+                return;
+            }
+        };
+
+        let issi = prim.received_address.ssi;
+        tracing::info!(
+            "MM: TEI received from ISSI {} → TEI={} ({:060b})",
+            issi,
+            pdu.tei_hex(),
+            pdu.tei,
+        );
+
+        // Store TEI in client state for future use (e.g. whitelist checking)
+        if let Err(e) = self.client_mgr.set_client_tei(issi, pdu.tei) {
+            tracing::warn!("MM: failed to store TEI for ISSI {}: {:?}", issi, e);
+        }
+    }
+
     fn feature_check_u_location_update_demand(pdu: &ULocationUpdateDemand) -> bool {
         let mut supported = true;
         if pdu.location_update_type == LocationUpdateType::MigratingLocationUpdating
@@ -795,13 +867,13 @@ impl MmBs {
             unimplemented_log!("Unsupported la_information present");
         }
         if pdu.ssi.is_some() {
-            unimplemented_log!("Unsupported ssi present");
+            tracing::debug!("DemandLocationUpdating: ssi present (expected from radio, ignored)");
         }
         if pdu.address_extension.is_some() {
-            unimplemented_log!("Unsupported address_extension present");
+            tracing::debug!("DemandLocationUpdating: address_extension present (expected from radio, ignored)");
         }
         if pdu.group_report_response.is_some() {
-            unimplemented_log!("Unsupported group_report_response present");
+            tracing::debug!("DemandLocationUpdating: group_report_response present (expected from radio, ignored)");
         }
         if pdu.authentication_uplink.is_some() {
             unimplemented_log!("Unsupported authentication_uplink present");
@@ -828,7 +900,7 @@ impl MmBs {
             supported = false;
         }
         if pdu.group_report_response.is_some() {
-            unimplemented_log!("Unsupported group_report_response present");
+            tracing::debug!("UAttachDetachGroupIdentity: group_report_response present (expected from radio, ignored)");
         }
         if pdu.proprietary.is_some() {
             unimplemented_log!("Unsupported proprietary present");

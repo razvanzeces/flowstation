@@ -820,8 +820,9 @@ impl CcBsSubentity {
         let send_called_leg = !call.called_over_brew;
 
         const SETUP_RELEASE_REPEATS: usize = 3;
+        let was_active = call.is_active();
 
-        if call.is_active() {
+        if was_active {
             // On active call: deliver via FACCH on traffic channel (send twice for reliability).
             for _ in 0..2 {
                 let sdu_calling = if let Some(cached) = self.cached_setups.get(&call_id) {
@@ -881,11 +882,27 @@ impl CcBsSubentity {
         }
 
         // Close circuits for both legs (may be the same ts for simplex/Brew).
+        // For active calls, enter hangtime first so that the FACCH D-RELEASE messages
+        // enqueued above can still be delivered on the traffic channel. The UMAC will
+        // switch from traffic mode to signalling mode (hangtime) and the D-RELEASE
+        // will be sent via FACCH stealing in the next frame(s). After the hangtime
+        // period expires, the circuit will be fully closed.
+        // For setup-phase calls, close immediately (no traffic channel to steal from).
         let mut ts_list = vec![call.calling_ts];
         if call.called_ts != call.calling_ts {
             ts_list.push(call.called_ts);
         }
         for ts in ts_list {
+            if was_active {
+                // Signal hangtime first so FACCH stealing can still deliver the D-RELEASE.
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Umac,
+                    msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { ts, call_id }),
+                });
+            }
+
             if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
                 Self::signal_umac_circuit_close(queue, circuit);
             }

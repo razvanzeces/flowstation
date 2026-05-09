@@ -301,6 +301,12 @@ impl Llc {
             tracing::debug!(ts=%self.dltime, "-> {:?} sdu {}", pdu, pdu_buf.dump_bin());
         }
 
+        // Derive the timeslot from chan_alloc (first set timeslot in [bool;4]), defaulting to 1.
+        // Must be done before chan_alloc is moved into TmaUnitdataReq below.
+        let derived_ts: u8 = prim.chan_alloc.as_ref()
+            .and_then(|ca| ca.timeslots.iter().enumerate().find(|&(_, &set)| set).map(|(i, _)| (i + 1) as u8))
+            .unwrap_or(1);
+
         // Either take tx_reporter passed down or create a new one
         let tx_reporter = prim.tx_reporter.take().unwrap_or_else(|| TxReporter::new());
 
@@ -323,14 +329,12 @@ impl Llc {
             }),
         };
 
-        // Register that we expect an ACK for this message
-        // TODO: ts is hardcoded to 1 because all DL signalling currently funnels through ts1.
-        // Once bs_sched's identify_timeslots_for_ssi is implemented, derive ts from the outgoing message.
-        tracing::trace!("setting expected ack for ts1 (current limitation: DL signalling always on ts1)");
+        // Register that we expect an ACK for this message on the derived timeslot
+        tracing::trace!("setting expected ack for ts{}", derived_ts);
         self.outbound_messages.push_back(ExpectedInAck {
             ns,
             addr: prim.main_address,
-            ts: 1,
+            ts: derived_ts,
             bl_type: Layer2Service::Acknowledged,
             tx_reporter,
             t_first: self.dltime,
