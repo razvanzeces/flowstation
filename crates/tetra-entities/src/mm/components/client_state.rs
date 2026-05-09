@@ -24,6 +24,12 @@ pub struct MmClientProperties {
     pub state: MmClientState,
     pub groups: HashSet<u32>,
     pub energy_saving_mode: EnergySavingMode,
+    /// TDMA frame number (0-17) at which this MS wakes up to monitor MCCH.
+    /// Set to None for StayAlive MSs. Used by CMCE to schedule DSetup retransmissions.
+    pub monitoring_frame: Option<u8>,
+    /// Multiframe offset within the Eg cycle at which this MS wakes up.
+    /// Set to None for StayAlive MSs.
+    pub monitoring_multiframe: Option<u8>,
     pub class_of_ms: Option<ClassOfMs>,
     /// Layer-2 handle from the last successful location update.
     /// Required for sending downlink MM PDUs (D-LOCATION-UPDATE-COMMAND etc.)
@@ -42,6 +48,8 @@ impl MmClientProperties {
             state: MmClientState::Unknown,
             groups: HashSet::new(),
             energy_saving_mode: EnergySavingMode::StayAlive,
+            monitoring_frame: None,
+            monitoring_multiframe: None,
             class_of_ms: None,
             last_handle: 0,
             tei: None,
@@ -100,6 +108,16 @@ impl MmClientMgr {
     pub fn set_client_energy_saving_mode(&mut self, issi: u32, mode: EnergySavingMode) -> Result<(), ClientMgrErr> {
         if let Some(client) = self.clients.get_mut(&issi) {
             client.energy_saving_mode = mode;
+            Ok(())
+        } else {
+            Err(ClientMgrErr::ClientNotFound { issi })
+        }
+    }
+
+    pub fn set_client_monitoring_window(&mut self, issi: u32, frame: Option<u8>, multiframe: Option<u8>) -> Result<(), ClientMgrErr> {
+        if let Some(client) = self.clients.get_mut(&issi) {
+            client.monitoring_frame = frame;
+            client.monitoring_multiframe = multiframe;
             Ok(())
         } else {
             Err(ClientMgrErr::ClientNotFound { issi })

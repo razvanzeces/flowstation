@@ -260,9 +260,12 @@ impl MmBs {
         // (e.g. D-LOCATION-UPDATE-COMMAND after Brew reconnection).
         self.client_mgr.set_client_handle(issi, handle);
 
-        // Store energy saving mode in client state
+        // Store energy saving mode and monitoring window in client state
         let esm = esi.as_ref().map(|e| e.energy_saving_mode).unwrap_or(EnergySavingMode::StayAlive);
         let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
+        let mf = esi.as_ref().and_then(|e| e.frame_number);
+        let mmf = esi.as_ref().and_then(|e| e.multiframe_number);
+        let _ = self.client_mgr.set_client_monitoring_window(issi, mf, mmf);
 
         // Process optional GroupIdentityLocationDemand field
         let _has_groups = pdu.group_identity_location_demand.is_some();
@@ -310,6 +313,20 @@ impl MmBs {
         if let Some(ref class) = pdu.class_of_ms {
             tracing::info!("MS {} class_of_ms: {}", issi, class);
         }
+        // Per ETSI EN 300 392-2 clause 16.9.4: if the MS signals clch_needed=true or
+        // common_scch=true, the BS must populate scch_information_and_distribution_on_18th_frame
+        // so the MS knows which timeslots carry SCCH on frame 18.
+        // Without this, MS with scan list active stays in scan mode and blocks PTT.
+        // Value 0x01: 1 SCCH on frame 18, assigned to TS1 (our MCCH/control channel).
+        // Bits: b1-b2 = 01 (1 SCCH), b3-b6 = 0000 (TS2/3/4 not used as SCCH).
+        let scch_info = pdu.class_of_ms.as_ref().and_then(|c| {
+            if c.clch_needed || c.common_scch {
+                Some(0x01u64)
+            } else {
+                None
+            }
+        });
+
         let _ = self.client_mgr.set_client_class_of_ms(issi, pdu.class_of_ms);
 
         // Build D-LOCATION UPDATE ACCEPT pdu
@@ -319,7 +336,7 @@ impl MmBs {
             address_extension: None,
             subscriber_class: None,
             energy_saving_information: esi,
-            scch_information_and_distribution_on_18th_frame: None,
+            scch_information_and_distribution_on_18th_frame: scch_info,
             new_registered_area: None,
             security_downlink: None,
             group_identity_location_accept: gila,

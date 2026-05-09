@@ -160,6 +160,7 @@ impl CcBsSubentity {
                 pdu: d_setup,
                 dest_addr: called_addr,
                 resend: false, // no late-entry resends for individual calls
+                is_individual: true,
             },
         );
 
@@ -712,6 +713,7 @@ impl CcBsSubentity {
                 pdu: d_setup,
                 dest_addr: dest_addr.clone(),
                 resend: true,
+                is_individual: false,
             },
         );
         let d_setup_ref = &self.cached_setups.get(&call_id).unwrap().pdu;

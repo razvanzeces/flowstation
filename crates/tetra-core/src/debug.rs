@@ -2,6 +2,7 @@ use core::fmt;
 use std::fmt::Write as FmtWrite;
 use std::fs::OpenOptions;
 use std::sync::Once;
+use chrono::Local;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::format::{self, FormatEvent, FormatFields};
@@ -12,11 +13,9 @@ use tracing_subscriber::{EnvFilter, fmt as tracingfmt};
 #[macro_export]
 macro_rules! unimplemented_log {
     ( $($arg:tt)* ) => {{
-        tracing::warn!(
+        tracing::debug!(
             "unimplemented: {}",
             format_args!($($arg)*),
-            // file!(),
-            // line!(),
         );
     }};
 }
@@ -134,9 +133,13 @@ where
             file_path.to_string()
         };
 
-        // Format: "LEVEL ts [module] file:line: message"
+        // Local time timestamp (HH:MM:SS.mmm)
+        let now = Local::now().format("%H:%M:%S%.3f").to_string();
+
+        // Format: "HH:MM:SS.mmm LEVEL ts [module] file:line: message"
         let location = format!(
-            "{}{:<5}{} {}:{}:",
+            "{} {}{:<5}{} {}:{}:",
+            now,
             color_level,
             metadata.level(),
             color_reset,
@@ -149,7 +152,7 @@ where
         event.record(&mut FieldsVisitor { writer: &mut message_buf });
 
         // Check if the message starts with "->" or "<-" to reduce indentation
-        let mut padding = 70; // Default alignment
+        let mut padding = 83; // Default alignment (70 + 13 for timestamp)
         if message_buf.starts_with("->") || message_buf.starts_with("<-") {
             padding -= 3; // Reduce by 3 characters
         }

@@ -75,6 +75,9 @@ struct CachedSetup {
     pdu: DSetup,
     dest_addr: TetraAddress,
     resend: bool,
+    /// True for P2P individual calls where DSetup must be resent on MCCH (no chan_alloc).
+    /// False for group calls where DSetup is resent on the traffic channel with chan_alloc.
+    is_individual: bool,
 }
 
 /// Clause 14 Call Control CMCE sub-entity (ETSI EN 300 392-2)

@@ -150,6 +150,7 @@ impl CcBsSubentity {
                 pdu: d_setup,
                 dest_addr,
                 resend: true,
+                is_individual: false,
             },
         );
         let d_setup_ref = &self.cached_setups.get(&circuit.call_id).unwrap().pdu;
@@ -356,7 +357,8 @@ impl CcBsSubentity {
             CachedSetup {
                 pdu: d_setup,
                 dest_addr: called_addr,
-                resend: false,
+                resend: true,
+                is_individual: true,
             },
         );
 

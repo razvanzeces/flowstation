@@ -843,13 +843,17 @@ impl BsChannelScheduler {
             }
         }
 
-        // If any signalling could not be sent this slot, it should be in the next slot queue
-        // Swap next slot queue into current slot queue, to schedule it for next frame
+        // If any signalling could not be sent this slot, it should be in the next slot queue.
+        // Drain next_slot_queue into the front of the current slot queue so deferred PDUs are
+        // sent before any newly-arriving ones in the next frame.  Using extend instead of swap
+        // avoids a panic when the current queue already contains items (e.g. two back-to-back
+        // P2P calls each deferring a chan_alloc PDU within the same tick).
         if !self.dltx_next_slot_queue.is_empty() {
-            let a = &mut self.dltx_queues[ts.t as usize - 1];
-            let b = &mut self.dltx_next_slot_queue;
-            assert!(a.is_empty(), "queue should be empty");
-            std::mem::swap(a, b);
+            let current = &mut self.dltx_queues[ts.t as usize - 1];
+            // Prepend: move deferred items to front, then re-append any items already queued.
+            let mut merged = std::mem::take(&mut self.dltx_next_slot_queue);
+            merged.extend(current.drain(..));
+            *current = merged;
         }
 
         buf_opt

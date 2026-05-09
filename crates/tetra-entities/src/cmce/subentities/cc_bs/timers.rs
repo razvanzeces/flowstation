@@ -37,9 +37,21 @@ impl CcBsSubentity {
                             };
                         }
                         let dest_addr = cached.dest_addr;
-                        let (sdu, chan_alloc) = Self::build_d_setup_prim(&cached.pdu, usage, ts, UlDlAssignment::Both);
-                        let prim = Self::build_sapmsg(sdu, Some(chan_alloc), dest_addr, Layer2Service::Unacknowledged, None);
-                        queue.push_back(prim);
+                        let is_individual = cached.is_individual;
+                        if is_individual {
+                            // P2P individual call in setup phase: resend DSetup on MCCH
+                            // (no chan_alloc, no circuit open yet). The called MS may be
+                            // sleeping (EE) and will receive it at its next monitoring window.
+                            let mut sdu = BitBuffer::new_autoexpand(80);
+                            cached.pdu.to_bitbuf(&mut sdu).expect("Failed to serialize DSetup");
+                            sdu.seek(0);
+                            let prim = Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None);
+                            queue.push_back(prim);
+                        } else {
+                            let (sdu, chan_alloc) = Self::build_d_setup_prim(&cached.pdu, usage, ts, UlDlAssignment::Both);
+                            let prim = Self::build_sapmsg(sdu, Some(chan_alloc), dest_addr, Layer2Service::Unacknowledged, None);
+                            queue.push_back(prim);
+                        }
                     }
 
                     CircuitMgrCmd::SendClose(call_id, circuit) => {
@@ -211,6 +223,47 @@ impl CcBsSubentity {
         for call_id in expired_setup_calls {
             tracing::info!("Setup timeout expired for individual call_id={}, releasing", call_id);
             self.release_individual_call(queue, call_id, DisconnectCause::ExpiryOfTimer);
+        }
+
+        // EE DSetup retry: for P2P individual calls still in CallSetupPending state
+        // (called MS has not yet sent U-ALERT), periodically retransmit DSetup on MCCH
+        // so that a sleeping MS can receive it at its next monitoring window.
+        // Retry interval: 10 seconds (180 multiframes). This is long enough to not
+        // spam the called MS (which would block its PTT) but short enough to reach it
+        // within a few EE cycles before the 60s setup timeout.
+        // tick_start fires every multiframe (t==1 only), age is counted in frames.
+        const DSETUP_RETRY_INTERVAL_FRAMES: i32 = 180; // ~10 seconds at 18 frames/MF
+        let retry_calls: Vec<u16> = self
+            .individual_calls
+            .iter()
+            .filter_map(|(&call_id, call)| {
+                if call.state != IndividualCallState::CallSetupPending {
+                    return None;
+                }
+                let Some(started) = call.setup_timer_started else { return None; };
+                let age_frames = started.age(self.dltime);
+                // First retry after 1 full multiframe (~1s), then every 10s
+                if age_frames >= 18 && age_frames % DSETUP_RETRY_INTERVAL_FRAMES == 0 {
+                    Some(call_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for call_id in retry_calls {
+            let Some(cached) = self.cached_setups.get(&call_id) else { continue; };
+            if !cached.is_individual { continue; }
+            let mut sdu = BitBuffer::new_autoexpand(80);
+            if cached.pdu.to_bitbuf(&mut sdu).is_err() { continue; }
+            sdu.seek(0);
+            let dest_addr = cached.dest_addr;
+            let prim = Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None);
+            tracing::debug!(
+                "EE DSetup retry for call_id={} to ISSI {} (setup pending, MS may be sleeping)",
+                call_id, dest_addr.ssi
+            );
+            queue.push_back(prim);
         }
     }
 
