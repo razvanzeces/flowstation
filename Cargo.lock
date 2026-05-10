@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "bluestation-bs"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "clap",
  "ctrlc",
@@ -1459,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-config"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "chrono-tz",
  "serde",
@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-core"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "bitcode",
  "chrono",
@@ -1485,7 +1485,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-entities"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "as-any",
  "base64",
@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-pdus"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "tetra-config",
  "tetra-core",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-saps"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "tetra-core",
  "tracing",

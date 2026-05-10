@@ -322,6 +322,13 @@ impl IndividualCall {
         if !self.is_active() {
             return false;
         }
+        // Full-duplex individual calls (normal voice calls) have no timeout —
+        // participants may talk for as long as they want.
+        // Only simplex (half-duplex PTT) calls are subject to call_timeout,
+        // to release the slot if an MS disappears without disconnecting.
+        if self.simplex_duplex {
+            return false;
+        }
         let Some(started) = self.active_timer_started else {
             return false;
         };

@@ -240,16 +240,32 @@ impl MmBs {
 
         let is_new = !self.client_mgr.client_is_known(issi);
         if !is_new {
-            // MS is re-registering without a prior U-ITSI-DETACH (e.g. after RF loss or reboot).
-            // Emit Deaffiliate + Deregister so CMCE can release any active calls and clean up state.
-            let old_groups: Vec<u32> = self.client_mgr
-                .get_client_by_issi(issi)
-                .map(|c| c.groups.iter().copied().collect())
-                .unwrap_or_default();
-            if !old_groups.is_empty() {
-                self.emit_subscriber_update(queue, issi, old_groups, BrewSubscriberAction::Deaffiliate);
+            // MS is re-registering while already known. Three cases:
+            //
+            // A) RoamingLocationUpdating — MS re-registered from scratch (RF loss / reboot /
+            //    power-cycle, no prior U-ITSI-DETACH). Clean up stale state so CMCE releases
+            //    any ghost calls and group_listeners stays accurate.
+            //
+            // B) PeriodicLocationUpdating — healthy MS renewing its T351 timer. No cleanup.
+            //
+            // C) DemandLocationUpdating — MS responding to our D-LOCATION-UPDATE-COMMAND.
+            //    This is the second message in the normal registration flow; the first message
+            //    already registered+affiliated the MS. Do NOT clean up here.
+            let needs_cleanup = pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
+                || pdu.location_update_type == LocationUpdateType::ServiceRestorationRoamingLocationUpdating;
+
+            if needs_cleanup {
+                let old_groups: Vec<u32> = self.client_mgr
+                    .get_client_by_issi(issi)
+                    .map(|c| c.groups.iter().copied().collect())
+                    .unwrap_or_default();
+                if !old_groups.is_empty() {
+                    self.emit_subscriber_update(queue, issi, old_groups, BrewSubscriberAction::Deaffiliate);
+                }
+                self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
             }
-            self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
+            // Always reset the registration timer on any re-registration
+            self.client_mgr.reset_registration_timer(issi);
         }
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
