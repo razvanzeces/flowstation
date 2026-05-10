@@ -46,6 +46,9 @@ pub struct TmvUnitdataInd {
     /// If no CRC is present on this message type (for example, for AACH), crc_pass is set to True
     pub crc_pass: bool,
     pub scrambling_code: u32,
+
+    /// Received signal strength in dBFS. Propagated from PHY via TpUnitdataInd.
+    pub rssi_dbfs: f32,
 }
 
 /// Clause 23.2.1

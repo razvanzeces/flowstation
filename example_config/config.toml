@@ -171,6 +171,14 @@ voice_service = true
 # Default: 3 seconds. Valid range: 1–30.
 # ul_inactivity_secs = 3
 
+# Periodic registration interval in seconds (ETSI T351 equivalent).
+# MS must re-register within this interval or be automatically deregistered by the BS.
+# The BS signals this to all terminals via D-LOCATION-UPDATE-ACCEPT with type
+# PeriodicLocationUpdating, so terminals know to re-register periodically.
+# 0 = disabled — MS registrations never expire.
+# Default: 3600 (1 hour). Valid range when non-zero: 60–86400.
+# periodic_registration_secs = 3600
+
 ###############################################################################
 
 # OPTIONAL: Neighbor cells for cell reselection (ETSI EN 300 392-2 Clause 18.5.17)

@@ -11,6 +11,9 @@ pub enum RxTxDevError {
 pub struct RxBurstBits<'a> {
     pub train_type: TrainingSequence,
     pub bits: &'a [u8],
+    /// Received signal strength in dBFS (dB relative to ADC full-scale).
+    /// 0.0 = full scale, negative = weaker signal. Not calibrated to dBm.
+    pub rssi_dbfs: f32,
 }
 
 #[derive(Debug, Default)]

@@ -235,6 +235,21 @@ impl Demodulator {
         let first_symbol_index = symbol_timing.floor() as usize;
         let timing_fract = symbol_timing.fract();
 
+        // Calculate RSSI before any mutable borrow of burst_finder.
+        // RMS of absolute sample values over the burst window → dBFS.
+        // Use d..d-n window without first_symbol_index offset to stay within
+        // valid History buffer bounds (delay must be in 0..N).
+        let rssi_dbfs = {
+            let n = SPS * n_symbols;
+            let mut sum_sq = 0.0f32;
+            for i in 0..n {
+                let s = self.past_samples_abs.delayed(d - i);
+                sum_sq += s * s;
+            }
+            let rms = (sum_sq / n as f32).sqrt();
+            if rms > 0.0 { 20.0 * rms.log10() } else { f32::NEG_INFINITY }
+        };
+
         let burst_finder = match subslot_number {
             0 => &mut self.full_slot,
             1 => &mut self.subslot1,
@@ -336,6 +351,14 @@ impl Demodulator {
             // in both directions before we are off by one symbol.
             let timing_error = symbol_timing - (SPS as RealSample * 0.5);
             self.averaged_timing_error += (timing_error - self.averaged_timing_error) * 0.1;
+        }
+
+        // Store RSSI into the correct burst finder now that all borrows have ended.
+        match subslot_number {
+            0 => self.full_slot.rssi_dbfs = rssi_dbfs,
+            1 => self.subslot1.rssi_dbfs = rssi_dbfs,
+            2 => self.subslot2.rssi_dbfs = rssi_dbfs,
+            _ => unreachable!(),
         }
     }
 
@@ -449,6 +472,8 @@ struct SlotBurstFinder {
     burst_pos: usize,
     /// Length of burst
     burst_len: usize,
+    /// Received signal strength in dBFS for this burst
+    rssi_dbfs: f32,
 }
 
 impl SlotBurstFinder {
@@ -471,6 +496,7 @@ impl SlotBurstFinder {
             train_errs: Self::ERRS_NO_BURST,
             burst_pos: 0,
             burst_len: 0,
+            rssi_dbfs: f32::NEG_INFINITY,
         }
     }
 
@@ -480,6 +506,7 @@ impl SlotBurstFinder {
         self.train_errs = Self::ERRS_NO_BURST;
         self.burst_pos = 0;
         self.burst_len = 0;
+        self.rssi_dbfs = f32::NEG_INFINITY;
     }
 
     fn check_sequence(
@@ -582,6 +609,7 @@ impl SlotBurstFinder {
         RxBurstBits {
             train_type: self.train_type,
             bits: &self.bits[self.burst_pos..self.burst_pos + self.burst_len],
+            rssi_dbfs: self.rssi_dbfs,
         }
     }
 }

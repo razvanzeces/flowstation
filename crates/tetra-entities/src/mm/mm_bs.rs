@@ -239,6 +239,18 @@ impl MmBs {
         }
 
         let is_new = !self.client_mgr.client_is_known(issi);
+        if !is_new {
+            // MS is re-registering without a prior U-ITSI-DETACH (e.g. after RF loss or reboot).
+            // Emit Deaffiliate + Deregister so CMCE can release any active calls and clean up state.
+            let old_groups: Vec<u32> = self.client_mgr
+                .get_client_by_issi(issi)
+                .map(|c| c.groups.iter().copied().collect())
+                .unwrap_or_default();
+            if !old_groups.is_empty() {
+                self.emit_subscriber_update(queue, issi, old_groups, BrewSubscriberAction::Deaffiliate);
+            }
+            self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
+        }
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
                 Ok(_) => {
@@ -329,9 +341,21 @@ impl MmBs {
 
         let _ = self.client_mgr.set_client_class_of_ms(issi, pdu.class_of_ms);
 
+        // Reset periodic registration timer on every successful registration.
+        self.client_mgr.reset_registration_timer(issi);
+
+        // Use PeriodicLocationUpdating accept type when periodic registration is enabled.
+        // This signals to the MS that it must re-register within the configured interval.
+        let periodic_secs = self.config.config().cell.periodic_registration_secs;
+        let accept_type = if periodic_secs > 0 {
+            LocationUpdateType::PeriodicLocationUpdating
+        } else {
+            pdu.location_update_type
+        };
+
         // Build D-LOCATION UPDATE ACCEPT pdu
         let pdu_response = DLocationUpdateAccept {
-            location_update_accept_type: pdu.location_update_type,
+            location_update_accept_type: accept_type,
             ssi: Some(issi as u64),
             address_extension: None,
             subscriber_class: None,
@@ -936,18 +960,36 @@ impl TetraEntityTrait for MmBs {
         self.config = config;
     }
 
-    fn tick_start(&mut self, _queue: &mut MessageQueue, _ts: TdmaTime) {
+    fn tick_start(&mut self, queue: &mut MessageQueue, _ts: TdmaTime) {
         if let Some(cep) = &self.control {
             while let Some(cmd) = cep.try_recv() {
                 match cmd {
-                    // ControlCommand::CommandA { handle, parameter } => {
-                    //     cep.respond(ControlResponse::CommandAResponse { handle, result: parameter * 2 });
-                    // }
                     _ => {
                         tracing::warn!("MM: ignoring unsupported control command {:?}", cmd);
                     }
                 }
             }
+        }
+
+        // Periodic registration expiry check (T351 equivalent, ETSI EN 300 392-2 §16.9).
+        // Uses wall-clock time — no TDMA precision needed.
+        let interval_secs = self.config.config().cell.periodic_registration_secs;
+        let expired = self.client_mgr.collect_expired_registrations(interval_secs);
+        for issi in expired {
+            tracing::info!(
+                "MM: ISSI {} periodic registration expired ({}s) — deregistering",
+                issi, interval_secs
+            );
+            let groups: Vec<u32> = self.client_mgr
+                .get_client_by_issi(issi)
+                .map(|c| c.groups.iter().copied().collect())
+                .unwrap_or_default();
+            if !groups.is_empty() {
+                self.emit_subscriber_update(queue, issi, groups, BrewSubscriberAction::Deaffiliate);
+            }
+            self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
+            self.client_mgr.remove_client(issi);
+            self.config.state_write().subscribers.deregister(issi);
         }
     }
 
@@ -970,6 +1012,9 @@ impl TetraEntityTrait for MmBs {
                 match message.msg {
                     SapMsgInner::BrewReconnected => {
                         self.rx_brew_reconnected(queue);
+                    }
+                    SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => {
+                        self.client_mgr.update_client_rssi(issi, rssi_dbfs);
                     }
                     _ => {
                         tracing::warn!("mm_bs: unexpected Control message from {:?}", message.src);

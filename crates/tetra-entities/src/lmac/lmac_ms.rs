@@ -88,6 +88,7 @@ impl LmacMs {
                 logical_channel: LogicalChannel::Aach,
                 crc_pass: true,
                 scrambling_code,
+                rssi_dbfs: 0.0, // DL burst, RSSI not used in BS mode
             }),
         };
 
@@ -187,6 +188,7 @@ impl LmacMs {
                     logical_channel: lchan,
                     crc_pass,
                     scrambling_code: scramb_code,
+                    rssi_dbfs: 0.0, // DL burst, RSSI not used in BS mode
                 }),
             };
             queue.push_back(m);

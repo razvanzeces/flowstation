@@ -660,6 +660,17 @@ impl UmacBs {
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
         self.channel_scheduler.dl_enqueue_random_access_ack(msg_dltime.t, addr);
 
+        // Notify MM of RSSI for this MS so it can be stored per-subscriber.
+        // Only sent when RSSI is a finite value (i.e. demodulator calculated it).
+        if prim.rssi_dbfs.is_finite() {
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Umac,
+                dest: TetraEntity::Mm,
+                msg: SapMsgInner::MsRssiUpdate { issi: addr.ssi, rssi_dbfs: prim.rssi_dbfs },
+            });
+        }
+
         // Decrypt if needed
         if pdu.encrypted {
             unimplemented_log!("rx_mac_access: Encryption mode > 0");

@@ -80,6 +80,10 @@ pub enum SapMsgInner {
     // MM -> Brew/CMCE subscriber update
     MmSubscriberUpdate(MmSubscriberUpdate),
 
+    /// Sent by UMAC to MM when a UL burst is received from a known MS.
+    /// MM stores the RSSI value per MS for logging and future handover decisions.
+    MsRssiUpdate { issi: u32, rssi_dbfs: f32 },
+
     /// Sent by BrewEntity to MM when the Brew backhaul reconnects.
     /// MM responds by sending D-LOCATION-UPDATE-COMMAND to all locally registered MS,
     /// forcing them to re-affiliate. Without this, MS units registered before a
@@ -119,6 +123,7 @@ impl Display for SapMsgInner {
 
             // Control/Brew
             SapMsgInner::MmSubscriberUpdate(_) => write!(f, "MmSubscriberUpdate"),
+            SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => write!(f, "MsRssiUpdate(issi={}, rssi={:.1}dBFS)", issi, rssi_dbfs),
 
             // TLB-SAP
             // SapMsgInner::TlbTlSyncInd(_) => write!(f, "TlbTlSyncInd"),

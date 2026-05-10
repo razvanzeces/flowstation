@@ -8,6 +8,8 @@ pub struct TpUnitdataInd {
     /// Undefined for BBK. For all others: [ Block1 | Block2 | Both ]
     pub block_num: PhyBlockNum,
     pub block: BitBuffer,
+    /// Received signal strength in dBFS. See RxBurstBits.rssi_dbfs.
+    pub rssi_dbfs: f32,
 }
 
 #[derive(Debug, Clone)]

@@ -145,6 +145,12 @@ pub struct CfgCellInfo {
     /// Must be above T.213 (1s) to tolerate DTX and brief RF fading.
     /// Default: 3 seconds. Range: 1–30.
     pub ul_inactivity_secs: u32,
+
+    /// Periodic registration interval in seconds (ETSI T351 equivalent).
+    /// MS must re-register within this interval or be deregistered by the BS.
+    /// 0 = disabled — MS registrations never expire.
+    /// Default: 3600 (1 hour). Valid range when non-zero: 60–86400.
+    pub periodic_registration_secs: u32,
 }
 
 #[derive(Default, Deserialize)]
@@ -200,6 +206,9 @@ pub struct CellInfoDto {
     /// UL inactivity timeout in seconds. Default: 3.
     pub ul_inactivity_secs: Option<u32>,
 
+    /// Periodic registration interval in seconds. 0 = disabled. Default: 3600.
+    pub periodic_registration_secs: Option<u32>,
+
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -243,6 +252,10 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         hangtime_secs: ci.hangtime_secs.unwrap_or(5).clamp(0, 300),
         call_timeout_secs: ci.call_timeout_secs.unwrap_or(120).clamp(30, 300),
         ul_inactivity_secs: ci.ul_inactivity_secs.unwrap_or(3).clamp(1, 30),
+        periodic_registration_secs: {
+            let v = ci.periodic_registration_secs.unwrap_or(3600);
+            if v == 0 { 0 } else { v.clamp(60, 86400) }
+        },
     }
 }
 

@@ -215,6 +215,7 @@ impl LmacBs {
         }
 
         let block_num = blk.block_num;
+        let rssi_dbfs = blk.rssi_dbfs;
         let (type1bits, crc_pass) = errorcontrol::decode_cp(lchan, blk, Some(self.scrambling_code));
         let type1bits = type1bits.unwrap(); // Guaranteed since scramb code set
 
@@ -242,6 +243,7 @@ impl LmacBs {
                 block_num,
                 crc_pass,
                 scrambling_code: self.scrambling_code,
+                rssi_dbfs,
             }),
         };
 

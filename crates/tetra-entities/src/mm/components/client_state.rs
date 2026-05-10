@@ -30,6 +30,13 @@ pub struct MmClientProperties {
     /// Multiframe offset within the Eg cycle at which this MS wakes up.
     /// Set to None for StayAlive MSs.
     pub monitoring_multiframe: Option<u8>,
+    /// Last measured RSSI from this MS in dBFS (dB relative to ADC full scale).
+    /// Updated on every UL burst received from this ISSI.
+    /// None until first burst received after registration.
+    pub last_rssi: Option<f32>,
+    /// Timestamp (system time) when this MS last registered or re-registered.
+    /// Used to enforce periodic registration expiry (T351).
+    pub last_registration_time: std::time::Instant,
     pub class_of_ms: Option<ClassOfMs>,
     /// Layer-2 handle from the last successful location update.
     /// Required for sending downlink MM PDUs (D-LOCATION-UPDATE-COMMAND etc.)
@@ -50,6 +57,8 @@ impl MmClientProperties {
             energy_saving_mode: EnergySavingMode::StayAlive,
             monitoring_frame: None,
             monitoring_multiframe: None,
+            last_rssi: None,
+            last_registration_time: std::time::Instant::now(),
             class_of_ms: None,
             last_handle: 0,
             tei: None,
@@ -122,6 +131,41 @@ impl MmClientMgr {
         } else {
             Err(ClientMgrErr::ClientNotFound { issi })
         }
+    }
+
+    /// Update RSSI for a known MS. Silently ignored if MS is not registered.
+    pub fn update_client_rssi(&mut self, issi: u32, rssi_dbfs: f32) {
+        if let Some(client) = self.clients.get_mut(&issi) {
+            let should_log = match client.last_rssi {
+                None => true, // First measurement
+                Some(prev) => (rssi_dbfs - prev).abs() >= 3.0, // Log on >=3dB change
+            };
+            client.last_rssi = Some(rssi_dbfs);
+            if should_log {
+                tracing::info!("RSSI: ISSI {} = {:.1} dBFS", issi, rssi_dbfs);
+            }
+        }
+    }
+
+    /// Reset the periodic registration timer for a MS (called on each U-LOCATION-UPDATING-DEMAND).
+    pub fn reset_registration_timer(&mut self, issi: u32) {
+        if let Some(client) = self.clients.get_mut(&issi) {
+            client.last_registration_time = std::time::Instant::now();
+        }
+    }
+
+    /// Returns list of ISSIs whose periodic registration has expired.
+    /// interval_secs=0 means disabled — always returns empty list.
+    pub fn collect_expired_registrations(&self, interval_secs: u32) -> Vec<u32> {
+        if interval_secs == 0 {
+            return Vec::new();
+        }
+        let threshold = std::time::Duration::from_secs(interval_secs as u64);
+        self.clients
+            .iter()
+            .filter(|(_, c)| c.last_registration_time.elapsed() > threshold)
+            .map(|(&issi, _)| issi)
+            .collect()
     }
 
     pub fn set_client_class_of_ms(&mut self, issi: u32, class: Option<ClassOfMs>) -> Result<(), ClientMgrErr> {

@@ -80,6 +80,7 @@ impl<D: RxTxDev> PhyBs<D> {
         block_type: PhyBlockType,
         block_num: PhyBlockNum,
         bits: BitBuffer,
+        rssi_dbfs: f32,
     ) {
         // Uplink timeslot is two after downlink. Thus was transmitted at dltime - 2
         let sapmsg = SapMsg {
@@ -92,6 +93,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 block_type,
                 block_num,
                 block: bits,
+                rssi_dbfs,
             }),
         };
         queue.push_back(sapmsg);
@@ -99,6 +101,7 @@ impl<D: RxTxDev> PhyBs<D> {
 
     fn split_rxslot_and_send_to_lmac(queue: &mut MessageQueue, burst: &RxBurstBits<'_>) {
         let train_seq = burst.train_type;
+        let rssi = burst.rssi_dbfs;
         match train_seq {
             TrainingSequence::NormalTrainSeq1 => {
                 assert!(burst.bits.len() == NUB_BITS);
@@ -108,7 +111,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 blk.copy_bits_from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
                 blk.seek(0);
 
-                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Both, blk);
+                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Both, blk, rssi);
             }
 
             TrainingSequence::NormalTrainSeq2 => {
@@ -117,8 +120,8 @@ impl<D: RxTxDev> PhyBs<D> {
                 let blk1 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK1_OFFSET..NUB_BLK1_OFFSET + NUB_BLK_BITS]);
                 let blk2 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
 
-                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Block1, blk1);
-                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Block2, blk2);
+                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Block1, blk1, rssi);
+                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Block2, blk2, rssi);
             }
             TrainingSequence::ExtendedTrainSeq => {
                 assert!(burst.bits.len() == CUB_BITS);
@@ -128,7 +131,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 blk.copy_bits_from_bitarr(&burst.bits[CUB_BLK2_OFFSET..CUB_BLK2_OFFSET + CUB_BLK_BITS]);
                 blk.seek(0);
 
-                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::CUB, PhyBlockType::SSN1, PhyBlockNum::Block1, blk);
+                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::CUB, PhyBlockType::SSN1, PhyBlockNum::Block1, blk, rssi);
             }
 
             _ => unreachable!("BUG: unhandled match variant -- should never be reached")
