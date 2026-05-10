@@ -11,261 +11,186 @@ stack_mode = "Bs"
 
 ###############################################################################
 
-# PHY layer input/output configuration
-
 [phy_io]
 
-# Input type: set to SoapySdr.
 backend = "SoapySdr"
 
-# DEBUG/TEST CODE. Capture files grow fast.
-# dl_tx_file = "./dl_output.bin"    # Debug; uncomment to save generated DL RF samples
-# ul_rx_file = "./ul_output.bin"    # Debug; uncomment to save received UL RF samples
+# DEBUG/TEST: Capture files grow fast.
+# dl_tx_file = "./dl_output.bin"
+# ul_rx_file = "./ul_output.bin"
 
 [phy_io.soapysdr]
-# Transmit tx(dl) and receive rx(ul) frequencies in Hz
-# !!! Make sure to also edit the corresponding fields in the cell_info section.
-tx_freq = 438025000
-rx_freq = 433025000
+# Transmit (DL) and receive (UL) frequencies in Hz.
+# Also update the corresponding carrier fields in [cell_info].
+tx_freq = 439600000
+rx_freq = 434600000
 
-# Adjust if your SDR has a non-negligible tuning error
+# Adjust if your SDR has a tuning error.
 # ppm_err = 0.0
 
-################################################################################################
-## OPTIONAL: specific device, antenna, gain selection                                        ##
-## Check your device with SoapySDRUtil --probe                                               ##
-## or: https://github.com/MidnightBlueLabs/tetra-bluestation-docs/wiki/03-Configuration     ##
-################################################################################################
+###############################################################################
+## OPTIONAL: specific device, antenna, gain selection                        ##
+## Check your device with: SoapySDRUtil --probe                              ##
+## or: https://github.com/MidnightBlueLabs/tetra-bluestation-docs/wiki/     ##
+###############################################################################
 
-# Optional device selection arguments.
-# If not specified, the first compatible device found is selected automatically.
-# Example for Pluto+ with a given IP address:
-# device = "driver=plutosdr,uri=ip:192.168.42.42"
-# For LimeSDR with a given serial number (check with SoapySDRUtil --find):
+# Optional device selection (needed when multiple SDRs are connected).
 # device = "driver=lime,serial=123456789"
+# device = "driver=plutosdr,uri=ip:192.168.42.42"
 
-# Optional antenna selection (overrides device defaults)
-# Check antenna names with SoapySDRUtil --probe
+# Optional antenna override.
 # rx_antenna = "LNAW"
 # tx_antenna = "BAND2"
 
-# Optional gain values (override device defaults)
-# Check valid gain names with SoapySDRUtil --probe
-# Example for increasing transmit power on LimeSDR:
-# tx_gain_pad = 50.0
-# LNA gain adjustment for receive optimization on LimeSDR or SXceiver:
-# rx_gain_lna = 30.0
+# Gain values for LimeSDR Mini 2.0 — adjust for your hardware.
+tx_gain_pad = 43
+tx_gain_iamp = 5
+rx_gain_lna = 30
+rx_gain_tia = 6
+rx_gain_pga = 10
 
 ###############################################################################
 
-# Network information
 [net_info]
-# Mobile Country Code (MCC) - identifies your country
-mcc = 204  # Netherlands
+# Mobile Country Code — identifies your country.
+mcc = 901
 
-# Mobile Network Code (MNC) - identifies the TETRA network
-# MAKE SURE THE MNC CAN BE USED, CONSULT RELEVANT AUTHORITIES IF NECESSARY
-mnc = 1337
+# Mobile Network Code — identifies the TETRA network.
+# MAKE SURE THIS MNC CAN BE USED. CONSULT RELEVANT AUTHORITIES IF NECESSARY.
+mnc = 9999
 
-# Cell information
+###############################################################################
+
 [cell_info]
 
-# These parameters specify the DL and UL frequencies
-# Read the specification if in doubt. Make sure they match the tx/rx values above.
-# See ETSI TS 100 392-15 V1.5.1 Clause 6: Duplex spacing
-freq_band = 4                       # 400MHz band
-main_carrier = 1521                 # + 1521 * 25kHz = 38250kHz
-duplex_spacing = 4                  # Use 5MHz spacing between ul and dl (for 400 MHz band)
-# custom_duplex_spacing = 7600000   # Do not uncomment unless you have programmed a custom duplex spacing entry in your radios
-freq_offset = 0                     # Carrier offset. Usually 0. Options: 0, 6250, -6250, 12500 Hz.
-reverse_operation = false           # False: UL below DL. True: UL above DL.
+# DL/UL frequency parameters — must match tx_freq/rx_freq above.
+# See ETSI TS 100 392-15 V1.5.1 Clause 6: Duplex spacing.
+freq_band = 4                   # 400 MHz band
+main_carrier = 1584             # DL: 380000 + 1584 * 25 = 419600 kHz (+20MHz = 439600 kHz)
+duplex_spacing = 4              # 5 MHz spacing (standard for 400 MHz band)
+freq_offset = 0                 # Carrier offset in Hz. Options: 0, 6250, -6250, 12500.
+reverse_operation = false       # false = UL below DL (standard). true = UL above DL.
 
-# Location area identifier
+# Location area identifier (0–16383).
 location_area = 2
 
-# Colour code (0-63), helps distinguish adjacent cells on the same frequency
+# Colour code (0–63) — helps distinguish adjacent cells on the same frequency.
 colour_code = 1
 
-# IANA timezone for time broadcasting via D-NWRK-BROADCAST. When set, the BS will
-# broadcast UTC time and local time offset once per hyperframe (~61s) so that
-# radios can synchronize their clocks. Daylight saving time is handled automatically.
-# timezone = "Europe/Bucharest"
+# IANA timezone for D-NWRK-BROADCAST. The BS broadcasts UTC time and local offset
+# once per hyperframe (~61s) so terminals can synchronize their clocks. DST is automatic.
+timezone = "Europe/Bucharest"
 
-# Local SSI ranges for this cell. Traffic for these ranges will not leave the cell.
-# Overrides any settings in the brew section, if enabled.
-# Incoming brew traffic on these ranges will also be rejected.
-# The end of the range is INCLUSIVE — the end number IS in the range.
-local_ssi_ranges = [
-    [0, 90],
-]
+# System code (0–15) — TETRA system version indicator.
+system_code = 3
 
-###############################################################################
+# Service availability
+system_wide_services = true     # false = terminals operate in fallback mode (ignored when Brew enabled)
+voice_service = true
 
-# OPTIONAL: Additional cell parameters
+# Local SSI ranges — traffic for these SSIs stays on this cell and is not forwarded to Brew.
+# Range end is INCLUSIVE.
+# local_ssi_ranges = [
+#     [0, 90],
+# ]
 
-# Neighbor cell broadcast (ETSI EN 300 392-2 Clause 18.4.2.1 D-MLE-SYNC, 2 bits)
-# Controls what the BS announces in D-MLE-SYNC about neighbor cell information availability.
-#   0 = No broadcast (BS does not broadcast neighbor cell information)
-#   1 = Broadcast and enquiry supported (MS can request additional information)
-#   2 = Broadcast supported, enquiry not supported (recommended — BS broadcasts, no enquiries)
-#   3 = Reserved
-# Set to 2 if you define [[cell_info.neighbor_cells_ca]] sections below.
-# If no neighbors are configured, leave at 0 or commented out.
-# neighbor_cell_broadcast = 0
+# ── Call timing ──────────────────────────────────────────────────────────────
 
-# Late entry support - allows joining ongoing group calls
+# Group call hangtime in seconds (FlowStation).
+# How long the call circuit stays open after the last speaker releases the floor,
+# before D-RELEASE is sent. Any terminal can resume speaking during hangtime
+# without a new call setup cycle.
+# Default: 5. Valid range: 0–300.
+hangtime_secs = 2
+
+# Maximum active call duration in seconds — ETSI EN 300 392-2 §14.9.1 T310 equivalent (FlowStation).
+# After this time the BS sends D-RELEASE regardless of call activity.
+# Shorter values free timeslots faster when a terminal goes out of coverage without disconnecting.
+# Default: 120. Valid range: 30–300.
+# call_timeout_secs = 120
+
+# UL inactivity timeout in seconds (FlowStation).
+# If no voice frames arrive from the transmitting terminal for this duration,
+# the BS forces TX-CEASED and enters hangtime. Must exceed T.213 (1s) to tolerate
+# DTX gaps and brief RF fading without false timeouts.
+# Default: 3. Valid range: 1–30.
+# ul_inactivity_secs = 3
+
+# Periodic registration interval in seconds — ETSI EN 300 392-2 T351 equivalent (FlowStation).
+# Terminals must re-register within this interval or be automatically removed from the registry.
+# The BS signals this via D-LOCATION-UPDATE-ACCEPT (PeriodicLocationUpdating).
+# On expiry: BS sends D-LOCATION-UPDATE-REJECT (ExpiryOfTimer) and the terminal re-attaches immediately.
+# 0 = disabled — registrations never expire.
+# Default: 3600 (1 hour). Valid range when non-zero: 60–86400.
+# periodic_registration_secs = 3600
+
+# ── Optional cell parameters ─────────────────────────────────────────────────
+
 # late_entry_supported = true
-
-# Subscriber class - defines which MS classes can access this cell
 # subscriber_class = 0xFFFF
-
-# Registration and mobility
 # registration = true
 # deregistration = true
 # priority_cell = false
 # no_minimum_mode = false
 # migration = false
-
-# Service availability indicators
-system_wide_services = true  # If false, radios will operate in fallback mode (ignored when Brew is enabled)
-voice_service = true
 # circuit_mode_data_service = true
 # sndcp_service = true
 # aie_service = false
 # advanced_link = false
-
-# System code (0-15) - identifies the TETRA system version
-# system_code = 0
-
-# Sharing mode for the main control channel
 # sharing_mode = 0
-
-# Reserved frames for time slot allocation
 # ts_reserved_frames = 0
-
-# Discontinuous Transmission (DTX) on the user plane
 # u_plane_dtx = false
-
-# Frame 18 extension support
 # frame_18_ext = false
-
-# Maximum MS TX power in cell: 0=Reserved 1=15 2=20 3=25 4=30 5=35 6=40 7=45 dBm
-# ms_txpwr_max_cell = 4
-
-# Group call hangtime in seconds.
-# How long the circuit of an inactive group call stays open after the last speaker
-# releases the floor, before the call is disconnected.
-# During hangtime, any MS can resume the floor without a new D-SETUP/D-CONNECT cycle.
-# Default: 5 seconds. Valid range: 0–300.
-# hangtime_secs = 5
-
-# Maximum active call duration in seconds (ETSI T310 equivalent, EN 300 392-2 §14.9.1).
-# After this time, the BS sends D-RELEASE regardless of call activity.
-# Lower values release slots faster when an MS goes out of coverage without disconnecting.
-# Default: 120 seconds (2 minutes). Valid range: 30–300.
-# call_timeout_secs = 120
-
-# UL inactivity timeout in seconds: if no voice frames are received from the transmitting
-# MS during this time, the BS forces TX-CEASED and enters hangtime.
-# Must be greater than T.213 (1s) to tolerate DTX and short RF fading.
-# Default: 3 seconds. Valid range: 1–30.
-# ul_inactivity_secs = 3
-
-# Periodic registration interval in seconds (ETSI T351 equivalent).
-# MS must re-register within this interval or be automatically deregistered by the BS.
-# The BS signals this to all terminals via D-LOCATION-UPDATE-ACCEPT with type
-# PeriodicLocationUpdating, so terminals know to re-register periodically.
-# 0 = disabled — MS registrations never expire.
-# Default: 3600 (1 hour). Valid range when non-zero: 60–86400.
-# periodic_registration_secs = 3600
+# ms_txpwr_max_cell = 4          # 1=15 2=20 3=25 4=30 5=35 6=40 7=45 dBm
 
 ###############################################################################
 
-# OPTIONAL: Neighbor cells for cell reselection (ETSI EN 300 392-2 Clause 18.5.17)
+# OPTIONAL: Neighbor cells for terminal reselection (ETSI EN 300 392-2 §18.5.17)
 #
-# The BS will include the information below in every D-NWRK-BROADCAST broadcast on MCCH.
-# MSs use it for automatic cell reselection: when the current BS signal drops below
-# the minimum threshold, the MS knows which frequency to search for a better cell.
+# The BS broadcasts these in every D-NWRK-BROADCAST. Terminals use them for
+# automatic cell reselection when the current BS signal drops below threshold.
 #
-# Rules:
-#   - Maximum 7 entries
-#   - cell_identifier_ca must be unique for each entry (0-31)
-#   - main_carrier_number must be unique for each entry (0-4095)
-#   - Set neighbor_cell_broadcast = 2 in [cell_info] when using this section
-#
-# Mandatory fields:
-#   cell_identifier_ca              — Unique neighbor cell index in the cluster (0-31)
-#   cell_reselection_types_supported — Supported reselection types (2 bits):
-#                                      0 = non-synchronized reselection only
-#                                      1 = synchronized reselection only
-#                                      2 = both supported
-#   neighbor_cell_synchronized      — true if this neighbor cell is TDMA-synchronized
-#                                      with the current BS (requires common GPS reference).
-#                                      false for independent BS units (normal situation).
-#   cell_load_ca                    — Current cell load indicator (2 bits):
-#                                      0 = information unavailable
-#                                      1 = low load
-#                                      2 = medium load
-#                                      3 = high load
-#   main_carrier_number             — Main carrier number of the neighbor cell (0-4095)
-#                                      Frequency formula: see ETSI TS 100 392-15
-#
-# Optional fields (omit the line if not relevant):
-#   main_carrier_number_extension   — Carrier number extension (0-1023)
-#   mcc                             — MCC of the neighbor cell, if different (0-1023)
-#   mnc                             — MNC of the neighbor cell, if different (0-16383)
-#   location_area                   — Location area of the neighbor cell (0-16383)
-#   maximum_ms_transmit_power       — Maximum MS TX power allowed in the neighbor cell (0-7)
-#   minimum_rx_access_level         — Minimum signal level for access in the neighbor cell (0-15)
-#   subscriber_class                — Subscriber class mask allowed in the neighbor cell (0-65535)
-#   tdma_frame_offset               — TDMA frame offset relative to the current cell (0-63)
-#                                      Only relevant if neighbor_cell_synchronized = true
-#
-# Example for two neighbor cells:
-#
-# [[cell_info.neighbor_cells_ca]]
-# cell_identifier_ca = 1
-# cell_reselection_types_supported = 0
-# neighbor_cell_synchronized = false
-# cell_load_ca = 0
-# main_carrier_number = 1522
-# mcc = 204
-# mnc = 1337
-# location_area = 3
-#
-# [[cell_info.neighbor_cells_ca]]
-# cell_identifier_ca = 2
-# cell_reselection_types_supported = 0
-# neighbor_cell_synchronized = false
-# cell_load_ca = 0
-# main_carrier_number = 1523
-# mcc = 204
-# mnc = 1337
-# location_area = 4
-
-###############################################################################
-
-# OPTIONAL: ISSI access control (whitelist)
-#
-# When issi_whitelist is populated, only the listed ISSIs can register on this BS.
-# Any other terminal will receive D-LOCATION-UPDATE-REJECT and will not be able to
-# make or receive calls.
-# When the list is empty or the section is missing, the BS accepts any terminal (open network).
-#
-# Useful for:
-#   - Private networks where you want strict control over which terminals have access
-#   - Preventing accidental registration of unauthorized terminals
-#   - Testing with a fixed set of known terminals
+# Rules: max 7 entries, unique cell_identifier_ca and main_carrier_number per entry.
+# Also set neighbor_cell_broadcast = 2 in [cell_info] when using this.
 #
 # Example:
+# [[cell_info.neighbor_cells_ca]]
+# cell_identifier_ca = 1
+# cell_reselection_types_supported = 0    # 0=non-sync only, 1=sync only, 2=both
+# neighbor_cell_synchronized = false      # true only if cells share a GPS reference
+# cell_load_ca = 0                        # 0=unknown, 1=low, 2=medium, 3=high
+# main_carrier_number = 1521
+# mcc = 901
+# mnc = 9999
+# location_area = 3
+
+###############################################################################
+
+# OPTIONAL: ISSI access control — whitelist (FlowStation)
+#
+# When issi_whitelist is non-empty, only the listed ISSIs can register.
+# All others receive D-LOCATION-UPDATE-REJECT and cannot make or receive calls.
+# Leave empty or omit the section entirely to accept any terminal (open network).
+#
 # [security]
 # issi_whitelist = [2260571, 2260572, 2260575]
 
 ###############################################################################
 
-# Brew Protocol: Connect to TetraPack/BrandMeister server via TETRA Homebrew Protocol.
-# All groups that radios affiliate to are transmitted to Brew as affiliations.
-# Uncomment this section to automatically enable the Brew entity.
+# OPTIONAL: Web dashboard — accessible at http://<BTS-IP>:8080 (FlowStation)
+#
+# Shows registered terminals (ISSI, groups, RSSI), active calls, live log,
+# and a config editor. Supports kick and SDS from the browser.
+# Enabled by default when this section is present.
+#
+# [dashboard]
+# bind = "0.0.0.0:8080"
+
+###############################################################################
+
+# Brew protocol: Connect to TetraPack / BrandMeister via TETRA Homebrew Protocol.
+# All groups that terminals affiliate to are forwarded to Brew as affiliations.
+# Uncomment this section to enable the Brew entity.
 # See: https://wiki.tetrapack.online/books/tetra/page/brew
 
 # [brew]
@@ -277,25 +202,21 @@ voice_service = true
 # Use TLS (wss:// / https://)
 # tls = true
 
-# HTTP Digest authentication credentials, registered in BrandMeister.
-# Username should be your SSID (DMR ID + 2-digit suffix).
-# Password is your BrandMeister hotspot password.
-# username = 123456700
-# password = "012345"
+# HTTP Digest auth credentials registered in BrandMeister.
+# Username = your SSID (DMR ID + 2-digit suffix). Password = hotspot password.
+# username = 2260571
+# password = "yourpassword"
 
-# Reconnect delay (seconds)
-# reconnect_delay_secs = 15
+# Reconnect delay in seconds.
+# reconnect_delay_secs = 5
 
-# OPTIONAL: additional initial latency in frames for inbound Brew jitter playback.
-# Adaptive jitter buffering is always enabled; this adds a fixed delay at startup
-# if needed.
-# Default: 0. Increase if you hear audio artifacts at the start of transmissions.
+# Optional: fixed startup latency added on top of adaptive jitter buffering.
+# Increase if you hear audio artifacts at the very start of transmissions.
 # jitter_initial_latency_frames = 0
 
-# Enable SDS forwarding between local clients and Brew. Enabled by default.
+# SDS forwarding between local terminals and Brew. Enabled by default.
 # feature_sds_enabled = true
 
-# Uncomment to allow only calls for selected SSIs to be forwarded through Brew.
-# SDS works for all SSIs for now.
-# If left commented, all calls (outside local_ssi_ranges) are allowed through Brew.
+# Restrict Brew forwarding to specific SSIs only.
+# If commented out, all traffic outside local_ssi_ranges is forwarded.
 # whitelisted_ssis = [91]

@@ -4,6 +4,7 @@ use tetra_core::freqs::FreqInfo;
 
 use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, CfgSecurity, PhyBackend, StackState};
 
+use super::sec_dashboard::CfgDashboard;
 use super::sec_brew::CfgBrew;
 use super::sec_telemetry::CfgTelemetry;
 
@@ -63,6 +64,9 @@ pub struct StackConfig {
 
     /// Brew protocol (TetraPack/BrandMeister) configuration
     pub brew: Option<CfgBrew>,
+
+    /// Dashboard HTTP server configuration (None = disabled)
+    pub dashboard: Option<CfgDashboard>,
 
     /// Telemetry endpoint configuration
     pub telemetry: Option<CfgTelemetry>,

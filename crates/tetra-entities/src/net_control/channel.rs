@@ -25,6 +25,12 @@ impl CommandDispatcher {
         let _ = self.cmd_tx.send(command);
     }
 
+    /// Clone just the Sender half so a secondary source (e.g. dashboard) can
+    /// inject commands into the same channel without owning the full Dispatcher.
+    pub fn clone_sender(&self) -> Sender<ControlCommand> {
+        self.cmd_tx.clone()
+    }
+
     /// Non-blocking: collect all pending responses from the entity.
     pub fn try_recv_responses(&self) -> Vec<ControlResponse> {
         let mut responses = Vec::new();

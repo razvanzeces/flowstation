@@ -97,4 +97,6 @@ pub struct CcBsSubentity {
     subscriber_groups: HashMap<u32, HashSet<u32>>,
     /// Listener counts per GSSI
     group_listeners: HashMap<u32, usize>,
+    /// Telemetry sink for call events (optional)
+    telemetry: Option<crate::net_telemetry::channel::TelemetrySink>,
 }

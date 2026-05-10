@@ -11,6 +11,7 @@ use crate::bluestation::sec_cell::CfgNeighborCellCa;
 
 use super::config::{StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
+use super::sec_dashboard::{CfgDashboardDto, apply_dashboard_patch};
 use super::sec_security::{CfgSecurityDto, apply_security_patch};
 use super::sec_telemetry::{CfgTelemetryDto, apply_telemetry_patch};
 use super::{PhyIoDto, phy_dto_to_cfg};
@@ -120,6 +121,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         net: net_dto_to_cfg(root.net_info),
         cell: cell_cfg,
         brew: None,
+        dashboard: None,
         telemetry: None,
         control: None,
         security: apply_security_patch(root.security.unwrap_or_default()),
@@ -127,6 +129,10 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
 
     if let Some(brew) = root.brew {
         cfg.brew = Some(apply_brew_patch(brew));
+    }
+
+    if let Some(dashboard) = root.dashboard {
+        cfg.dashboard = Some(apply_dashboard_patch(dashboard)?);
     }
 
     if let Some(telemetry) = root.telemetry {
@@ -175,6 +181,7 @@ struct TomlConfigRoot {
     cell_info: CellInfoDto,
 
     brew: Option<CfgBrewDto>,
+    dashboard: Option<CfgDashboardDto>,
     telemetry: Option<CfgTelemetryDto>,
     command: Option<CfgControlDto>,
     security: Option<CfgSecurityDto>,

@@ -11,6 +11,17 @@ impl CcBsSubentity {
             individual_calls: HashMap::new(),
             subscriber_groups: HashMap::new(),
             group_listeners: HashMap::new(),
+            telemetry: None,
+        }
+    }
+
+    pub fn set_telemetry(&mut self, sink: crate::net_telemetry::channel::TelemetrySink) {
+        self.telemetry = Some(sink);
+    }
+
+    pub(super) fn emit(&self, event: crate::net_telemetry::TelemetryEvent) {
+        if let Some(sink) = &self.telemetry {
+            sink.send(event);
         }
     }
 
@@ -243,6 +254,25 @@ impl CcBsSubentity {
                         self.drop_group_calls_if_unlistened(queue, gssi);
                     }
                 }
+
+                // Release any active P2P individual calls involving this ISSI.
+                // Without this, the TDMA timeslot stays occupied until call_timeout (120s).
+                let calls_to_release: Vec<u16> = self
+                    .individual_calls
+                    .iter()
+                    .filter(|(_, call)| {
+                        call.calling_addr.ssi == issi || call.called_addr.ssi == issi
+                    })
+                    .map(|(&id, _)| id)
+                    .collect();
+                for call_id in calls_to_release {
+                    tracing::info!(
+                        "CMCE: releasing individual call_id={} because ISSI {} deregistered",
+                        call_id, issi
+                    );
+                    self.release_individual_call(queue, call_id, DisconnectCause::UserRequestedDisconnection);
+                }
+
                 tracing::info!("CMCE: subscriber deregister issi={}", issi);
             }
             BrewSubscriberAction::Affiliate => {
@@ -914,6 +944,71 @@ impl CcBsSubentity {
         if let Err(err) = state.timeslot_alloc.release(TimeslotOwner::Cmce, ts) {
             tracing::warn!("CcBsSubentity: failed to release timeslot ts={} err={:?}", ts, err);
         }
+    }
+
+    // ── Dashboard / API helpers ────────────────────────────────────────────────
+
+    /// Returns the list of GSSIs the given ISSI is affiliated to.
+    pub fn subscriber_groups_for(&self, issi: u32) -> Vec<u32> {
+        self.subscriber_groups
+            .get(&issi)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Force-deregister an MS: release its active calls and clean up state.
+    /// Returns true if the MS was known.
+    pub fn kick_ms(&mut self, queue: &mut MessageQueue, issi: u32) -> bool {
+        if !self.subscriber_groups.contains_key(&issi) {
+            tracing::warn!("CMCE: kick_ms issi={} not found in subscriber_groups", issi);
+            return false;
+        }
+        // Release all active individual calls involving this MS
+        let individual_ids: Vec<u16> = self.individual_calls.iter()
+            .filter(|(_, c)| c.calling_addr.ssi == issi || c.called_addr.ssi == issi)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in individual_ids {
+            self.release_individual_call(queue, id, DisconnectCause::UserRequestedDisconnection);
+        }
+        // Clean up CMCE state
+        if let Some(groups) = self.subscriber_groups.remove(&issi) {
+            for g in &groups { self.dec_group_listener(*g); }
+        }
+        // Tell MM to deregister the MS — this also notifies Brew
+        use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
+        use tetra_saps::SapMsgInner;
+        use tetra_core::Sap;
+        queue.push_back(tetra_saps::SapMsg {
+            sap: Sap::Control,
+            src: tetra_core::tetra_entities::TetraEntity::Cmce,
+            dest: tetra_core::tetra_entities::TetraEntity::Mm,
+            msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
+                issi,
+                groups: Vec::new(),
+                action: BrewSubscriberAction::Deregister,
+            }),
+        });
+        tracing::info!("CMCE: kick_ms issi={} — deregistered", issi);
+        true
+    }
+
+    /// Snapshot of active group calls for the dashboard.
+    pub fn active_calls_snapshot(&self) -> Vec<(u16, u32, u32, bool)> {
+        self.active_calls.iter().map(|(&id, c)| {
+            let caller = match &c.origin {
+                crate::cmce::subentities::cc_bs::call::CallOrigin::Local { caller_addr } => caller_addr.ssi,
+                _ => 0,
+            };
+            (id, c.dest_gssi, caller, c.tx_active)
+        }).collect()
+    }
+
+    /// Snapshot of active individual calls for the dashboard.
+    pub fn individual_calls_snapshot(&self) -> Vec<(u16, u32, u32, bool)> {
+        self.individual_calls.iter().map(|(&id, c)| {
+            (id, c.calling_addr.ssi, c.called_addr.ssi, !c.simplex_duplex)
+        }).collect()
     }
 }
 

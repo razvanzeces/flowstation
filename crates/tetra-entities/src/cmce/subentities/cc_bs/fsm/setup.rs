@@ -50,6 +50,13 @@ impl CcBsSubentity {
             circuit.usage
         );
 
+        // Emit telemetry event for dashboard
+        self.emit(crate::net_telemetry::TelemetryEvent::GroupCallStarted {
+            call_id: circuit.call_id,
+            gssi: dest_gssi,
+            caller_issi: calling_party.ssi,
+        });
+
         // Signal UMAC to open DL+UL circuits.
         Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::LocalLoopback);
 
@@ -328,6 +335,14 @@ impl CcBsSubentity {
             called_ts,
             called_usage
         );
+
+        // Emit telemetry event for dashboard
+        self.emit(crate::net_telemetry::TelemetryEvent::IndividualCallStarted {
+            call_id,
+            calling_issi: calling_party.ssi,
+            called_issi: called_addr.ssi,
+            simplex: !pdu.hook_method_selection,
+        });
 
         // Do not open traffic channel yet. Let called MS respond on MCCH.
         self.send_d_call_proceeding(queue, message, pdu, call_id, CallTimeoutSetupPhase::T60s, pdu.hook_method_selection);

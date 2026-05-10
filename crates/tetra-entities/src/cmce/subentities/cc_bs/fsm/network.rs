@@ -768,6 +768,13 @@ impl CcBsSubentity {
             ActiveCall::new_network(brew_uuid, dest_gssi, source_issi, ts, usage, self.dltime, self.config_call_timeout()),
         );
 
+        // Emit telemetry so dashboard shows Brew-initiated calls
+        self.emit(crate::net_telemetry::TelemetryEvent::GroupCallStarted {
+            call_id,
+            gssi: dest_gssi,
+            caller_issi: source_issi,
+        });
+
         queue.push_back(SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Cmce,

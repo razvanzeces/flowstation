@@ -792,12 +792,25 @@ impl MmBs {
         location_update_type: LocationUpdateType,
         address_extension: Option<u64>,
     ) {
+        Self::send_d_location_update_reject_cause(
+            queue, issi, handle, location_update_type,
+            address_extension, RejectCause::MigrationNotSupported,
+        )
+    }
+
+    fn send_d_location_update_reject_cause(
+        queue: &mut MessageQueue,
+        issi: u32,
+        handle: u32,
+        location_update_type: LocationUpdateType,
+        address_extension: Option<u64>,
+        reject_cause: RejectCause,
+    ) {
         let pdu = DLocationUpdateReject {
             location_update_type,
-            reject_cause: RejectCause::MigrationNotSupported as u8,
+            reject_cause: reject_cause as u8,
             cipher_control: false,
             ciphering_parameters: None,
-            // Echo back MNI if present, required for case b) per ETSI 16.4.1.1
             address_extension,
             cell_type_control: None,
             proprietary: None,
@@ -993,8 +1006,20 @@ impl TetraEntityTrait for MmBs {
         let expired = self.client_mgr.collect_expired_registrations(interval_secs);
         for issi in expired {
             tracing::info!(
-                "MM: ISSI {} periodic registration expired ({}s) — deregistering",
+                "MM: ISSI {} periodic registration expired ({}s) — sending reject to force re-registration",
                 issi, interval_secs
+            );
+            // Send D-LOCATION-UPDATE-REJECT so the terminal knows it's been
+            // deregistered and immediately initiates a new registration.
+            // Without this, the terminal stays silent until its own T351 fires.
+            // Cause: ExpiryOfTimer (17) per ETSI EN 300 392-2 Table 16.71
+            Self::send_d_location_update_reject_cause(
+                queue,
+                issi,
+                0,
+                LocationUpdateType::PeriodicLocationUpdating,
+                None,
+                RejectCause::ExpiryOfTimer,
             );
             let groups: Vec<u32> = self.client_mgr
                 .get_client_by_issi(issi)
@@ -1031,6 +1056,32 @@ impl TetraEntityTrait for MmBs {
                     }
                     SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => {
                         self.client_mgr.update_client_rssi(issi, rssi_dbfs);
+                        // Emit RSSI telemetry for dashboard
+                        if let Some(sink) = &self.telemetry {
+                            sink.send(crate::net_telemetry::TelemetryEvent::MsRssi { issi, rssi_dbfs });
+                        }
+                    }
+                    SapMsgInner::MmSubscriberUpdate(update) => {
+                        // CMCE can ask MM to deregister an MS (e.g. kick from dashboard)
+                        if update.action == BrewSubscriberAction::Deregister {
+                            let issi = update.issi;
+                            tracing::info!("MM: kicking ISSI {} — sending D-LOCATION-UPDATE-COMMAND to force re-registration", issi);
+                            // D-LOCATION-UPDATE-COMMAND forces the terminal to immediately
+                            // send a new U-LOCATION-UPDATING-DEMAND, effectively re-registering.
+                            // This is cleaner than a reject: the terminal stays on the network
+                            // but goes through a full re-registration cycle.
+                            Self::send_d_location_update_command(queue, issi, 0);
+                            let groups: Vec<u32> = self.client_mgr
+                                .get_client_by_issi(issi)
+                                .map(|c| c.groups.iter().copied().collect())
+                                .unwrap_or_default();
+                            if !groups.is_empty() {
+                                self.emit_subscriber_update(queue, issi, groups, BrewSubscriberAction::Deaffiliate);
+                            }
+                            self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
+                            self.client_mgr.remove_client(issi);
+                            self.config.state_write().subscribers.deregister(issi);
+                        }
                     }
                     _ => {
                         tracing::warn!("mm_bs: unexpected Control message from {:?}", message.src);

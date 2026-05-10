@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// Command received from the remote command server.
 #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
 pub enum ControlCommand {
-    /// Command to send an SDS for local delivery
+    /// Send an SDS for local delivery
     SendSds {
         handle: u32,
         source_ssi: u32,
@@ -20,6 +20,12 @@ pub enum ControlCommand {
         len_bits: u16,
         payload: Vec<u8>,
     },
+
+    /// Forcibly deregister a terminal from the BS
+    KickMs { issi: u32 },
+
+    /// Restart the FlowStation service (systemctl restart tetra)
+    RestartService,
 
     /// Placeholder command A.
     CommandA { handle: u32, parameter: u32 },
@@ -32,11 +38,10 @@ pub enum ControlCommand {
     },
 }
 
-/// Response sent back to the remote command server after processing a [`Command`].
+/// Response sent back after processing a [`ControlCommand`].
 #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
 pub enum ControlResponse {
-    /// Response to [`Command::CommandA`].
     CommandAResponse { handle: u32, result: u32 },
-    /// Response to [`Command::SendSds`].
     SendSdsResponse { handle: u32, success: bool },
+    KickMsResponse { issi: u32, success: bool },
 }

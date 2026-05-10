@@ -153,6 +153,7 @@ name = "bluestation-bs"
 version = "0.0.7"
 dependencies = [
  "clap",
+ "crossbeam-channel",
  "ctrlc",
  "rustls",
  "tetra-config",

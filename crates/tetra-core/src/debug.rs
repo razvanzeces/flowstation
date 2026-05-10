@@ -1,7 +1,7 @@
 use core::fmt;
 use std::fmt::Write as FmtWrite;
 use std::fs::OpenOptions;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 use chrono::Local;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::FmtContext;
@@ -9,6 +9,17 @@ use tracing_subscriber::fmt::format::{self, FormatEvent, FormatFields};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, fmt as tracingfmt};
+
+/// Global log sink for the dashboard. Set once before logging is initialised.
+/// Receives (level, message) tuples.
+pub type DashboardLogSender = crossbeam_channel::Sender<(String, String)>;
+static DASHBOARD_LOG_TX: OnceLock<DashboardLogSender> = OnceLock::new();
+
+/// Register a channel that will receive all log events.
+/// Must be called BEFORE setup_logging_default.
+pub fn set_dashboard_log_sender(tx: DashboardLogSender) {
+    let _ = DASHBOARD_LOG_TX.set(tx);
+}
 
 #[macro_export]
 macro_rules! unimplemented_log {
@@ -210,6 +221,41 @@ where
 
 static INIT_LOG: Once = Once::new();
 
+/// tracing Layer that forwards log events to the dashboard log channel.
+struct DashboardLayer;
+
+impl<S> tracing_subscriber::Layer<S> for DashboardLayer
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let Some(tx) = DASHBOARD_LOG_TX.get() else { return };
+        let level = event.metadata().level().to_string();
+        let mut msg = String::new();
+        let mut visitor = StringVisitor(&mut msg);
+        event.record(&mut visitor);
+        let _ = tx.try_send((level, msg));
+    }
+}
+
+struct StringVisitor<'a>(&'a mut String);
+impl tracing::field::Visit for StringVisitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            let _ = write!(self.0, "{:?}", value);
+            // Remove surrounding quotes from debug format
+            if self.0.starts_with('"') && self.0.ends_with('"') {
+                *self.0 = self.0[1..self.0.len()-1].to_string();
+            }
+        }
+    }
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.0.push_str(value);
+        }
+    }
+}
+
 /// Keep non-blocking tracing workers alive for the lifetime of the process.
 /// The contained guards are intentionally opaque; callers only need to hold
 /// the value so background log draining continues working.
@@ -289,7 +335,6 @@ fn get_default_logfile_filter() -> EnvFilter {
 fn setup_logging(stdout_filter: EnvFilter, outfile: Option<(String, EnvFilter)>) -> Option<LogGuards> {
     let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
     if let Some((outfile, outfile_filter)) = outfile {
-        // Setup logging with a verbose log file
         let file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -297,28 +342,29 @@ fn setup_logging(stdout_filter: EnvFilter, outfile: Option<(String, EnvFilter)>)
             .expect("Failed to open log file");
         let (file_writer, file_guard) = tracing_appender::non_blocking(file);
 
-        // Setup once
         INIT_LOG.call_once(|| {
             let file_layer = tracingfmt::layer()
                 .event_format(AlignedFormatter)
                 .with_writer(file_writer)
                 .with_ansi(false);
-
             let stdout_layer = tracingfmt::layer().event_format(AlignedFormatter).with_writer(stdout_writer);
 
             tracing_subscriber::registry()
                 .with(file_layer.with_filter(outfile_filter))
                 .with(stdout_layer.with_filter(stdout_filter))
+                .with(DashboardLayer)
                 .init();
         });
 
         LogGuards::new(vec![stdout_guard, file_guard])
     } else {
-        // Setup once
         INIT_LOG.call_once(|| {
             let stdout_layer = tracingfmt::layer().event_format(AlignedFormatter).with_writer(stdout_writer);
 
-            tracing_subscriber::registry().with(stdout_layer.with_filter(stdout_filter)).init();
+            tracing_subscriber::registry()
+                .with(stdout_layer.with_filter(stdout_filter))
+                .with(DashboardLayer)
+                .init();
         });
         LogGuards::new(vec![stdout_guard])
     }

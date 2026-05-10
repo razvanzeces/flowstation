@@ -1,4 +1,5 @@
 use clap::Parser;
+use crossbeam_channel;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +15,7 @@ use tetra_core::{TdmaTime, debug};
 use tetra_entities::MessageRouter;
 use tetra_entities::net_brew::entity::BrewEntity;
 use tetra_entities::net_brew::new_websocket_transport;
+use tetra_entities::net_dashboard::DashboardServer;
 use tetra_entities::net_telemetry::worker::TelemetryWorker;
 use tetra_entities::net_telemetry::{
     TELEMETRY_HEARTBEAT_INTERVAL, TELEMETRY_HEARTBEAT_TIMEOUT, TELEMETRY_PROTOCOL_VERSION, TelemetrySource, telemetry_channel,
@@ -123,20 +125,17 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
         }
     }
 
-    // Build telemetry sink/source, if enabled
-    let (tsink, tsource) = if cfg.config().telemetry.is_some() {
+    // Build telemetry sink/source — always create if either telemetry or dashboard is enabled
+    let needs_telemetry = cfg.config().telemetry.is_some() || cfg.config().dashboard.is_some();
+    let (tsink, tsource) = if needs_telemetry {
         let (a, b) = telemetry_channel();
         (Some(a), Some(b))
     } else {
         (None, None)
     };
 
-    // Build control links, if enabled
-    let (mut c_d, mut c_e) = if cfg.config().control.is_some() {
-        build_all_control_links()
-    } else {
-        (HashMap::new(), HashMap::new())
-    };
+    // Always build control links — dashboard needs them even without external control server
+    let (mut c_d, mut c_e) = build_all_control_links();
 
     // Add remaining components
     let lmac = LmacBs::new(cfg.clone());
@@ -203,13 +202,89 @@ fn main() {
     let stack_cfg = load_config_from_toml(&args.config);
     let mut cfg = SharedConfig::from_parts(stack_cfg, None);
 
+    // If dashboard is enabled, set up log capture channel BEFORE logging initialises
+    let dashboard_log_rx = if cfg.config().dashboard.is_some() {
+        let (tx, rx) = crossbeam_channel::unbounded::<(String, String)>();
+        debug::set_dashboard_log_sender(tx);
+        Some(rx)
+    } else {
+        None
+    };
+
     let _log_guards = debug::setup_logging_default(cfg.config().debug_log.clone());
     let (mut router, tsource, cdispatchers) = build_bs_stack(&mut cfg);
 
     // Start Telemetry and Control threads, if enabled
+    // If dashboard is also enabled, tee the telemetry events to both.
     if let Some(telemetry_source) = tsource {
-        start_telemetry_worker(cfg.clone(), telemetry_source);
+        let has_telemetry_server = cfg.config().telemetry.is_some();
+        let has_dashboard = cfg.config().dashboard.is_some();
+
+        if has_dashboard {
+            let dash_cfg = cfg.config().dashboard.clone().unwrap();
+            let mut dashboard = DashboardServer::new(args.config.clone());
+
+            // Create a control link so dashboard can send commands to CMCE
+            let dash_cmd_tx = {
+                use tetra_core::tetra_entities::TetraEntity;
+                cdispatchers.get(&TetraEntity::Cmce).map(|d| d.clone_sender())
+            };
+
+            if let Some(tx) = dash_cmd_tx {
+                dashboard.set_cmd_sender(tx);
+            }
+
+            // start() must be called before Arc::new() because it takes &mut self
+            dashboard.start(&dash_cfg.bind, dash_cfg.port);
+            eprintln!(" -> Dashboard enabled on http://{}:{}", dash_cfg.bind, dash_cfg.port);
+
+            let dashboard = std::sync::Arc::new(dashboard);
+            let dash_clone = std::sync::Arc::clone(&dashboard);
+
+            // Forward log entries to dashboard
+            if let Some(log_rx) = dashboard_log_rx {
+                let dash_log = std::sync::Arc::clone(&dashboard);
+                thread::Builder::new().name("dashboard-log".into()).spawn(move || {
+                    while let Ok((level, msg)) = log_rx.recv() {
+                        // Filter out debug/trace noise from dashboard log tab
+                        if level == "DEBUG" || level == "TRACE" { continue; }
+                        // Filter out TDMA tick noise — thousands per second
+                        if msg.contains("tick dl") || msg.contains("tick ul") || msg.starts_with("--- tick") { continue; }
+                        dash_log.push_log(&level, msg);
+                    }
+                }).expect("failed to spawn dashboard-log thread");
+            }
+
+            if has_telemetry_server {
+                let cfg2 = cfg.clone();
+                let (tee_sink, tee_source) = telemetry_channel();
+                thread::Builder::new().name("telemetry-tee".into()).spawn(move || {
+                    loop {
+                        match telemetry_source.recv() {
+                            Some(event) => {
+                                dash_clone.handle_telemetry(event.clone());
+                                let _ = tee_sink.send(event);
+                            }
+                            None => break,
+                        }
+                    }
+                }).expect("failed to spawn telemetry-tee thread");
+                start_telemetry_worker(cfg2, tee_source);
+            } else {
+                thread::Builder::new().name("telemetry-dash".into()).spawn(move || {
+                    loop {
+                        match telemetry_source.recv() {
+                            Some(event) => dash_clone.handle_telemetry(event),
+                            None => break,
+                        }
+                    }
+                }).expect("failed to spawn telemetry-dash thread");
+            }
+        } else if has_telemetry_server {
+            start_telemetry_worker(cfg.clone(), telemetry_source);
+        }
     };
+
     if cfg.config().control.is_some() {
         start_control_worker(cfg.clone(), cdispatchers);
     };

@@ -1,6 +1,29 @@
 use super::*;
+use crate::net_telemetry::TelemetryEvent;
 
 impl CcBsSubentity {
+    pub fn tick_start_with_events(&mut self, queue: &mut MessageQueue, dltime: TdmaTime) -> Vec<TelemetryEvent> {
+        // Snapshot before tick so we can detect changes
+        let calls_before: std::collections::HashSet<u16> = self.active_calls.keys().copied().collect();
+        let ind_before: std::collections::HashSet<u16> = self.individual_calls.keys().copied().collect();
+
+        self.tick_start(queue, dltime);
+
+        // Emit events for ended calls
+        let mut events = Vec::new();
+        for id in calls_before.iter() {
+            if !self.active_calls.contains_key(id) {
+                events.push(TelemetryEvent::GroupCallEnded { call_id: *id, gssi: 0 });
+            }
+        }
+        for id in ind_before.iter() {
+            if !self.individual_calls.contains_key(id) {
+                events.push(TelemetryEvent::IndividualCallEnded { call_id: *id });
+            }
+        }
+        events
+    }
+
     pub fn tick_start(&mut self, queue: &mut MessageQueue, dltime: TdmaTime) {
         self.dltime = dltime;
 

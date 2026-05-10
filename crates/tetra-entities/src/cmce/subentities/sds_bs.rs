@@ -148,13 +148,30 @@ impl SdsBsSubentity {
             return false;
         }
 
-        // Send D-SDS-DATA downlink to the local MS. Schedule on next ts1 to ensure it gets sent on the MCCH
+        // SDS-TL Simple Text Message — format verificat din tetraflow-sds-bot:
+        //   Byte 0: 0x82  — Protocol Identifier (SDS-TL text messaging)
+        //   Byte 1: 0x04  — Message Type (Simple Text, cu TL-ACK request)
+        //   Byte 2: MR    — Message Reference (1..255, incrementat)
+        //   Byte 3: 0x01  — Encoding (ISO-8859-1 / ASCII)
+        //   Bytes 4+: text payload
+        static SDS_MR: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+        let mr = {
+            let v = SDS_MR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if v == 0 { SDS_MR.store(1, std::sync::atomic::Ordering::Relaxed); 1 } else { v }
+        };
+        let wrapped_payload: Vec<u8> = {
+            let mut v = vec![0x82u8, 0x04u8, mr, 0x01u8];
+            v.extend_from_slice(&payload);
+            v
+        };
+        let wrapped_len_bits = (wrapped_payload.len() * 8) as u16;
+
         self.send_d_sds_data(
             queue,
             source_ssi,
             dest_ssi,
             if dest_is_group { SsiType::Gssi } else { SsiType::Issi },
-            SdsUserData::Type4(len_bits, payload),
+            SdsUserData::Type4(wrapped_len_bits, wrapped_payload),
         );
 
         true
