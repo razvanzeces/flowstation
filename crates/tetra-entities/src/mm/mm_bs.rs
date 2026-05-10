@@ -255,6 +255,10 @@ impl MmBs {
                 || pdu.location_update_type == LocationUpdateType::ServiceRestorationRoamingLocationUpdating;
 
             if needs_cleanup {
+                // Emit Deaffiliate+Deregister so CMCE releases ghost calls and
+                // resets group_listeners. Immediately follow with Register so Brew
+                // doesn't see this as a disconnect — the terminal is still on RF,
+                // it just re-registered from scratch (Roaming = state reset on MS side).
                 let old_groups: Vec<u32> = self.client_mgr
                     .get_client_by_issi(issi)
                     .map(|c| c.groups.iter().copied().collect())
@@ -263,6 +267,8 @@ impl MmBs {
                     self.emit_subscriber_update(queue, issi, old_groups, BrewSubscriberAction::Deaffiliate);
                 }
                 self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
+                // Re-register immediately — terminal never went offline
+                self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
             }
             // Always reset the registration timer on any re-registration
             self.client_mgr.reset_registration_timer(issi);
@@ -413,11 +419,14 @@ impl MmBs {
         };
         queue.push_back(msg);
 
-        // For any new registration, send D-LOCATION-UPDATE-COMMAND to:
-        // 1. Request full group report (if radio didn't include groups)
-        // 2. Prompt the MS to send U-TEI-PROVIDE (Motorola radios respond with TEI on re-registration)
-        // No loop risk: on the second U-LOCATION-UPDATE-DEMAND, is_new=false so we don't send again.
-        if is_new {
+        // Send D-LOCATION-UPDATE-COMMAND only on genuine first attach (ItsiAttach or Demand),
+        // NOT on RoamingLocationUpdating. Motorola terminals (MTM800, MXP600) respond to
+        // D-LOCATION-UPDATE-COMMAND with another RoamingLocationUpdating instead of
+        // DemandLocationUpdating, which triggers needs_cleanup=true → Deregister → is_new=true
+        // again, creating an infinite registration loop.
+        let is_roaming = pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
+            || pdu.location_update_type == LocationUpdateType::ServiceRestorationRoamingLocationUpdating;
+        if is_new && !is_roaming {
             tracing::info!("Sending D-LOCATION UPDATE COMMAND to MS {} to prompt TEI and group report", issi);
             Self::send_d_location_update_command(queue, issi, handle);
         }
@@ -1006,21 +1015,22 @@ impl TetraEntityTrait for MmBs {
         let expired = self.client_mgr.collect_expired_registrations(interval_secs);
         for issi in expired {
             tracing::info!(
-                "MM: ISSI {} periodic registration expired ({}s) — sending reject to force re-registration",
+                "MM: ISSI {} periodic registration expired ({}s) — removing silently",
                 issi, interval_secs
             );
-            // Send D-LOCATION-UPDATE-REJECT so the terminal knows it's been
-            // deregistered and immediately initiates a new registration.
-            // Without this, the terminal stays silent until its own T351 fires.
-            // Cause: ExpiryOfTimer (17) per ETSI EN 300 392-2 Table 16.71
-            Self::send_d_location_update_reject_cause(
-                queue,
-                issi,
-                0,
-                LocationUpdateType::PeriodicLocationUpdating,
-                None,
-                RejectCause::ExpiryOfTimer,
-            );
+            // Do NOT send D-LOCATION-UPDATE-REJECT here.
+            //
+            // Motorola/Sepura terminals that receive an unsolicited REJECT(ExpiryOfTimer)
+            // (i.e. when they have NOT sent a periodic update themselves) enter a waiting
+            // state and do NOT re-attach — leaving the BS with zero registered terminals.
+            //
+            // Correct behaviour per ETSI §16.9: BS silently removes the terminal.
+            // The terminal's own T351 timer will eventually fire and it will send
+            // U-LOCATION-UPDATING-DEMAND (PeriodicLocationUpdating), which BS accepts
+            // normally as a re-registration.
+            //
+            // If the terminal is powered off or out of coverage it won't re-register
+            // either way — so the reject buys nothing and breaks everything.
             let groups: Vec<u32> = self.client_mgr
                 .get_client_by_issi(issi)
                 .map(|c| c.groups.iter().copied().collect())

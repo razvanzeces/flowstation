@@ -250,7 +250,7 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         timezone: ci.timezone,
         neighbor_cells_ca: ci.neighbor_cells_ca,
         hangtime_secs: ci.hangtime_secs.unwrap_or(5).clamp(0, 300),
-        call_timeout_secs: ci.call_timeout_secs.unwrap_or(120).clamp(30, 300),
+        call_timeout_secs: { let v = ci.call_timeout_secs.unwrap_or(120); if v == 0 { 0 } else { v.clamp(30, 86400) } },
         ul_inactivity_secs: ci.ul_inactivity_secs.unwrap_or(3).clamp(1, 30),
         periodic_registration_secs: {
             let v = ci.periodic_registration_secs.unwrap_or(3600);

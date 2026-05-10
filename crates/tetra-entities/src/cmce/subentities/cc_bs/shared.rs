@@ -708,16 +708,21 @@ impl CcBsSubentity {
     pub(super) fn config_call_timeout(&self) -> CallTimeout {
         let secs = self.config.config().cell.call_timeout_secs;
         match secs {
-            0..=37  => CallTimeout::T30s,
-            38..=52 => CallTimeout::T45s,
-            53..=90 => CallTimeout::T60s,
-            91..=150 => CallTimeout::T2m,
-            151..=210 => CallTimeout::T3m,
-            211..=270 => CallTimeout::T4m,
-            271..=330 => CallTimeout::T5m,
-            331..=420 => CallTimeout::T6m,
-            421..=540 => CallTimeout::T8m,
-            _          => CallTimeout::T5m,
+            0           => CallTimeout::Infinite,  // 0 = no limit
+            1..=37      => CallTimeout::T30s,
+            38..=52     => CallTimeout::T45s,
+            53..=90     => CallTimeout::T60s,
+            91..=150    => CallTimeout::T2m,
+            151..=210   => CallTimeout::T3m,
+            211..=270   => CallTimeout::T4m,
+            271..=390   => CallTimeout::T5m,
+            391..=540   => CallTimeout::T6m,
+            541..=720   => CallTimeout::T8m,
+            721..=900   => CallTimeout::T10m,
+            901..=1080  => CallTimeout::T12m,
+            1081..=1350 => CallTimeout::T15m,
+            1351..=1800 => CallTimeout::T20m,
+            _           => CallTimeout::T30m,
         }
     }
 
