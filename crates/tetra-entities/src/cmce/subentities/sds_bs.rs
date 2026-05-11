@@ -68,6 +68,12 @@ impl SdsBsSubentity {
             pdu.user_defined_data.type_identifier()
         );
 
+        // ACKs/replies addressed to the dashboard ISSI (9999) are consumed locally.
+        if dest_ssi == 9999 {
+            tracing::debug!("SDS: absorbing message to dashboard ISSI 9999 from {}", source_ssi);
+            return;
+        }
+
         // Route: local delivery (ISSI or GSSI), Brew forward, or drop
         let is_local_issi = self.config.state_read().subscribers.is_registered(dest_ssi);
         let is_local_group = !is_local_issi && self.config.state_read().subscribers.has_group_members(dest_ssi);

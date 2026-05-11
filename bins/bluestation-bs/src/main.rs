@@ -162,7 +162,10 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
     // Register Brew entity if enabled
     if let Some(ref brew_cfg) = cfg.config().brew {
         let transport = new_websocket_transport(brew_cfg);
-        let brew_entity = BrewEntity::new(cfg.clone(), transport);
+        let mut brew_entity = BrewEntity::new(cfg.clone(), transport);
+        if let Some(ref sink) = tsink {
+            brew_entity.set_telemetry_sink(sink.clone());
+        }
         router.register_entity(Box::new(brew_entity));
         eprintln!(" -> Brew/TetraPack integration enabled");
     }

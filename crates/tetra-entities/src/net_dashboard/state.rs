@@ -41,6 +41,7 @@ pub struct DashboardStateInner {
     pub calls: HashMap<u16, CallEntry>,
     pub log_ring: std::collections::VecDeque<LogEntry>,
     pub config_path: String,
+    pub brew_online: bool,
 }
 
 #[derive(Debug)]
@@ -74,6 +75,7 @@ impl DashboardStateInner {
             calls: HashMap::new(),
             log_ring: std::collections::VecDeque::with_capacity(500),
             config_path,
+            brew_online: false,
         }
     }
 

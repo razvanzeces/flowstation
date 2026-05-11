@@ -64,6 +64,8 @@ mod ingress;
 mod network;
 mod shared;
 mod timers;
+mod echo;
+use echo::EchoSession;
 
 use call::{
     ActiveCall, CallOrigin, GroupCallState, IndividualCall, IndividualCallState,
@@ -99,4 +101,6 @@ pub struct CcBsSubentity {
     group_listeners: HashMap<u32, usize>,
     /// Telemetry sink for call events (optional)
     telemetry: Option<crate::net_telemetry::channel::TelemetrySink>,
+    /// Active echo service session (ISSI 999), if any
+    echo_session: Option<EchoSession>,
 }

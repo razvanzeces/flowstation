@@ -158,6 +158,14 @@ impl TetraEntityTrait for CmceBs {
                 SapMsgInner::CmceSdsData(_) => { self.sds.rx_sds_from_brew(queue, message); }
                 _ => { tracing::warn!("CMCE: unexpected control message: {:?}, ignoring", message.msg); }
             },
+            Sap::TmdSap => {
+                // UL voice frame — feed to echo session if active, and forward to Brew for FDX calls
+                if let SapMsgInner::TmdCircuitDataInd(ref prim) = message.msg {
+                    self.cc.handle_echo_ul_frame(queue, prim.ts, prim.data.clone());
+                    // Forward UL audio to Brew so TetraPack receives the terminal's voice
+                    queue.push_back(message);
+                }
+            }
             _ => { tracing::warn!("CMCE: unexpected SAP {:?}, ignoring", message.sap); }
         }
     }

@@ -12,11 +12,32 @@ impl CcBsSubentity {
             subscriber_groups: HashMap::new(),
             group_listeners: HashMap::new(),
             telemetry: None,
+            echo_session: None,
         }
     }
 
     pub fn set_telemetry(&mut self, sink: crate::net_telemetry::channel::TelemetrySink) {
         self.telemetry = Some(sink);
+    }
+
+    /// Called when an UL voice frame arrives on TmdSap.
+    /// If an echo session owns this timeslot, loopback the frame as DL.
+    pub fn handle_echo_ul_frame(&mut self, queue: &mut MessageQueue, ts: u8, data: Vec<u8>) {
+        let Some(session) = self.echo_session.as_mut() else { return };
+        if session.ts != ts { return }
+        if let Some(echo_data) = session.push_ul_frame(data) {
+            queue.push_back(crate::cmce::subentities::cc_bs::echo::EchoSession::make_dl_msg(ts, echo_data));
+        }
+    }
+
+    /// Release echo session if it owns `call_id`.
+    pub fn release_echo_session_if_matches(&mut self, call_id: u16) {
+        if let Some(ref s) = self.echo_session {
+            if s.call_id == call_id {
+                tracing::info!("CMCE: echo service session released (call_id={})", call_id);
+                self.echo_session = None;
+            }
+        }
     }
 
     pub(super) fn emit(&self, event: crate::net_telemetry::TelemetryEvent) {
@@ -440,11 +461,14 @@ impl CcBsSubentity {
             return String::new();
         }
 
-        let nibble_count = (field.len / 4).min(16); // max 64 bits = 16 nibbles
+        let nibble_count = (field.len / 4).min(16) as usize; // max 64 bits = 16 nibbles
+        let total_bits = nibble_count * 4; // computed once, outside the loop
         let mut digits = String::with_capacity(nibble_count);
         for i in 0..nibble_count {
-            // Extract nibble from packed u64 (big-endian nibble order)
-            let shift = 60 - (i * 4);
+            // data stores the dialled number BCD-packed with the most-significant
+            // nibble at the top of the used bits (not at bit 60 of the u64).
+            // E.g. "600" with len=12 → data=0x0600, nibbles at shifts 8, 4, 0.
+            let shift = total_bits - 4 - (i * 4);
             let nibble = ((field.data >> shift) & 0x0f) as u8;
             match nibble {
                 0..=9 => digits.push(char::from(b'0' + nibble)),
@@ -512,11 +536,27 @@ impl CcBsSubentity {
     }
 
     pub(super) fn build_network_circuit_call_from_u_setup(pdu: &USetup, source_issi: u32) -> NetworkCircuitCall {
-        let number = pdu
-            .external_subscriber_number
-            .as_ref()
-            .map(Self::decode_external_subscriber_number)
-            .unwrap_or_default();
+        // Prefer called_party_ssi as the number when it's a short service number (< 1_000_000)
+        // and external_subscriber_number is present — terminals sometimes encode service codes
+        // like 600 as SSI=600 + external_number='000' (BCD artifact). We must send '600' to
+        // TetraPack, not '000'.
+        let number = if let Some(ssi) = pdu.called_party_ssi {
+            let ssi_u32 = ssi as u32;
+            if ssi_u32 > 0 && ssi_u32 < 1_000_000 && pdu.external_subscriber_number.is_some() {
+                // Use the SSI value as the dialled number string
+                ssi_u32.to_string()
+            } else {
+                pdu.external_subscriber_number
+                    .as_ref()
+                    .map(Self::decode_external_subscriber_number)
+                    .unwrap_or_default()
+            }
+        } else {
+            pdu.external_subscriber_number
+                .as_ref()
+                .map(Self::decode_external_subscriber_number)
+                .unwrap_or_default()
+        };
 
         NetworkCircuitCall {
             source_issi,
@@ -946,6 +986,8 @@ impl CcBsSubentity {
         }
         // Notify dashboard immediately
         self.emit(crate::net_telemetry::TelemetryEvent::IndividualCallEnded { call_id });
+        // Clean up echo session if this was the echo call
+        self.release_echo_session_if_matches(call_id);
     }
 
     pub(super) fn release_timeslot(&mut self, ts: u8) {

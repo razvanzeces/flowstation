@@ -138,6 +138,9 @@ impl DashboardServer {
                     s.calls.remove(call_id);
                     s.push_log("INFO", format!("P2P call {} ended", call_id));
                 }
+                TelemetryEvent::BrewConnected { connected } => {
+                    s.brew_online = *connected;
+                }
             }
         }
         if let Some(json) = msg {
@@ -192,6 +195,8 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"individual","caller_issi":calling_issi,"called_issi":called_issi,"simplex":simplex}),
         TelemetryEvent::IndividualCallEnded { call_id } =>
             serde_json::json!({"type":"call_ended","call_id":call_id}),
+        TelemetryEvent::BrewConnected { connected } =>
+            serde_json::json!({"type":"brew_status","connected":connected}),
     };
     serde_json::to_string(&v).ok()
 }
@@ -276,8 +281,10 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
         let calls = s.snapshot_calls();
         let logs: Vec<_> = s.log_ring.iter().cloned().collect();
         drop(s);
+        let brew_online = state.read().unwrap().brew_online;
         if let Ok(json) = serde_json::to_string(&serde_json::json!({
-            "type": "snapshot", "ms": ms, "calls": calls, "log": logs
+            "type": "snapshot", "ms": ms, "calls": calls, "log": logs,
+            "brew_online": brew_online
         })) {
             let _ = ws.send(Message::Text(json));
         }

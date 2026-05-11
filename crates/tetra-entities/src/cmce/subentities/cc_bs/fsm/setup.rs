@@ -233,6 +233,12 @@ impl CcBsSubentity {
 
         let called_addr = TetraAddress::new(called_ssi, SsiType::Issi);
 
+        // ── Echo service (ISSI 999) ──────────────────────────────────────────
+        if called_ssi == crate::cmce::subentities::cc_bs::echo::ECHO_ISSI {
+            self.fsm_on_u_setup_echo(queue, message, pdu, calling_party);
+            return;
+        }
+
         // PBX/phone calls (no concrete local ISSI) always go through Brew.
         if called_ssi == 0 {
             self.fsm_on_u_setup_p2p_over_brew(queue, message, pdu, calling_party, called_addr);
@@ -442,6 +448,20 @@ impl CcBsSubentity {
             };
         let mut network_call = Self::build_network_circuit_call_from_u_setup(pdu, calling_party.ssi);
 
+        // Short service numbers (< 1_000_000) must be sent to TetraPack
+        // with destination=0 and the number as a string.
+        // Keep communication=P2p(0), mode=TchS(0), duplex=0 — this combination
+        // resulted in SETUP_ACCEPT in previous tests.
+        if network_call.destination > 0 && network_call.destination < 1_000_000 && network_call.number.is_empty() {
+            tracing::debug!(
+                "CMCE: converting short service SSI {} to number string for TetraPack",
+                network_call.destination
+            );
+            network_call.number = network_call.destination.to_string();
+            network_call.destination = 0;
+            network_call.duplex = 0;
+        }
+
         if !net_brew::is_active(&self.config) {
             tracing::info!(
                 "CMCE: rejecting U-SETUP P2P from ISSI {} (Brew disabled, called_ssi={})",
@@ -498,13 +518,27 @@ impl CcBsSubentity {
         }
 
         if has_external_called_party && !destination_routable && network_call.destination != 0 {
-            tracing::debug!(
-                "CMCE: overriding non-routable destination SSI {} with 0 for external-number call src={} number='{}'",
-                network_call.destination,
-                calling_party.ssi,
-                network_call.number
-            );
-            network_call.destination = 0;
+            // Only override if the number field is non-empty and destination is not a
+            // short service number (< 1_000_000). Short numbers like 600, 000 etc. are
+            // service codes on TetraPack and must be forwarded as-is via the number field.
+            let number_is_service_code = !network_call.number.is_empty()
+                && network_call.number.chars().all(|c| c.is_ascii_digit());
+            if !number_is_service_code {
+                tracing::debug!(
+                    "CMCE: overriding non-routable destination SSI {} with 0 for external-number call src={} number='{}'",
+                    network_call.destination,
+                    calling_party.ssi,
+                    network_call.number
+                );
+                network_call.destination = 0;
+            } else {
+                tracing::debug!(
+                    "CMCE: keeping destination SSI {} for service-code call src={} number='{}'",
+                    network_call.destination,
+                    calling_party.ssi,
+                    network_call.number
+                );
+            }
         }
 
         // Allocate one bearer for the local MS.
@@ -602,4 +636,166 @@ impl CcBsSubentity {
             }
         }
     }
+    /// Handle U-SETUP toward ISSI 999 — local echo service.
+    /// Answers immediately with DConnect (full-duplex), no Brew involved.
+    pub(in crate::cmce::subentities::cc_bs) fn fsm_on_u_setup_echo(
+        &mut self,
+        queue: &mut MessageQueue,
+        message: &SapMsg,
+        pdu: &USetup,
+        calling_party: TetraAddress,
+    ) {
+        use tetra_saps::control::call_control::CircuitDlMediaSource;
+
+        let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
+            tracing::error!("BUG: unexpected message in fsm_on_u_setup_echo"); return;
+        };
+
+        // Reject if another echo call is already active
+        if self.echo_session.is_some() {
+            tracing::info!("CMCE: echo service busy, rejecting call from ISSI {}", calling_party.ssi);
+            let call_id = self.circuits.get_next_call_id();
+            let sdu = Self::build_d_release(call_id, DisconnectCause::CalledPartyBusy);
+            let msg = Self::build_sapmsg_direct(sdu, calling_party, prim.handle, prim.link_id, prim.endpoint_id);
+            queue.push_back(msg);
+            return;
+        }
+
+        // Allocate a single full-duplex circuit
+        let circuit = {
+            let mut state = self.config.state_write();
+            match self.circuits.allocate_circuit_with_allocator(
+                Direction::Both,
+                pdu.basic_service_information.communication_type,
+                &mut state.timeslot_alloc,
+                TimeslotOwner::Cmce,
+            ) {
+                Ok(c) => c.clone(),
+                Err(e) => {
+                    tracing::warn!("CMCE: echo service failed to allocate circuit: {:?}", e);
+                    let call_id = self.circuits.get_next_call_id();
+                    let sdu = Self::build_d_release(call_id, DisconnectCause::CongestionInInfrastructure);
+                    let msg = Self::build_sapmsg_direct(sdu, calling_party, prim.handle, prim.link_id, prim.endpoint_id);
+                    queue.push_back(msg);
+                    return;
+                }
+            }
+        };
+
+        let call_id = circuit.call_id;
+        let ts = circuit.ts;
+        let usage = circuit.usage;
+
+        tracing::info!(
+            "CMCE: echo service answering call_id={} src={} ts={}",
+            call_id, calling_party.ssi, ts
+        );
+
+        // Open UMAC circuit — LocalLoopback so UL frames are echoed back as DL
+        CcBsSubentity::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::LocalLoopback);
+
+        // D-CALL-PROCEEDING
+        self.send_d_call_proceeding(queue, message, pdu, call_id, CallTimeoutSetupPhase::T10s, pdu.hook_method_selection);
+
+        // D-CONNECT — grant transmission immediately (full duplex, calling party talks)
+        {
+            let d_connect = DConnect {
+                call_identifier: call_id,
+                call_time_out: self.config_call_timeout(),
+                hook_method_selection: pdu.hook_method_selection,
+                simplex_duplex_selection: pdu.simplex_duplex_selection,
+                transmission_grant: TransmissionGrant::Granted,
+                transmission_request_permission: false,
+                call_ownership: true,
+                call_priority: None,
+                basic_service_information: None,
+                temporary_address: None,
+                notification_indicator: None,
+                facility: None,
+                proprietary: None,
+            };
+            tracing::info!("CMCE: echo service -> {:?}", d_connect);
+            let mut connect_sdu = BitBuffer::new_autoexpand(30);
+            d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
+            connect_sdu.seek(0);
+            // Include chan_alloc so the terminal knows to transmit on the assigned timeslot.
+            let mut timeslots = [false; 4];
+            timeslots[ts as usize - 1] = true;
+            let connect_msg = SapMsg {
+                sap: Sap::LcmcSap,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Mle,
+                msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                    sdu: connect_sdu,
+                    handle: prim.handle,
+                    endpoint_id: prim.endpoint_id,
+                    link_id: prim.link_id,
+                    layer2service: Layer2Service::Unacknowledged,
+                    pdu_prio: 0,
+                    layer2_qos: 0,
+                    stealing_permission: false,
+                    stealing_repeats_flag: false,
+                    chan_alloc: Some(CmceChanAllocReq {
+                        usage: Some(usage),
+                        alloc_type: ChanAllocType::Replace,
+                        carrier: None,
+                        timeslots,
+                        ul_dl_assigned: UlDlAssignment::Both,
+                    }),
+                    main_address: calling_party,
+                    tx_reporter: None,
+                }),
+            };
+            queue.push_back(connect_msg);
+        }
+
+        // Store echo session — UL frames will be echoed back as DL
+        self.echo_session = Some(crate::cmce::subentities::cc_bs::echo::EchoSession::new(ts, call_id));
+
+        // Register individual call directly (bypass create FSM which only accepts Pending states)
+        self.individual_calls.insert(call_id, IndividualCall {
+            calling_addr: calling_party,
+            called_addr: TetraAddress::new(
+                crate::cmce::subentities::cc_bs::echo::ECHO_ISSI,
+                tetra_core::SsiType::Issi
+            ),
+            calling_handle: prim.handle,
+            calling_link_id: prim.link_id,
+            calling_endpoint_id: prim.endpoint_id,
+            called_handle: None,
+            called_link_id: None,
+            called_endpoint_id: None,
+            calling_ts: ts,
+            called_ts: ts,
+            calling_usage: usage,
+            called_usage: usage,
+            simplex_duplex: pdu.simplex_duplex_selection,
+            state: crate::cmce::subentities::cc_bs::call::IndividualCallState::Active,
+            setup_timer_started: None,
+            setup_timeout: None,
+            active_timer_started: Some(self.dltime),
+            call_timeout: self.config_call_timeout(),
+            called_over_brew: false,
+            calling_over_brew: false,
+            brew_uuid: None,
+            network_call: None,
+            connect_request_sent: false,
+            floor_holder: Some(calling_party.ssi),
+        });
+
+        // Notify UMAC that the floor is granted — this resets the UL inactivity timer
+        // so the circuit stays alive while the caller is talking.
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                call_id,
+                source_issi: calling_party.ssi,
+                dest_gssi: calling_party.ssi,
+                ts,
+            }),
+        });
+    }
+
 }

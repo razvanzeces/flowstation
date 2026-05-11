@@ -323,6 +323,29 @@ impl CcBsSubentity {
             .map(|(id, _)| *id);
 
         let Some(call_id) = call_entry else {
+            // Check if an echo session owns this timeslot — if so, reset the UL inactivity
+            // timer by emitting FloorGranted so UMAC keeps the circuit alive.
+            if let Some(ref session) = self.echo_session {
+                if session.ts == ts {
+                    tracing::debug!("UL inactivity timeout on echo ts={} — refreshing FloorGranted", ts);
+                    let call_id = session.call_id;
+                    let fake_issi = 0u32; // echo has no real floor holder while idle
+                    queue.push_back(tetra_saps::SapMsg {
+                        sap: tetra_core::Sap::Control,
+                        src: tetra_core::tetra_entities::TetraEntity::Cmce,
+                        dest: tetra_core::tetra_entities::TetraEntity::Umac,
+                        msg: tetra_saps::SapMsgInner::CmceCallControl(
+                            tetra_saps::control::call_control::CallControl::FloorGranted {
+                                call_id,
+                                source_issi: fake_issi,
+                                dest_gssi: fake_issi,
+                                ts,
+                            }
+                        ),
+                    });
+                    return;
+                }
+            }
             tracing::debug!("UL inactivity timeout on ts={} but no active transmitting call found", ts);
             return;
         };

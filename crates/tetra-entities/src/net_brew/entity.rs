@@ -16,6 +16,7 @@ use crate::net_brew::components::jitter_buffer::{JitterFrame, VoiceJitterBuffer}
 use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::{CfgBrew, SharedConfig};
+use crate::net_telemetry::{TelemetryEvent, channel::TelemetrySink};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::{SapMsg, SapMsgInner, control::call_control::{CallControl, NetworkCircuitCall}, tmd::TmdCircuitDataReq};
@@ -128,6 +129,8 @@ pub struct BrewEntity {
 
     /// Whether the worker is connected
     connected: bool,
+    /// Optional telemetry sink for emitting brew status events
+    telemetry_sink: Option<TelemetrySink>,
 
     /// Worker thread handle for graceful shutdown
     worker_handle: Option<thread::JoinHandle<()>>,
@@ -172,8 +175,14 @@ impl BrewEntity {
             ul_forwarded: HashMap::new(),
             subscriber_groups: HashMap::new(),
             connected: false,
+            telemetry_sink: None,
             worker_handle: Some(handle),
         }
+    }
+
+    /// Set telemetry sink for emitting brew status events.
+    pub fn set_telemetry_sink(&mut self, sink: TelemetrySink) {
+        self.telemetry_sink = Some(sink);
     }
 
     /// Process all pending events from the worker thread
@@ -233,6 +242,56 @@ impl BrewEntity {
                 }
                 BrewEvent::SubscriberEvent { msg_type, issi, groups } => {
                     tracing::debug!("BrewEntity: subscriber event type={} issi={} groups={:?}", msg_type, issi, groups);
+                    // External subscriber (e.g. SvxLink gateway) affiliated/deaffiliated on Brew server.
+                    // Notify CMCE so it updates group_listeners — without this, has_listener()
+                    // returns false for GSSIs where only external subscribers are present,
+                    // causing BS to reject U-SETUP with "no listeners".
+                    match msg_type {
+                        crate::net_brew::protocol::BREW_SUBSCRIBER_AFFILIATE => {
+                            if !groups.is_empty() {
+                                tracing::info!("BrewEntity: external subscriber issi={} → AFFILIATE groups={:?}", issi, groups);
+                                queue.push_back(SapMsg {
+                                    sap: tetra_core::Sap::Control,
+                                    src: TetraEntity::Brew,
+                                    dest: TetraEntity::Cmce,
+                                    msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
+                                        issi,
+                                        groups: groups.clone(),
+                                        action: BrewSubscriberAction::Affiliate,
+                                    }),
+                                });
+                            }
+                        }
+                        crate::net_brew::protocol::BREW_SUBSCRIBER_DEAFFILIATE => {
+                            if !groups.is_empty() {
+                                tracing::info!("BrewEntity: external subscriber issi={} → DEAFFILIATE groups={:?}", issi, groups);
+                                queue.push_back(SapMsg {
+                                    sap: tetra_core::Sap::Control,
+                                    src: TetraEntity::Brew,
+                                    dest: TetraEntity::Cmce,
+                                    msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
+                                        issi,
+                                        groups: groups.clone(),
+                                        action: BrewSubscriberAction::Deaffiliate,
+                                    }),
+                                });
+                            }
+                        }
+                        crate::net_brew::protocol::BREW_SUBSCRIBER_DEREGISTER => {
+                            tracing::info!("BrewEntity: external subscriber issi={} → DEREGISTER", issi);
+                            queue.push_back(SapMsg {
+                                sap: tetra_core::Sap::Control,
+                                src: TetraEntity::Brew,
+                                dest: TetraEntity::Cmce,
+                                msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
+                                    issi,
+                                    groups: Vec::new(),
+                                    action: BrewSubscriberAction::Deregister,
+                                }),
+                            });
+                        }
+                        _ => {}
+                    }
                 }
                 BrewEvent::ServerError { error_type, data } => {
                     tracing::error!("BrewEntity: server error type={} data={} bytes", error_type, data.len());
@@ -452,10 +511,18 @@ impl BrewEntity {
 
     fn set_network_connected(&mut self, connected: bool) {
         self.connected = connected;
-        let mut state = self.config.state_write();
-        if state.network_connected != connected {
-            state.network_connected = connected;
-            tracing::info!("BrewEntity: backhaul {}", if connected { "CONNECTED" } else { "DISCONNECTED" });
+        let changed = {
+            let mut state = self.config.state_write();
+            if state.network_connected != connected {
+                state.network_connected = connected;
+                tracing::info!("BrewEntity: backhaul {}", if connected { "CONNECTED" } else { "DISCONNECTED" });
+                true
+            } else { false }
+        };
+        if changed {
+            if let Some(ref sink) = self.telemetry_sink {
+                let _ = sink.send(TelemetryEvent::BrewConnected { connected });
+            }
         }
     }
 

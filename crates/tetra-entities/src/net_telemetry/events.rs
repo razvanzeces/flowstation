@@ -37,4 +37,6 @@ pub enum TelemetryEvent {
     IndividualCallEnded { call_id: u16 },
     /// Energy saving mode updated for MS (0=StayAlive, 1=Eg1..7=Eg7)
     MsEnergySaving { issi: u32, mode: u8 },
+    /// Brew (TetraPack) backhaul connection status changed
+    BrewConnected { connected: bool },
 }
