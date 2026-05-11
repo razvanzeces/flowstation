@@ -86,10 +86,19 @@ impl DashboardServer {
                     s.push_log("INFO", format!("MS {} deregistered", issi));
                 }
                 TelemetryEvent::MsGroupAttach { issi, gssis } => {
-                    if let Some(e) = s.ms_map.get_mut(issi) { e.groups = gssis.clone(); }
+                    if let Some(e) = s.ms_map.get_mut(issi) {
+                        for g in gssis { if !e.groups.contains(g) { e.groups.push(*g); } }
+                    }
                 }
-                TelemetryEvent::MsGroupDetach { issi, gssis: _ } => {
-                    if let Some(e) = s.ms_map.get_mut(issi) { e.groups.clear(); }
+                TelemetryEvent::MsGroupsSnapshot { issi, gssis } => {
+                    if let Some(e) = s.ms_map.get_mut(issi) {
+                        e.groups = gssis.clone();
+                    }
+                }
+                TelemetryEvent::MsGroupDetach { issi, gssis } => {
+                    if let Some(e) = s.ms_map.get_mut(issi) {
+                        e.groups.retain(|g| !gssis.contains(g));
+                    }
                 }
                 TelemetryEvent::MsRssi { issi, rssi_dbfs } => {
                     if let Some(e) = s.ms_map.get_mut(issi) {
@@ -166,7 +175,9 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
         TelemetryEvent::MsGroupAttach { issi, gssis } =>
             serde_json::json!({"type":"ms_groups","issi":issi,"groups":gssis}),
         TelemetryEvent::MsGroupDetach { issi, gssis } =>
-            serde_json::json!({"type":"ms_groups","issi":issi,"groups":gssis}),
+            serde_json::json!({"type":"ms_groups_detach","issi":issi,"groups":gssis}),
+        TelemetryEvent::MsGroupsSnapshot { issi, gssis } =>
+            serde_json::json!({"type":"ms_groups_all","issi":issi,"groups":gssis}),
         TelemetryEvent::MsRssi { issi, rssi_dbfs } =>
             serde_json::json!({"type":"ms_rssi","issi":issi,"rssi_dbfs":rssi_dbfs}),
         TelemetryEvent::MsEnergySaving { issi, mode } =>

@@ -48,13 +48,18 @@ pub fn is_brew_gssi_routable(config: &SharedConfig, ssi: u32) -> bool {
 }
 
 /// Determine if a given ISSI should be sent to the Brew server.
-/// On TetraPack, ISSIs must be exactly 7 digits (1_000_000..=9_999_999). Other servers allow all ISSIs.
+/// On TetraPack, subscriber ISSIs must be 7 digits (1_000_000..=9_999_999).
+/// Special service ISSIs (e.g. 600 echo, short numbers) are always forwarded to Brew —
+/// TetraPack Core handles them internally; blocking them here causes "Service Denied".
 pub fn is_brew_issi_routable(config: &SharedConfig, issi: u32) -> bool {
     if config.config().brew.is_none() {
         return false;
     }
     if is_tetrapack(config) {
-        issi >= 1_000_000 && issi <= 9_999_999
+        // 7-digit subscriber ISSIs are always routable.
+        // Short ISSIs (< 1_000_000) are service numbers handled by TetraPack Core —
+        // let them through so the core can respond (echo test 600, etc.)
+        issi >= 1_000_000 && issi <= 9_999_999 || issi < 1_000_000
     } else {
         true
     }

@@ -98,6 +98,10 @@ pub struct MmClientMgr {
 }
 
 impl MmClientMgr {
+    pub fn telemetry_sink(&self) -> Option<&TelemetrySink> {
+        self.telemetry_sink.as_ref()
+    }
+
     pub fn new(telemetry_sink: Option<TelemetrySink>) -> Self {
         MmClientMgr {
             clients: HashMap::new(),

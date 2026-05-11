@@ -797,6 +797,17 @@ impl MmBs {
             self.emit_subscriber_update(queue, issi, deaff_groups, BrewSubscriberAction::Deaffiliate);
         }
 
+        // Emit a single snapshot of all current groups so the dashboard always has
+        // the full list (not just incremental add/remove events).
+        let _sink = self.client_mgr.telemetry_sink().cloned();
+        let all_groups: Vec<u32> = self.client_mgr
+            .get_client_by_issi(issi)
+            .map(|c| c.groups.iter().copied().collect())
+            .unwrap_or_default();
+        if let Some(sink) = _sink {
+            sink.send(crate::net_telemetry::TelemetryEvent::MsGroupsSnapshot { issi, gssis: all_groups });
+        }
+
         accepted_groups
     }
 

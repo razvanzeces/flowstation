@@ -19,6 +19,8 @@ pub enum TelemetryEvent {
     MsDeregistration { issi: u32 },
     /// MS affiliated to groups
     MsGroupAttach { issi: u32, gssis: Vec<u32> },
+    /// Full snapshot of all currently attached groups — emitted after any attach/detach
+    MsGroupsSnapshot { issi: u32, gssis: Vec<u32> },
     /// MS detached from groups
     MsGroupDetach { issi: u32, gssis: Vec<u32> },
     /// RSSI measurement for a known MS (dBFS)

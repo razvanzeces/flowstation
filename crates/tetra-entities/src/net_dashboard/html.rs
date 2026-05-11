@@ -595,9 +595,15 @@ function handleMsg(msg){
       state.ms={};state.calls={};
       (msg.ms||[]).forEach(m=>{state.ms[m.issi]={...m,_last_seen_ts:Date.now()-(m.last_seen_secs_ago||0)*1000,energy_saving_mode:m.energy_saving_mode||0};});
       (msg.calls||[]).forEach(c=>{state.calls[c.call_id]={...c,started_at:Date.now()-(c.started_secs_ago||0)*1000};});
+      // Re-populate log from server ring buffer on reconnect
+      if(msg.log&&msg.log.length){
+        document.getElementById('log-container').innerHTML='';
+        msg.log.forEach(e=>appendLog(e));
+      }
       renderAll();break;
     case 'ms_registered':
-      state.ms[msg.issi]={issi:msg.issi,groups:[],rssi_dbfs:null};
+      // Preserve existing state (groups/rssi/esm) if already known — T351 re-register
+      state.ms[msg.issi]=Object.assign({issi:msg.issi,groups:[],rssi_dbfs:null,energy_saving_mode:0},state.ms[msg.issi]||{},{issi:msg.issi,_last_seen_ts:Date.now()});
       renderStations();break;
     case 'ms_deregistered':
       delete state.ms[msg.issi];renderStations();break;
@@ -605,7 +611,22 @@ function handleMsg(msg){
       if(state.ms[msg.issi]){state.ms[msg.issi].rssi_dbfs=msg.rssi_dbfs;state.ms[msg.issi]._last_seen_ts=Date.now();}
       renderStations();break;
     case 'ms_groups':
-      if(state.ms[msg.issi])state.ms[msg.issi].groups=msg.groups;
+      if(state.ms[msg.issi]){
+        // Merge incoming groups — server emits attach/detach one at a time
+        const cur=new Set(state.ms[msg.issi].groups||[]);
+        (msg.groups||[]).forEach(g=>cur.add(g));
+        state.ms[msg.issi].groups=[...cur];
+      }
+      renderStations();break;
+    case 'ms_groups_detach':
+      if(state.ms[msg.issi]){
+        const rem=new Set(msg.groups||[]);
+        state.ms[msg.issi].groups=(state.ms[msg.issi].groups||[]).filter(g=>!rem.has(g));
+      }
+      renderStations();break;
+    case 'ms_groups_all':
+      // Full replace — emitted after all attach/detach processed, authoritative list
+      if(state.ms[msg.issi]) state.ms[msg.issi].groups=msg.groups||[];
       renderStations();break;
     case 'call_started':
       state.calls[msg.call_id]={...msg,started_at:Date.now()};renderCalls();break;
@@ -648,7 +669,15 @@ function renderStations(){
   if(!ms.length){tb.innerHTML=`<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📡</div><div class="empty-text">${t('no_terminals')}</div></div></td></tr>`;return;}
   tb.innerHTML=ms.sort((a,b)=>a.issi-b.issi).map(m=>{
     const r=m.rssi_dbfs,rL=r!=null?`${r.toFixed(1)} dBFS`:'—',pct=rssiPct(r),col=rssiColor(r);
-    const grps=(m.groups||[]).map(g=>`<span class="badge badge-blue">${g}</span>`).join(' ')||'<span class="badge badge-dim">—</span>';
+    let grps;
+    if((m.groups||[]).length>1){
+      const gList=(m.groups||[]).map(g=>`<span class="badge badge-dim" style="font-size:9px">${g}</span>`).join(' ');
+      grps=`<span class="badge" style="background:rgba(255,165,0,0.15);color:#ffaa00;border-color:rgba(255,165,0,0.4);font-weight:700;letter-spacing:0.5px;margin-right:4px">⚡ SCANNING</span>${gList}`;
+    } else if((m.groups||[]).length===1){
+      grps=`<span class="badge badge-blue">${m.groups[0]}</span>`;
+    } else {
+      grps='<span class="badge badge-dim">—</span>';
+    }
     const ls = m._last_seen_ts ? Math.floor((Date.now() - m._last_seen_ts)/1000) : m.last_seen_secs_ago;
     return `<tr>
       <td><code>${m.issi}</code></td><td>${grps}</td>
