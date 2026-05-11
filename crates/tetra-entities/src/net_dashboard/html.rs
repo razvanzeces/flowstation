@@ -321,8 +321,10 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <thead><tr>
         <th data-i18n="th_issi">ISSI</th>
         <th data-i18n="th_groups">Groups</th>
+        <th data-i18n="th_ee">Energy Economy</th>
         <th data-i18n="th_signal">Signal</th>
         <th data-i18n="th_status">Status</th>
+        <th data-i18n="th_last_seen">Last seen</th>
         <th data-i18n="th_actions">Actions</th>
       </tr></thead>
       <tbody id="ms-tbody">
@@ -347,7 +349,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
         <th data-i18n="th_duration">Duration</th>
       </tr></thead>
       <tbody id="calls-tbody">
-        <tr><td colspan="6"><div class="empty-state"><div class="empty-icon">☎</div><div class="empty-text" data-i18n="no_calls">No active calls</div></div></td></tr>
+        <tr><td colspan="7"><div class="empty-state"><div class="empty-icon">☎</div><div class="empty-text" data-i18n="no_calls">No active calls</div></div></td></tr>
       </tbody>
     </table>
   </div>
@@ -429,8 +431,8 @@ const LANGS = {
     clear:'Clear',restart:'⟳ Restart',save:'Save',
     sds_title:'⬡ Send SDS Message',sds_dest:'Destination ISSI',
     sds_msg_label:'Message',cancel:'Cancel',send:'Send',
-    th_issi:'ISSI',th_groups:'Groups',th_signal:'Signal',
-    th_status:'Status',th_actions:'Actions',
+    th_issi:'ISSI',th_groups:'Groups',th_esm:'ESM',th_signal:'Signal',
+    th_status:'Status',th_last_seen:'Last seen',th_actions:'Actions',
     th_id:'ID',th_type:'Type',th_caller:'Caller',
     th_dest:'Destination',th_speaker:'Speaker',th_duration:'Duration',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
@@ -450,8 +452,8 @@ const LANGS = {
     clear:'Șterge',restart:'⟳ Repornire',save:'Salvează',
     sds_title:'⬡ Trimite Mesaj SDS',sds_dest:'ISSI Destinatar',
     sds_msg_label:'Mesaj',cancel:'Anulează',send:'Trimite',
-    th_issi:'ISSI',th_groups:'Grupuri',th_signal:'Semnal',
-    th_status:'Status',th_actions:'Acțiuni',
+    th_issi:'ISSI',th_groups:'Grupuri',th_esm:'ESM',th_signal:'Semnal',
+    th_status:'Status',th_last_seen:'Văzut',th_actions:'Acțiuni',
     th_id:'ID',th_type:'Tip',th_caller:'Apelant',
     th_dest:'Destinatar',th_speaker:'Vorbitor',th_duration:'Durată',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
@@ -471,8 +473,8 @@ const LANGS = {
     clear:'Löschen',restart:'⟳ Neustart',save:'Speichern',
     sds_title:'⬡ SDS-Nachricht senden',sds_dest:'Ziel-ISSI',
     sds_msg_label:'Nachricht',cancel:'Abbrechen',send:'Senden',
-    th_issi:'ISSI',th_groups:'Gruppen',th_signal:'Signal',
-    th_status:'Status',th_actions:'Aktionen',
+    th_issi:'ISSI',th_groups:'Gruppen',th_esm:'ESM',th_signal:'Signal',
+    th_status:'Status',th_last_seen:'Zuletzt',th_actions:'Aktionen',
     th_id:'ID',th_type:'Typ',th_caller:'Anrufer',
     th_dest:'Ziel',th_speaker:'Sprecher',th_duration:'Dauer',
     online_badge:'ONLINE',kick:'Entfernen',sds:'SDS',
@@ -492,8 +494,8 @@ const LANGS = {
     clear:'Limpiar',restart:'⟳ Reiniciar',save:'Guardar',
     sds_title:'⬡ Enviar Mensaje SDS',sds_dest:'ISSI Destino',
     sds_msg_label:'Mensaje',cancel:'Cancelar',send:'Enviar',
-    th_issi:'ISSI',th_groups:'Grupos',th_signal:'Señal',
-    th_status:'Estado',th_actions:'Acciones',
+    th_issi:'ISSI',th_groups:'Grupos',th_esm:'ESM',th_signal:'Señal',
+    th_status:'Estado',th_last_seen:'Visto',th_actions:'Acciones',
     th_id:'ID',th_type:'Tipo',th_caller:'Llamante',
     th_dest:'Destino',th_speaker:'Hablante',th_duration:'Duración',
     online_badge:'EN LÍNEA',kick:'Expulsar',sds:'SDS',
@@ -591,8 +593,8 @@ function handleMsg(msg){
   switch(msg.type){
     case 'snapshot':
       state.ms={};state.calls={};
-      (msg.ms||[]).forEach(m=>state.ms[m.issi]=m);
-      (msg.calls||[]).forEach(c=>{state.calls[c.call_id]=c;c.started_at=Date.now();});
+      (msg.ms||[]).forEach(m=>{state.ms[m.issi]={...m,_last_seen_ts:Date.now()-(m.last_seen_secs_ago||0)*1000,energy_saving_mode:m.energy_saving_mode||0};});
+      (msg.calls||[]).forEach(c=>{state.calls[c.call_id]={...c,started_at:Date.now()-(c.started_secs_ago||0)*1000};});
       renderAll();break;
     case 'ms_registered':
       state.ms[msg.issi]={issi:msg.issi,groups:[],rssi_dbfs:null};
@@ -600,7 +602,7 @@ function handleMsg(msg){
     case 'ms_deregistered':
       delete state.ms[msg.issi];renderStations();break;
     case 'ms_rssi':
-      if(state.ms[msg.issi])state.ms[msg.issi].rssi_dbfs=msg.rssi_dbfs;
+      if(state.ms[msg.issi]){state.ms[msg.issi].rssi_dbfs=msg.rssi_dbfs;state.ms[msg.issi]._last_seen_ts=Date.now();}
       renderStations();break;
     case 'ms_groups':
       if(state.ms[msg.issi])state.ms[msg.issi].groups=msg.groups;
@@ -612,10 +614,28 @@ function handleMsg(msg){
     case 'speaker_changed':
       if(state.calls[msg.call_id])state.calls[msg.call_id].active_speaker=msg.speaker_issi;
       renderCalls();break;
+    case 'ms_energy_saving':
+      if(state.ms[msg.issi]){state.ms[msg.issi].energy_saving_mode=msg.mode;}
+      renderStations();break;
     case 'log': appendLog(msg);break;
   }
 }
 
+function eeLabel(mode) {
+  if (!mode || mode === 0) return '<span style="color:var(--text3);font-size:10px">—</span>';
+  const labels = ['','EG1 ●','EG2 ●','EG3 ●','EG4 ●','EG5 ●','EG6 ●','EG7 ●'];
+  const colors = ['','var(--accent)','var(--accent)','var(--accent2)','var(--accent2)','var(--warn)','var(--danger)','var(--danger)'];
+  const col = colors[mode] || 'var(--text2)';
+  const tips = ['','~1s','~2s','~3s','~4s','~5s','~6s','~7s'];
+  return `<span class="badge" title="Energy Economy Mode ${mode} — wake interval ${tips[mode]}" style="background:color-mix(in srgb,${col} 12%,transparent);border-color:${col};color:${col};font-size:9px;letter-spacing:0.5px">${labels[mode]}</span>`;
+}
+function lastSeenLabel(secs) {
+  if (secs == null) return '—';
+  if (secs < 5)  return '<span style="color:var(--accent)">now</span>';
+  if (secs < 60) return `<span style="color:var(--accent2)">${secs}s</span>`;
+  if (secs < 3600) return `<span style="color:var(--text2)">${Math.floor(secs/60)}m${secs%60}s</span>`;
+  return `<span style="color:var(--warn)">${Math.floor(secs/3600)}h${Math.floor((secs%3600)/60)}m</span>`;
+}
 function renderAll(){renderStations();renderCalls();}
 function rssiColor(v){if(v==null)return'var(--text3)';if(v>-20)return'var(--accent)';if(v>-30)return'var(--accent2)';if(v>-40)return'var(--warn)';return'var(--danger)';}
 function rssiPct(v){if(v==null)return 0;return Math.max(0,Math.min(100,(v+60)/50*100));}
@@ -625,14 +645,17 @@ function renderStations(){
   document.getElementById('stat-ms').textContent=ms.length;
   document.getElementById('stat-calls').textContent=Object.keys(state.calls).length;
   const tb=document.getElementById('ms-tbody');
-  if(!ms.length){tb.innerHTML=`<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">📡</div><div class="empty-text">${t('no_terminals')}</div></div></td></tr>`;return;}
+  if(!ms.length){tb.innerHTML=`<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📡</div><div class="empty-text">${t('no_terminals')}</div></div></td></tr>`;return;}
   tb.innerHTML=ms.sort((a,b)=>a.issi-b.issi).map(m=>{
     const r=m.rssi_dbfs,rL=r!=null?`${r.toFixed(1)} dBFS`:'—',pct=rssiPct(r),col=rssiColor(r);
     const grps=(m.groups||[]).map(g=>`<span class="badge badge-blue">${g}</span>`).join(' ')||'<span class="badge badge-dim">—</span>';
+    const ls = m._last_seen_ts ? Math.floor((Date.now() - m._last_seen_ts)/1000) : m.last_seen_secs_ago;
     return `<tr>
       <td><code>${m.issi}</code></td><td>${grps}</td>
+      <td style="text-align:center">${eeLabel(m.energy_saving_mode||0)}</td>
       <td><div class="rssi-bar"><div class="rssi-track"><div class="rssi-fill" style="width:${pct}%;background:${col}"></div></div><span class="rssi-val" style="color:${col}">${rL}</span></div></td>
       <td><span class="badge badge-green">${t('online_badge')}</span></td>
+      <td style="font-family:var(--mono);font-size:11px">${lastSeenLabel(ls)}</td>
       <td class="actions-cell"><button class="btn" onclick="openSds(${m.issi})">${t('sds')}</button><button class="btn btn-danger" onclick="kickMs(${m.issi})">${t('kick')}</button></td>
     </tr>`;
   }).join('');
@@ -641,7 +664,7 @@ function renderStations(){
 function renderCalls(){
   document.getElementById('stat-calls').textContent=Object.keys(state.calls).length;
   const tb=document.getElementById('calls-tbody'),calls=Object.values(state.calls);
-  if(!calls.length){tb.innerHTML=`<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">☎</div><div class="empty-text">${t('no_calls')}</div></div></td></tr>`;return;}
+  if(!calls.length){tb.innerHTML=`<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">☎</div><div class="empty-text">${t('no_calls')}</div></div></td></tr>`;return;}
   tb.innerHTML=calls.map(c=>{
     const dur=Math.floor((Date.now()-(c.started_at||Date.now()))/1000);
     const mm=String(Math.floor(dur/60)).padStart(2,'0'),ss=String(dur%60).padStart(2,'0');
@@ -681,7 +704,10 @@ function openSds(issi){sdsDest=issi;document.getElementById('sds-dest').value=is
 function closeSdsModal(){document.getElementById('sds-modal').classList.remove('open');}
 function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value),msg=document.getElementById('sds-msg').value.trim();if(!dest||!msg)return;ws&&ws.send(JSON.stringify({type:'sds',dest_issi:dest,message:msg}));closeSdsModal();}
 
-setInterval(()=>{if(document.getElementById('page-calls').classList.contains('active'))renderCalls();},1000);
+setInterval(()=>{
+  if(document.getElementById('page-calls').classList.contains('active'))renderCalls();
+  if(document.getElementById('page-stations').classList.contains('active'))renderStations();
+},1000);
 
 setLang(currentLang);
 setTheme(currentTheme);

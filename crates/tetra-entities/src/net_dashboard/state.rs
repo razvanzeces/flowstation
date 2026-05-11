@@ -8,8 +8,9 @@ pub struct MsState {
     pub issi: u32,
     pub groups: Vec<u32>,
     pub rssi_dbfs: Option<f32>,
-    pub registered_at: u64,      // unix seconds
-    pub last_seen_secs_ago: u64,  // seconds since last activity
+    pub registered_at: u64,
+    pub last_seen_secs_ago: u64,
+    pub energy_saving_mode: u8,   // 0=StayAlive, 1=Eg1..7=Eg7
 }
 
 /// Active call state
@@ -49,6 +50,7 @@ pub struct MsEntry {
     pub rssi_dbfs: Option<f32>,
     pub registered_at: Instant,
     pub last_seen: Instant,
+    pub energy_saving_mode: u8,
 }
 
 #[derive(Debug)]
@@ -98,6 +100,7 @@ impl DashboardStateInner {
                 .as_secs()
                 .saturating_sub(e.registered_at.elapsed().as_secs()),
             last_seen_secs_ago: e.last_seen.elapsed().as_secs(),
+            energy_saving_mode: e.energy_saving_mode,
         }).collect()
     }
 

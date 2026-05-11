@@ -45,6 +45,12 @@ pub struct MmClientProperties {
     /// Terminal Equipment Identity (60-bit hardware ID, like IMEI).
     /// Set when the MS sends U-TEI-PROVIDE. None if not yet received.
     pub tei: Option<u64>,
+    /// True after BS sends D-LOCATION-UPDATE-COMMAND at T351 expiry.
+    /// If the terminal re-registers, this is cleared. If T351 expires again
+    /// while this is still true, the terminal is silently removed (no response).
+    pub pending_command_sent: bool,
+    /// When Some, terminal has until this instant to respond to D-LOCATION-UPDATE-COMMAND.
+    pub grace_expires_at: Option<std::time::Instant>,
     // pub last_seen: TdmaTime,
 }
 
@@ -58,6 +64,8 @@ impl MmClientProperties {
             monitoring_frame: None,
             monitoring_multiframe: None,
             last_rssi: None,
+            pending_command_sent: false,
+            grace_expires_at: None,
             last_registration_time: std::time::Instant::now(),
             class_of_ms: None,
             last_handle: 0,
@@ -117,6 +125,9 @@ impl MmClientMgr {
     pub fn set_client_energy_saving_mode(&mut self, issi: u32, mode: EnergySavingMode) -> Result<(), ClientMgrErr> {
         if let Some(client) = self.clients.get_mut(&issi) {
             client.energy_saving_mode = mode;
+            if let Some(sink) = &self.telemetry_sink {
+                sink.send(TelemetryEvent::MsEnergySaving { issi, mode: mode as u8 });
+            }
             Ok(())
         } else {
             Err(ClientMgrErr::ClientNotFound { issi })
@@ -151,6 +162,28 @@ impl MmClientMgr {
     pub fn reset_registration_timer(&mut self, issi: u32) {
         if let Some(client) = self.clients.get_mut(&issi) {
             client.last_registration_time = std::time::Instant::now();
+            client.pending_command_sent = false;
+            client.grace_expires_at = None;
+        }
+    }
+
+    /// Returns true if a D-LOCATION-UPDATE-COMMAND was sent and terminal hasn't responded yet.
+    pub fn is_pending_command(&self, issi: u32) -> bool {
+        self.clients.get(&issi).map(|c| c.pending_command_sent).unwrap_or(false)
+    }
+
+    /// Mark that we sent D-LOCATION-UPDATE-COMMAND at T351 expiry.
+    /// Terminal has grace_secs to respond before being removed.
+    pub fn set_pending_command(&mut self, issi: u32, grace_secs: u32) {
+        if let Some(client) = self.clients.get_mut(&issi) {
+            client.pending_command_sent = true;
+            // Set last_registration_time so elapsed() > interval after grace_secs.
+            // Achieved by back-dating: last_registration_time = now - (interval - grace_secs)
+            // But we don't know interval here, so we use a simpler approach:
+            // collect_expired_registrations checks pending_command_sent + grace separately.
+            client.grace_expires_at = Some(
+                std::time::Instant::now() + std::time::Duration::from_secs(grace_secs as u64)
+            );
         }
     }
 
@@ -161,9 +194,18 @@ impl MmClientMgr {
             return Vec::new();
         }
         let threshold = std::time::Duration::from_secs(interval_secs as u64);
+        let now = std::time::Instant::now();
         self.clients
             .iter()
-            .filter(|(_, c)| c.last_registration_time.elapsed() > threshold)
+            .filter(|(_, c)| {
+                if c.pending_command_sent {
+                    // Already sent COMMAND — remove if grace period expired
+                    c.grace_expires_at.map(|d| now >= d).unwrap_or(true)
+                } else {
+                    // Normal T351 check
+                    c.last_registration_time.elapsed() > threshold
+                }
+            })
             .map(|(&issi, _)| issi)
             .collect()
     }

@@ -841,6 +841,8 @@ impl CcBsSubentity {
 
         self.cached_setups.remove(&call_id);
         self.active_calls.remove(&call_id);
+        // Notify dashboard immediately — don't wait for tick_start_with_events
+        self.emit(crate::net_telemetry::TelemetryEvent::GroupCallEnded { call_id, gssi: 0 });
     }
 
     /// Release an individual call: send D-RELEASE to both parties, close circuits, clean up state.
@@ -942,6 +944,8 @@ impl CcBsSubentity {
                 });
             }
         }
+        // Notify dashboard immediately
+        self.emit(crate::net_telemetry::TelemetryEvent::IndividualCallEnded { call_id });
     }
 
     pub(super) fn release_timeslot(&mut self, ts: u8) {

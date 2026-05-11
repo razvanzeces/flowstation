@@ -77,6 +77,7 @@ impl DashboardServer {
                     s.ms_map.insert(*issi, MsEntry {
                         issi: *issi, groups: Vec::new(),
                         rssi_dbfs: None, registered_at: Instant::now(), last_seen: Instant::now(),
+                        energy_saving_mode: 0,
                     });
                     s.push_log("INFO", format!("MS {} registered", issi));
                 }
@@ -94,6 +95,11 @@ impl DashboardServer {
                     if let Some(e) = s.ms_map.get_mut(issi) {
                         e.rssi_dbfs = Some(*rssi_dbfs);
                         e.last_seen = Instant::now();
+                    }
+                }
+                TelemetryEvent::MsEnergySaving { issi, mode } => {
+                    if let Some(e) = s.ms_map.get_mut(issi) {
+                        e.energy_saving_mode = *mode;
                     }
                 }
                 TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi } => {
@@ -163,6 +169,8 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             serde_json::json!({"type":"ms_groups","issi":issi,"groups":gssis}),
         TelemetryEvent::MsRssi { issi, rssi_dbfs } =>
             serde_json::json!({"type":"ms_rssi","issi":issi,"rssi_dbfs":rssi_dbfs}),
+        TelemetryEvent::MsEnergySaving { issi, mode } =>
+            serde_json::json!({"type":"ms_energy_saving","issi":issi,"mode":mode}),
         TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi } =>
             serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"group","gssi":gssi,"caller_issi":caller_issi}),
         TelemetryEvent::GroupCallEnded { call_id, gssi: _ } =>
