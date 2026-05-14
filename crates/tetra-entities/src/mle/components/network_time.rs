@@ -23,7 +23,7 @@ fn encode_tetra_network_time_inner(now_utc: chrono::DateTime<Utc>, tz: chrono_tz
     // Seconds since Jan 1 00:00:00 UTC of the current year, divided by 2
     let year = now_utc.year();
     let year_start = Utc.with_ymd_and_hms(year, 1, 1, 0, 0, 0).single()?;
-    let secs_since_year_start = (now_utc - year_start).num_seconds();
+    let secs_since_year_start = (now_utc - year_start).num_seconds().max(0);
     let utc_time: u64 = (secs_since_year_start / 2) as u64 & 0xFF_FFFF; // 24 bits
 
     // Compute local time offset from UTC

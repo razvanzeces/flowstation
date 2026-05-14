@@ -327,15 +327,19 @@ impl CircuitMgr {
     }
 
     /// Closes any circuits that have expired.
-    /// Safety timeout: 6 minutes (beyond the 5-minute call timeout T5m).
-    /// Active calls are cleaned up earlier by CMCE hangtime/release logic.
+    /// Safety timeout for simplex (HDX/PTT) circuits: 6 minutes (beyond T5m).
+    /// Full-duplex (FDX) circuits — normal voice calls — have no timeout here;
+    /// they are released by normal call signalling (U-DISCONNECT / CALL_RELEASE).
+    /// ETSI EN 300 392-2 §14.9: call timeout does not apply to FDX individual calls.
     fn close_expired_circuits(&mut self, mut tasks: Option<Vec<CircuitMgrCmd>>) -> Option<Vec<CircuitMgrCmd>> {
-        const CIRCUIT_EXPIRY_TIMESLOTS: i32 = 6 * 60 * 18 * 4; // 6 minutes
+        const CIRCUIT_EXPIRY_TIMESLOTS: i32 = 6 * 60 * 18 * 4; // 6 minutes for simplex
 
         let mut to_close: Vec<_> = self
             .dl
             .iter()
             .filter_map(|circuit| circuit.as_ref())
+            // FDX circuits (simplex_duplex=true) have no safety timeout — skip them.
+            .filter(|circuit| !circuit.simplex_duplex)
             .filter(|circuit| circuit.ts_created.age(self.dltime) > CIRCUIT_EXPIRY_TIMESLOTS)
             .map(|circuit| (circuit.direction, circuit.ts, circuit.call_id))
             .collect();
@@ -343,6 +347,7 @@ impl CircuitMgr {
             self.ul_only
                 .iter()
                 .filter_map(|circuit| circuit.as_ref())
+                .filter(|circuit| !circuit.simplex_duplex)
                 .filter(|circuit| circuit.ts_created.age(self.dltime) > CIRCUIT_EXPIRY_TIMESLOTS)
                 .map(|circuit| (circuit.direction, circuit.ts, circuit.call_id)),
         );

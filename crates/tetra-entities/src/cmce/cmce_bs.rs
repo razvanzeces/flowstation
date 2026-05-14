@@ -7,6 +7,9 @@ use tetra_core::{Sap, TdmaTime, unimplemented_log};
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use tetra_pdus::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
+use tetra_pdus::cmce::pdus::cmce_function_not_supported::CmceFunctionNotSupported;
+use tetra_core::{BitBuffer, Layer2Service, TetraAddress, SsiType};
+use tetra_saps::lcmc::LcmcMleUnitdataReq;
 
 use super::subentities::cc_bs::CcBsSubentity;
 use super::subentities::sds_bs::SdsBsSubentity;
@@ -92,7 +95,7 @@ impl CmceBs {
         }
     }
 
-    pub fn rx_lcmc_mle_unitdata_ind(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
+    pub fn rx_lcmc_mle_unitdata_ind(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_lcmc_mle_unitdata_ind");
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
             tracing::error!("BUG: unexpected message or state -- routing error"); return;
@@ -114,10 +117,48 @@ impl CmceBs {
             | CmcePduTypeUl::USetup
             | CmcePduTypeUl::UTxCeased
             | CmcePduTypeUl::UTxDemand
-            | CmcePduTypeUl::UCallRestore => { self.cc.route_xx_deliver(_queue, message); }
-            CmcePduTypeUl::UStatus => { self.sds.route_status_deliver(_queue, message); }
-            CmcePduTypeUl::USdsData => { self.sds.route_rf_deliver(_queue, message); }
-            CmcePduTypeUl::UFacility => { unimplemented_log!("{:?}", pdu_type); }
+            | CmcePduTypeUl::UCallRestore => { self.cc.route_xx_deliver(queue, message); }
+            CmcePduTypeUl::UStatus => { self.sds.route_status_deliver(queue, message); }
+            CmcePduTypeUl::USdsData => { self.sds.route_rf_deliver(queue, message); }
+            CmcePduTypeUl::UFacility => {
+                // ETSI EN 300 392-2 §14.7.2.5:
+                // BS does not support supplementary services (SS). Respond with
+                // D-CMCE-FUNCTION-NOT-SUPPORTED, function_not_supported_pointer=0
+                // (the PDU type itself is not supported, not a specific field).
+                tracing::debug!("CMCE: received UFacility from ISSI {} — responding D-CMCE-FUNCTION-NOT-SUPPORTED",
+                    prim.received_tetra_address.ssi);
+                let response = CmceFunctionNotSupported {
+                    not_supported_pdu_type: CmcePduTypeUl::UFacility.into_raw() as u8,
+                    call_identifier_present: false,
+                    call_identifier: None,
+                    function_not_supported_pointer: 0,
+                    length_of_received_pdu_extract: None,
+                    received_pdu_extract: None,
+                };
+                let mut sdu = BitBuffer::new_autoexpand(16);
+                if response.to_bitbuf(&mut sdu).is_ok() {
+                    sdu.seek(0);
+                    queue.push_back(SapMsg {
+                        sap: Sap::LcmcSap,
+                        src: TetraEntity::Cmce,
+                        dest: TetraEntity::Mle,
+                        msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                            sdu,
+                            handle: prim.handle,
+                            endpoint_id: prim.endpoint_id,
+                            link_id: prim.link_id,
+                            layer2service: Layer2Service::Unacknowledged,
+                            pdu_prio: 0,
+                            layer2_qos: 0,
+                            stealing_permission: false,
+                            stealing_repeats_flag: false,
+                            chan_alloc: None,
+                            main_address: TetraAddress { ssi: prim.received_tetra_address.ssi, ssi_type: SsiType::Issi },
+                            tx_reporter: None,
+                        }),
+                    });
+                }
+            }
             CmcePduTypeUl::CmceFunctionNotSupported => { unimplemented_log!("{:?}", pdu_type); }
         };
     }

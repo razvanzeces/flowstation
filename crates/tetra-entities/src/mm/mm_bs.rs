@@ -8,7 +8,7 @@ use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
-use crate::mm::components::client_state::{MmClientMgr, MmClientState};
+use crate::mm::components::client_state::{ClientMgrErr, MmClientMgr, MmClientState};
 use crate::mm::components::not_supported::make_ul_mm_pdu_function_not_supported;
 use tetra_pdus::mm::enums::energy_saving_mode::EnergySavingMode;
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
@@ -197,9 +197,12 @@ impl MmBs {
         // For DemandLocationUpdating (response to D-LOCATION-UPDATE-COMMAND), the terminal
         // often omits energy_saving_mode from the PDU. In that case, reuse the previously
         // stored ESM — client_mgr retains it because we no longer remove_client at T351 expiry.
+        // Preserve energy saving mode across re-registrations.
+        // If the terminal omits ESM from the PDU (common after T351 expiry),
+        // reuse the previously granted mode so the terminal stays in EE mode.
+        // We no longer filter out StayAlive — if that's what was granted before, keep it.
         let prior_esm = self.client_mgr.get_client_by_issi(prim.received_address.ssi)
-            .map(|c| c.energy_saving_mode)
-            .filter(|&e| e != EnergySavingMode::StayAlive);
+            .map(|c| c.energy_saving_mode);
         let effective_esm_request = pdu.energy_saving_mode.or(prior_esm);
 
         let esi = if let Some(esm) = effective_esm_request {
@@ -222,7 +225,8 @@ impl MmBs {
             } else {
                 // Spread MSs evenly: frame 0-17, multiframe offset within Eg cycle
                 let cycle_len = granted_esm as u8 + 1; // Eg1=2, Eg2=3, Eg3=4
-                let frame_num = (prim.received_address.ssi % 18) as u8;
+                // TETRA frames are 1-indexed (1..18); use 1..=18 to avoid frame 0
+                let frame_num = ((prim.received_address.ssi % 18) + 1) as u8;
                 let mframe_num = ((prim.received_address.ssi / 18) % cycle_len as u32) as u8;
                 tracing::info!(
                     "MS {} granted {:?}: monitoring frame={} multiframe={}",
@@ -623,7 +627,10 @@ impl MmBs {
                         self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
                     }
                     Err(e) => {
-                        tracing::warn!("Failed re-registering MS {} on group attach: {:?}", issi, e);
+                        // ETSI EN 300 392-2 §16.3.4: if MS cannot be registered,
+                        // send D-ATTACH-DETACH-GROUP-IDENTITY-ACKNOWLEDGEMENT with reject.
+                        tracing::warn!("Failed re-registering MS {} on group attach: {:?} — sending reject", issi, e);
+                        self.send_d_attach_detach_ack_reject(queue, issi, prim.handle);
                         return;
                     }
                 }
@@ -759,6 +766,9 @@ impl MmBs {
                         };
                         accepted_groups.push(gid);
                     }
+                    Err(ClientMgrErr::ClientNotFound { .. }) => {
+                        tracing::debug!("Group detach for ISSI {} gssi={} skipped: client no longer registered", issi, gssi);
+                    }
                     Err(e) => {
                         tracing::warn!("Failed detaching MS {} from group {}: {:?}", issi, gssi, e);
                     }
@@ -782,6 +792,10 @@ impl MmBs {
                             vgssi: None,
                         };
                         accepted_groups.push(gid);
+                    }
+                    Err(ClientMgrErr::ClientNotFound { .. }) => {
+                        // Terminal was removed (T351 second expiry) while PDU was in flight — ignore.
+                        tracing::debug!("Group attach for ISSI {} gssi={} skipped: client no longer registered", issi, gssi);
                     }
                     Err(e) => {
                         tracing::warn!("Failed attaching MS {} to group {}: {:?}", issi, gssi, e);
@@ -813,6 +827,39 @@ impl MmBs {
 
     /// Sends a D-LOCATION UPDATE COMMAND to force the radio to re-register
     /// with full group identity report
+    /// Send D-ATTACH-DETACH-GROUP-IDENTITY-ACKNOWLEDGEMENT with reject.
+    /// ETSI EN 300 392-2 §16.3.4: used when MS is not registered.
+    fn send_d_attach_detach_ack_reject(&self, queue: &mut MessageQueue, issi: u32, handle: u32) {
+        let pdu = DAttachDetachGroupIdentityAcknowledgement {
+            group_identity_accept_reject: 1, // 1 = reject per ETSI §14.8.7
+            reserved: false,
+            proprietary: None,
+            group_identity_downlink: None,
+            group_identity_security_related_information: None,
+        };
+        let mut sdu = BitBuffer::new_autoexpand(16);
+        pdu.to_bitbuf(&mut sdu).unwrap();
+        sdu.seek(0);
+        tracing::debug!("-> DAttachDetachGroupIdentityAcknowledgement (reject) to ISSI {}", issi);
+        let msg = SapMsg {
+            sap: Sap::LmmSap,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
+                sdu,
+                handle,
+                address: TetraAddress::issi(issi),
+                layer2service: Layer2Service::Acknowledged,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                encryption_flag: false,
+                is_null_pdu: false,
+                tx_reporter: None,
+            }),
+        };
+        queue.push_back(msg);
+    }
+
     fn send_d_attach_detach_ack(&self, queue: &mut MessageQueue, issi: u32, handle: u32, groups: &[u32]) {
         use tetra_pdus::mm::fields::group_identity_downlink::GroupIdentityDownlink;
         use tetra_pdus::mm::fields::group_identity_attachment::GroupIdentityAttachment;
