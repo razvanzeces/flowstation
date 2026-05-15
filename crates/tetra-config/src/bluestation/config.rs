@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::sync::{Arc, RwLock};
 use tetra_core::freqs::FreqInfo;
 
-use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, CfgSecurity, PhyBackend, StackState};
+use crate::bluestation::{CfgCellInfo, CfgControl, CfgIdentity, CfgNetInfo, CfgPhyIo, CfgSecurity, PhyBackend, StackState};
 
 use super::sec_dashboard::CfgDashboard;
 use super::sec_brew::CfgBrew;
@@ -76,6 +76,9 @@ pub struct StackConfig {
 
     /// Access control / security configuration
     pub security: CfgSecurity,
+
+    /// Identity resolver and SS-TPI emission configuration
+    pub identity: CfgIdentity,
 }
 
 impl StackConfig {

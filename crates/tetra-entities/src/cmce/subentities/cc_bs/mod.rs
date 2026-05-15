@@ -3,36 +3,20 @@ use std::collections::{HashMap, HashSet};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::typed_pdu_fields::Type3FieldGeneric;
 use tetra_core::{
-    BitBuffer, Direction, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, TimeslotOwner,
-    TxReporter, tetra_entities::TetraEntity, unimplemented_log,
+    BitBuffer, Direction, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, TimeslotOwner, TxReporter, tetra_entities::TetraEntity,
+    unimplemented_log,
 };
 use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_pdus::cmce::{
     enums::{
-        call_timeout::CallTimeout,
-        call_timeout_setup_phase::CallTimeoutSetupPhase,
-        cmce_pdu_type_ul::CmcePduTypeUl,
-        transmission_grant::TransmissionGrant,
-        type3_elem_id::CmceType3ElemId,
+        call_timeout::CallTimeout, call_timeout_setup_phase::CallTimeoutSetupPhase, cmce_pdu_type_ul::CmcePduTypeUl,
+        transmission_grant::TransmissionGrant, type3_elem_id::CmceType3ElemId,
     },
     fields::basic_service_information::BasicServiceInformation,
     pdus::{
-        d_alert::DAlert,
-        d_call_proceeding::DCallProceeding,
-        d_connect::DConnect,
-        d_connect_acknowledge::DConnectAcknowledge,
-        d_disconnect::DDisconnect,
-        d_release::DRelease,
-        d_setup::DSetup,
-        d_tx_ceased::DTxCeased,
-        d_tx_granted::DTxGranted,
-        u_alert::UAlert,
-        u_connect::UConnect,
-        u_disconnect::UDisconnect,
-        u_info::UInfo,
-        u_release::URelease,
-        u_setup::USetup,
-        u_tx_ceased::UTxCeased,
+        d_alert::DAlert, d_call_proceeding::DCallProceeding, d_connect::DConnect, d_connect_acknowledge::DConnectAcknowledge,
+        d_disconnect::DDisconnect, d_release::DRelease, d_setup::DSetup, d_tx_ceased::DTxCeased, d_tx_granted::DTxGranted, u_alert::UAlert,
+        u_connect::UConnect, u_disconnect::UDisconnect, u_info::UInfo, u_release::URelease, u_setup::USetup, u_tx_ceased::UTxCeased,
         u_tx_demand::UTxDemand,
     },
     structs::cmce_circuit::CmceCircuit,
@@ -52,6 +36,7 @@ use tetra_saps::{
 };
 
 use crate::net_brew;
+use crate::net_identity::IdentityResolver;
 use crate::{
     MessageQueue,
     cmce::components::circuit_mgr::{CircuitMgr, CircuitMgrCmd},
@@ -59,24 +44,24 @@ use crate::{
 
 mod call;
 mod dtmf;
+mod echo;
 mod fsm;
 mod ingress;
 mod network;
 mod shared;
 mod timers;
-mod echo;
+mod tpi;
 use echo::EchoSession;
 
-use call::{
-    ActiveCall, CallOrigin, GroupCallState, IndividualCall, IndividualCallState,
-    TxDemandQueueResult,
-};
+use call::{ActiveCall, CallOrigin, GroupCallState, IndividualCall, IndividualCallState, TxDemandQueueResult};
 use fsm::{GroupTransitionError, IndividualTransitionError};
+use tpi::{TpiCallContext, TpiCallType};
 
 struct CachedSetup {
     pdu: DSetup,
     dest_addr: TetraAddress,
     resend: bool,
+    last_reporter: Option<TxReporter>,
     /// True for P2P individual calls where DSetup must be resent on MCCH (no chan_alloc).
     /// False for group calls where DSetup is resent on the traffic channel with chan_alloc.
     is_individual: bool,
@@ -103,4 +88,8 @@ pub struct CcBsSubentity {
     telemetry: Option<crate::net_telemetry::channel::TelemetrySink>,
     /// Active echo service session (ISSI 999), if any
     echo_session: Option<EchoSession>,
+    /// SS-TPI call contexts keyed by CMCE call identifier.
+    tpi_contexts: HashMap<u16, TpiCallContext>,
+    /// Manual/cache/RadioID resolver used only at call setup and speaker changes.
+    identity_resolver: IdentityResolver,
 }

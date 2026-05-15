@@ -75,7 +75,10 @@ impl CcBsSubentity {
 
         let circuit_called = {
             let mut state = self.config.state_write();
-            match self.circuits.allocate_circuit_with_allocator_duplex(Direction::Both, communication, simplex_duplex,
+            match self.circuits.allocate_circuit_with_allocator_duplex(
+                Direction::Both,
+                communication,
+                simplex_duplex,
                 &mut state.timeslot_alloc,
                 TimeslotOwner::Cmce,
             ) {
@@ -108,6 +111,12 @@ impl CcBsSubentity {
         let call_timeout = CallTimeout::try_from(call.timeout as u64).unwrap_or(CallTimeout::T5m);
         let circuit_mode = CircuitModeType::try_from(call.mode as u64).unwrap_or(CircuitModeType::TchS);
         let external_subscriber_number = Self::encode_external_subscriber_number(&call.number);
+        let tpi_call_type = if simplex_duplex {
+            TpiCallType::IndividualFullDuplex
+        } else {
+            TpiCallType::IndividualHalfDuplex
+        };
+        self.tpi_start_context(call_id, tpi_call_type, call.source_issi, false);
 
         tracing::info!(
             "CMCE: accepting Brew setup request uuid={} call_id={} src={} dst={} ts={} duplex={} number='{}'",
@@ -148,7 +157,7 @@ impl CcBsSubentity {
             calling_party_address_ssi: Some(call.source_issi),
             calling_party_extension: None,
             external_subscriber_number,
-            facility: None,
+            facility: self.tpi_inform_for_call(call_id),
             dm_ms_address: None,
             proprietary: None,
         };
@@ -160,6 +169,7 @@ impl CcBsSubentity {
                 pdu: d_setup,
                 dest_addr: called_addr,
                 resend: false, // no late-entry resends for individual calls
+                last_reporter: None,
                 is_individual: true,
             },
         );
@@ -295,7 +305,7 @@ impl CcBsSubentity {
             basic_service_information: None,
             temporary_address: None,
             notification_indicator: None,
-            facility: None,
+            facility: self.tpi_inform_for_call(call_id),
             proprietary: None,
         };
 
@@ -449,7 +459,7 @@ impl CcBsSubentity {
             transmission_grant: grant_enum.into_raw() as u8,
             transmission_request_permission: permission != 0,
             notification_indicator: None,
-            facility: None,
+            facility: self.tpi_inform_for_call(call_id),
             proprietary: None,
         };
 
@@ -596,7 +606,10 @@ impl CcBsSubentity {
                         tracing::info!(
                             "CMCE: ignoring network speaker change gssi={} src={} — \
                              local MS {} holds floor at equal/higher priority (incoming prio={})",
-                            dest_gssi, source_issi, call.source_issi, priority
+                            dest_gssi,
+                            source_issi,
+                            call.source_issi,
+                            priority
                         );
                         queue.push_back(SapMsg {
                             sap: Sap::Control,
@@ -648,7 +661,10 @@ impl CcBsSubentity {
         // New network call - allocate circuit
         let circuit = match {
             let mut state = self.config.state_write();
-            self.circuits.allocate_circuit_with_allocator_duplex(Direction::Both, CommunicationType::P2Mp, false,
+            self.circuits.allocate_circuit_with_allocator_duplex(
+                Direction::Both,
+                CommunicationType::P2Mp,
+                false,
                 &mut state.timeslot_alloc,
                 TimeslotOwner::Cmce,
             )
@@ -663,6 +679,8 @@ impl CcBsSubentity {
         let call_id = circuit.call_id;
         let ts = circuit.ts;
         let usage = circuit.usage;
+        self.tpi_start_context(call_id, TpiCallType::Group, source_issi, false);
+        let tpi_facility = self.tpi_inform_for_call(call_id);
 
         tracing::info!(
             "CMCE: starting NEW network call brew_uuid={} gssi={} speaker={} ts={} call_id={}",
@@ -702,7 +720,7 @@ impl CcBsSubentity {
             calling_party_address_ssi: Some(source_issi),
             calling_party_extension: None,
             external_subscriber_number: None,
-            facility: None,
+            facility: tpi_facility.clone(),
             dm_ms_address: None,
             proprietary: None,
         };
@@ -713,13 +731,20 @@ impl CcBsSubentity {
                 pdu: d_setup,
                 dest_addr: dest_addr.clone(),
                 resend: true,
+                last_reporter: None,
                 is_individual: false,
             },
         );
         let d_setup_ref = &self.cached_setups.get(&call_id).unwrap().pdu;
 
         let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, usage, ts, UlDlAssignment::Both);
-        let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), dest_addr.clone(), Layer2Service::Unacknowledged, None);
+        let setup_msg = Self::build_sapmsg(
+            setup_sdu,
+            Some(setup_chan_alloc),
+            dest_addr.clone(),
+            Layer2Service::Unacknowledged,
+            None,
+        );
         queue.push_back(setup_msg);
 
         let d_connect = DConnect {
@@ -734,7 +759,7 @@ impl CcBsSubentity {
             basic_service_information: None,
             temporary_address: None,
             notification_indicator: None,
-            facility: None,
+            facility: tpi_facility,
             proprietary: None,
         };
 
@@ -765,7 +790,15 @@ impl CcBsSubentity {
 
         self.active_calls.insert(
             call_id,
-            ActiveCall::new_network(brew_uuid, dest_gssi, source_issi, ts, usage, self.dltime, self.config_call_timeout()),
+            ActiveCall::new_network(
+                brew_uuid,
+                dest_gssi,
+                source_issi,
+                ts,
+                usage,
+                self.dltime,
+                self.config_call_timeout(),
+            ),
         );
 
         // Emit telemetry so dashboard shows Brew-initiated calls

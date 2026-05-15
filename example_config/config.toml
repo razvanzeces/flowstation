@@ -235,6 +235,66 @@ voice_service = true
 
 ###############################################################################
 
+# OPTIONAL: SS-TPI identity / mnemonic-name support (FlowStation)
+#
+# When enabled, FlowStation attaches an SS-TPI INFORM Facility IE to supported
+# call-control PDUs so compatible terminals can display the current talking party.
+#
+# Lookup policy is intentionally conservative:
+# - manual entries always win;
+# - cached results are reused;
+# - RadioID is optional and disabled by default;
+# - remote lookup happens only at call setup or speaker/floor changes, never for
+#   traffic/audio frames.
+#
+# Mnemonic names are limited to 15 ASCII characters for the first implementation.
+# If no mnemonic is available, SS-TPI still carries the speaker SSI.
+#
+# [identity]
+# enabled = true
+#
+# Emit mnemonicName in SS-TPI INFORM when available and allowed.
+# Set to false if you want SS-TPI identity-only operation.
+# emit_mnemonic_name = true
+#
+# Local policy switch for terminals/subscribers allowed to receive mnemonic names.
+# subscription_allows_mnemonic = true
+#
+# Cache TTL for successful identity lookups.
+# cache_ttl_secs = 86400
+#
+# Cache TTL for misses/failed remote lookups. Keeps RadioID retries bounded.
+# negative_cache_ttl_secs = 3600
+#
+# Maximum in-memory identity cache entries.
+# cache_max_entries = 10000
+#
+# Manual overrides. Use these for known local ISSIs and for names that must not
+# depend on an external service.
+#
+# [[identity.manual]]
+# ssi = 2260571
+# mnemonic = "YO6RZV"
+# label = "Razvan"
+#
+# [[identity.manual]]
+# ssi = 2260572
+# mnemonic = "YO6TETRA"
+# label = "Local test radio"
+#
+# Optional RadioID.net lookup. Keep disabled unless you explicitly want remote
+# lookups. Use a clear User-Agent with contact info for your deployment.
+#
+# [identity.radioid]
+# enabled = false
+# endpoint = "https://radioid.net/api/dmr/user/"
+# timeout_secs = 3
+# min_lookup_interval_ms = 1000
+# user_agent = "FlowStation/0.1 contact:admin@example.org"
+# api_token = ""
+
+###############################################################################
+
 # OPTIONAL: Web dashboard — accessible at http://<BTS-IP>:8080 (FlowStation)
 #
 # Live view of terminals, active calls, log, config editor, kick and SDS.

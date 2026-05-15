@@ -38,6 +38,7 @@ impl CcBsSubentity {
             for task in tasks {
                 match task {
                     CircuitMgrCmd::SendDSetup(call_id, usage, ts) => {
+                        let tpi_facility = self.tpi_inform_for_call(call_id);
                         // Get our cached D-SETUP, build a prim and send it down the stack
                         let Some(cached) = self.cached_setups.get_mut(&call_id) else {
                             tracing::trace!(
@@ -59,6 +60,7 @@ impl CcBsSubentity {
                                 TransmissionGrant::NotGranted
                             };
                         }
+                        cached.pdu.facility = tpi_facility;
                         let dest_addr = cached.dest_addr;
                         let is_individual = cached.is_individual;
                         if is_individual {
@@ -71,8 +73,18 @@ impl CcBsSubentity {
                             let prim = Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None);
                             queue.push_back(prim);
                         } else {
+                            if cached.last_reporter.as_ref().is_some_and(|reporter| !reporter.is_in_final_state()) {
+                                tracing::trace!(
+                                    "CMCE: suppressing D-SETUP resend for call_id={} while previous send is pending",
+                                    call_id
+                                );
+                                continue;
+                            }
+
+                            let reporter = TxReporter::new_unacked();
+                            cached.last_reporter = Some(reporter.clone());
                             let (sdu, chan_alloc) = Self::build_d_setup_prim(&cached.pdu, usage, ts, UlDlAssignment::Both);
-                            let prim = Self::build_sapmsg(sdu, Some(chan_alloc), dest_addr, Layer2Service::Unacknowledged, None);
+                            let prim = Self::build_sapmsg(sdu, Some(chan_alloc), dest_addr, Layer2Service::Unacknowledged, Some(reporter));
                             queue.push_back(prim);
                         }
                     }
@@ -83,7 +95,8 @@ impl CcBsSubentity {
                         // Force cleanup unconditionally — release D-RELEASE, close circuit, free TS.
                         tracing::warn!(
                             "CMCE: force-closing stale circuit call_id={} ts={} (circuit expiry)",
-                            call_id, circuit.ts
+                            call_id,
+                            circuit.ts
                         );
                         let ts = circuit.ts;
                         // Get our cached D-SETUP, build D-RELEASE and send
@@ -151,13 +164,7 @@ impl CcBsSubentity {
                                     } else if let (Some(handle), Some(link_id), Some(endpoint_id)) =
                                         (ind_call.called_handle, ind_call.called_link_id, ind_call.called_endpoint_id)
                                     {
-                                        Self::build_sapmsg_direct(
-                                            sdu_called,
-                                            ind_call.called_addr,
-                                            handle,
-                                            link_id,
-                                            endpoint_id,
-                                        )
+                                        Self::build_sapmsg_direct(sdu_called, ind_call.called_addr, handle, link_id, endpoint_id)
                                     } else {
                                         Self::build_sapmsg(sdu_called, None, ind_call.called_addr, Layer2Service::Unacknowledged, None)
                                     };
@@ -184,13 +191,18 @@ impl CcBsSubentity {
 
                         // Capture peer_ts before removing individual_calls (duplex P2P has two TS).
                         let peer_ts = self.individual_calls.get(&call_id).and_then(|ind| {
-                            if ind.called_ts != ind.calling_ts { Some(ind.called_ts) } else { None }
+                            if ind.called_ts != ind.calling_ts {
+                                Some(ind.called_ts)
+                            } else {
+                                None
+                            }
                         });
 
                         // Clean up call state
                         self.cached_setups.remove(&call_id);
                         self.active_calls.remove(&call_id);
                         self.individual_calls.remove(&call_id);
+                        self.tpi_end_context(call_id);
 
                         // Signal UMAC to release the circuit
                         Self::signal_umac_circuit_close(queue, circuit);
@@ -263,7 +275,9 @@ impl CcBsSubentity {
                 if call.state != IndividualCallState::CallSetupPending {
                     return None;
                 }
-                let Some(started) = call.setup_timer_started else { return None; };
+                let Some(started) = call.setup_timer_started else {
+                    return None;
+                };
                 let age_frames = started.age(self.dltime);
                 // First retry after 1 full multiframe (~1s), then every 10s
                 if age_frames >= 18 && age_frames % DSETUP_RETRY_INTERVAL_FRAMES == 0 {
@@ -275,16 +289,23 @@ impl CcBsSubentity {
             .collect();
 
         for call_id in retry_calls {
-            let Some(cached) = self.cached_setups.get(&call_id) else { continue; };
-            if !cached.is_individual { continue; }
+            let Some(cached) = self.cached_setups.get(&call_id) else {
+                continue;
+            };
+            if !cached.is_individual {
+                continue;
+            }
             let mut sdu = BitBuffer::new_autoexpand(80);
-            if cached.pdu.to_bitbuf(&mut sdu).is_err() { continue; }
+            if cached.pdu.to_bitbuf(&mut sdu).is_err() {
+                continue;
+            }
             sdu.seek(0);
             let dest_addr = cached.dest_addr;
             let prim = Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None);
             tracing::debug!(
                 "EE DSetup retry for call_id={} to ISSI {} (setup pending, MS may be sleeping)",
-                call_id, dest_addr.ssi
+                call_id,
+                dest_addr.ssi
             );
             queue.push_back(prim);
         }
@@ -334,14 +355,12 @@ impl CcBsSubentity {
                         sap: tetra_core::Sap::Control,
                         src: tetra_core::tetra_entities::TetraEntity::Cmce,
                         dest: tetra_core::tetra_entities::TetraEntity::Umac,
-                        msg: tetra_saps::SapMsgInner::CmceCallControl(
-                            tetra_saps::control::call_control::CallControl::FloorGranted {
-                                call_id,
-                                source_issi: fake_issi,
-                                dest_gssi: fake_issi,
-                                ts,
-                            }
-                        ),
+                        msg: tetra_saps::SapMsgInner::CmceCallControl(tetra_saps::control::call_control::CallControl::FloorGranted {
+                            call_id,
+                            source_issi: fake_issi,
+                            dest_gssi: fake_issi,
+                            ts,
+                        }),
                     });
                     return;
                 }

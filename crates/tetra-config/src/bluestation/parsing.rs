@@ -6,8 +6,10 @@ use std::path::Path;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
 use crate::bluestation::sec_cell::{CfgNeighborCellCa, SdsCommandControlDto};
+use crate::bluestation::{
+    CellInfoDto, CfgControlDto, CfgIdentityDto, NetInfoDto, apply_control_patch, apply_identity_patch, cell_dto_to_cfg, net_dto_to_cfg,
+};
 
 use super::config::{StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
@@ -117,7 +119,24 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         }
     }
 
-    // Build cell config, then inject the separately-parsed neighbor cells and sds_command_control
+    // Optional identity section
+    if let Some(ref identity) = root.identity {
+        if !identity.extra.is_empty() {
+            return Err(format!("Unrecognized fields in identity config: {:?}", sorted_keys(&identity.extra)).into());
+        }
+        for (idx, manual) in identity.manual.iter().enumerate() {
+            if !manual.extra.is_empty() {
+                return Err(format!("Unrecognized fields in identity.manual[{}]: {:?}", idx, sorted_keys(&manual.extra)).into());
+            }
+        }
+        if let Some(ref radioid) = identity.radioid {
+            if !radioid.extra.is_empty() {
+                return Err(format!("Unrecognized fields in identity.radioid: {:?}", sorted_keys(&radioid.extra)).into());
+            }
+        }
+    }
+
+    // Build cell config, then inject separately-parsed nested sections.
     let mut cell_cfg = cell_dto_to_cfg(root.cell_info);
     cell_cfg.neighbor_cells_ca = neighbor_cells_ca;
     if let Some(v) = sds_command_control_raw {
@@ -149,6 +168,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         telemetry: None,
         control: None,
         security: apply_security_patch(root.security.unwrap_or_default()),
+        identity: apply_identity_patch(root.identity.unwrap_or_default())?,
     };
 
     if let Some(brew) = root.brew {
@@ -209,6 +229,7 @@ struct TomlConfigRoot {
     telemetry: Option<CfgTelemetryDto>,
     command: Option<CfgControlDto>,
     security: Option<CfgSecurityDto>,
+    identity: Option<CfgIdentityDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,
@@ -236,6 +257,7 @@ main_carrier = 1584
 freq_band = 4
 freq_offset = 0
 duplex_spacing = 4
+reverse_operation = false
 location_area = 1
 {}
 "#,
@@ -252,7 +274,8 @@ location_area = 1
 
     #[test]
     fn test_two_neighbor_cells() {
-        let toml = minimal_toml(r#"
+        let toml = minimal_toml(
+            r#"
 neighbor_cell_broadcast = 2
 
 [[cell_info.neighbor_cells_ca]]
@@ -271,7 +294,8 @@ cell_reselection_types_supported = 0
 neighbor_cell_synchronized = false
 cell_load_ca = 1
 main_carrier_number = 1586
-"#);
+"#,
+        );
         let cfg = from_toml_str(&toml).expect("parse failed");
         assert_eq!(cfg.cell.neighbor_cells_ca.len(), 2);
         assert_eq!(cfg.cell.neighbor_cells_ca[0].cell_identifier_ca, 1);
@@ -298,5 +322,63 @@ main_carrier_number = 1586
     fn test_unrecognized_cell_info_field_still_rejected() {
         let toml = minimal_toml("bogus_field = 42");
         assert!(from_toml_str(&toml).is_err(), "should reject unknown field");
+    }
+
+    #[test]
+    fn test_example_config_file_parses() {
+        let toml = include_str!("../../../../example_config/config.toml");
+        from_toml_str(toml).expect("example_config/config.toml should parse");
+    }
+
+    #[test]
+    fn test_identity_config_parses_manual_and_radioid() {
+        let toml = format!(
+            "{}\n{}",
+            minimal_toml(""),
+            r#"
+[identity]
+enabled = true
+cache_ttl_secs = 60
+cache_max_entries = 128
+
+[[identity.manual]]
+ssi = 2260571
+mnemonic = "YO6RZV"
+label = "Razvan"
+
+[identity.radioid]
+enabled = true
+timeout_secs = 2
+min_lookup_interval_ms = 500
+user_agent = "FlowStation test"
+api_token = "secret"
+"#
+        );
+        let cfg = from_toml_str(&toml).expect("parse failed");
+        assert!(cfg.identity.enabled);
+        assert_eq!(cfg.identity.cache_ttl_secs, 60);
+        assert_eq!(cfg.identity.cache_max_entries, 128);
+        assert_eq!(cfg.identity.manual[0].ssi, 2260571);
+        assert_eq!(cfg.identity.manual[0].mnemonic.as_deref(), Some("YO6RZV"));
+        assert!(cfg.identity.radioid.enabled);
+        assert_eq!(cfg.identity.radioid.min_lookup_interval_ms, 500);
+        assert!(cfg.identity.radioid.api_token.is_some());
+    }
+
+    #[test]
+    fn test_identity_rejects_unknown_nested_fields() {
+        let toml = format!(
+            "{}\n{}",
+            minimal_toml(""),
+            r#"
+[identity]
+enabled = true
+
+[identity.radioid]
+enabled = false
+bogus = "nope"
+"#
+        );
+        assert!(from_toml_str(&toml).is_err(), "should reject unknown identity.radioid field");
     }
 }

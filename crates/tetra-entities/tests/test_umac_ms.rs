@@ -29,6 +29,7 @@ fn test_umac_ms() {
             logical_channel: LogicalChannel::SchHd,
             crc_pass: true,
             scrambling_code: 0,
+            rssi_dbfs: 0.0,
         }),
     };
 
@@ -67,6 +68,7 @@ fn test_umac_frag() {
             logical_channel: LogicalChannel::SchHd,
             crc_pass: true,
             scrambling_code: 0,
+            rssi_dbfs: 0.0,
         }),
     };
     test.submit_message(m);
@@ -84,6 +86,7 @@ fn test_umac_frag() {
             logical_channel: LogicalChannel::SchHd,
             crc_pass: true,
             scrambling_code: 0,
+            rssi_dbfs: 0.0,
         }),
     };
 
@@ -122,6 +125,7 @@ fn test_sysinfo() {
             logical_channel: LogicalChannel::Bnch,
             crc_pass: true,
             scrambling_code: 0,
+            rssi_dbfs: 0.0,
         }),
     };
     test.submit_message(m);
@@ -156,6 +160,7 @@ fn test_sync() {
             logical_channel: LogicalChannel::Bsch,
             crc_pass: true,
             scrambling_code: 0,
+            rssi_dbfs: 0.0,
         }),
     };
     test.submit_message(m);
@@ -188,6 +193,7 @@ fn test_resource() {
             logical_channel: LogicalChannel::SchF,
             crc_pass: true,
             scrambling_code: 0,
+            rssi_dbfs: 0.0,
         }),
     };
     test.submit_message(m);

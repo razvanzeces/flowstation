@@ -24,6 +24,7 @@ fn test_in_fragmented_sch_hu_and_sch_f() {
         logical_channel: LogicalChannel::SchHu,
         crc_pass: true,
         scrambling_code: 864282631,
+        rssi_dbfs: 0.0,
     };
     let test_sapmsg1 = SapMsg {
         sap: Sap::TmvSap,
@@ -37,6 +38,7 @@ fn test_in_fragmented_sch_hu_and_sch_f() {
         logical_channel: LogicalChannel::SchF,
         crc_pass: true,
         scrambling_code: 864282631,
+        rssi_dbfs: 0.0,
     };
     let test_sapmsg2 = SapMsg {
         sap: Sap::TmvSap,
@@ -62,7 +64,11 @@ fn test_in_fragmented_sch_hu_and_sch_f() {
     let sink_msgs = test.dump_sinks();
 
     // Evaluate results. We should have an MM message in the sink
-    assert_eq!(sink_msgs.len(), 1);
+    let lmm_ind_count = sink_msgs
+        .iter()
+        .filter(|msg| matches!(&msg.msg, SapMsgInner::LmmMleUnitdataInd(_)))
+        .count();
+    assert_eq!(lmm_ind_count, 1, "sink messages: {sink_msgs:#?}");
     tracing::info!("We have the expected MM message, but full validation of result not implemented");
 }
 
@@ -82,6 +88,7 @@ fn test_in_fragmented_sch_hu_and_sch_hu() {
         logical_channel: LogicalChannel::SchHu,
         crc_pass: true,
         scrambling_code: 864282631,
+        rssi_dbfs: 0.0,
     };
     let test_sapmsg1 = SapMsg {
         sap: Sap::TmvSap,
@@ -95,6 +102,7 @@ fn test_in_fragmented_sch_hu_and_sch_hu() {
         logical_channel: LogicalChannel::SchHu,
         crc_pass: true,
         scrambling_code: 864282631,
+        rssi_dbfs: 0.0,
     };
     let test_sapmsg2 = SapMsg {
         sap: Sap::TmvSap,

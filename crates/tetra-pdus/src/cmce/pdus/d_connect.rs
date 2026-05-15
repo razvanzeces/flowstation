@@ -4,6 +4,7 @@ use crate::cmce::enums::call_timeout::CallTimeout;
 use crate::cmce::enums::transmission_grant::TransmissionGrant;
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
 use crate::cmce::fields::basic_service_information::BasicServiceInformation;
+use crate::cmce::fields::ss_tpi::SsTpiInform;
 use tetra_core::typed_pdu_fields::*;
 use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
@@ -39,7 +40,7 @@ pub struct DConnect {
     /// Type2, 6 bits, Notification indicator
     pub notification_indicator: Option<u64>,
     /// Type3, Facility
-    pub facility: Option<Type3FieldGeneric>,
+    pub facility: Option<SsTpiInform>,
     /// Type3, Proprietary
     pub proprietary: Option<Type3FieldGeneric>,
 }
@@ -83,7 +84,7 @@ impl DConnect {
         let notification_indicator = typed::parse_type2_generic(obit, buffer, 6, "notification_indicator")?;
 
         // Type3
-        let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
+        let facility = typed::parse_type3_struct(obit, buffer, CmceType3ElemId::Facility, SsTpiInform::from_bitbuf)?;
 
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
@@ -155,7 +156,7 @@ impl DConnect {
         typed::write_type2_generic(obit, buffer, self.notification_indicator, 6);
 
         // Type3
-        typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
+        typed::write_type3_struct(obit, buffer, &self.facility, CmceType3ElemId::Facility, SsTpiInform::to_bitbuf)?;
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;

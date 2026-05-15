@@ -17,8 +17,9 @@ impl CcBsSubentity {
                 calling_party.ssi
             );
             let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
-                    tracing::error!("BUG: unexpected message or state -- routing error"); return;
-                };
+                tracing::error!("BUG: unexpected message or state -- routing error");
+                return;
+            };
             let reject_call_id = self.circuits.get_next_call_id();
             let sdu = Self::build_d_release(reject_call_id, DisconnectCause::IncompatibleTrafficCase);
             let msg = Self::build_sapmsg_direct(sdu, calling_party, prim.handle, prim.link_id, prim.endpoint_id);
@@ -54,14 +55,35 @@ impl CcBsSubentity {
                 return;
             }
             let (sender_ts, sender_usage, peer_addr, peer_ts, peer_usage) = if sender.ssi == call.calling_addr.ssi {
-                (call.calling_ts, call.calling_usage, call.called_addr, call.called_ts, call.called_usage)
+                (
+                    call.calling_ts,
+                    call.calling_usage,
+                    call.called_addr,
+                    call.called_ts,
+                    call.called_usage,
+                )
             } else {
-                (call.called_ts, call.called_usage, call.calling_addr, call.calling_ts, call.calling_usage)
+                (
+                    call.called_ts,
+                    call.called_usage,
+                    call.calling_addr,
+                    call.calling_ts,
+                    call.calling_usage,
+                )
             };
-            tracing::info!("U-TX CEASED (individual) call_id={} from ISSI {} -> sending D-TX-CEASED to sender, D-TX-GRANTED to peer ISSI {}", call_id, sender.ssi, peer_addr.ssi);
+            tracing::info!(
+                "U-TX CEASED (individual) call_id={} from ISSI {} -> sending D-TX-CEASED to sender, D-TX-GRANTED to peer ISSI {}",
+                call_id,
+                sender.ssi,
+                peer_addr.ssi
+            );
 
             // 1) D-TX-CEASED to sender so it knows floor was released and resets PTT state.
-            tracing::info!("-> D-TX CEASED (individual simplex, FACCH) call_id={} to sender ISSI {}", call_id, sender.ssi);
+            tracing::info!(
+                "-> D-TX CEASED (individual simplex, FACCH) call_id={} to sender ISSI {}",
+                call_id,
+                sender.ssi
+            );
             let ceased_pdu = DTxCeased {
                 call_identifier: call_id,
                 transmission_request_permission: false,
@@ -81,7 +103,13 @@ impl CcBsSubentity {
             // Without this explicit grant, radios that received GrantedToOtherUser in D-CONNECT
             // will not enable PTT after a D-TX-CEASED — they require an explicit D-TX-GRANTED.
             // Use UL-only so the new speaker transmits but does not loop back its own audio.
-            tracing::info!("-> D-TX GRANTED Granted (individual simplex, FACCH) call_id={} to peer ISSI {}", call_id, peer_addr.ssi);
+            self.tpi_update_talker(call_id, peer_addr.ssi);
+            let tpi_facility = self.tpi_inform_for_call(call_id);
+            tracing::info!(
+                "-> D-TX GRANTED Granted (individual simplex, FACCH) call_id={} to peer ISSI {}",
+                call_id,
+                peer_addr.ssi
+            );
             let granted_pdu = DTxGranted {
                 call_identifier: call_id,
                 transmission_grant: TransmissionGrant::Granted.into_raw() as u8,
@@ -93,7 +121,7 @@ impl CcBsSubentity {
                 transmitting_party_address_ssi: Some(peer_addr.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
-                facility: None,
+                facility: tpi_facility.clone(),
                 dm_ms_address: None,
                 proprietary: None,
             };
@@ -107,7 +135,11 @@ impl CcBsSubentity {
             // 3) D-TX-GRANTED(GrantedToOtherUser) back to former sender so it knows the peer
             // now holds the floor and it is the listener. This mirrors what U-TX-DEMAND sends
             // and keeps both radios in sync on who has UL vs DL for the remainder of the call.
-            tracing::info!("-> D-TX GRANTED GrantedToOtherUser (individual simplex, FACCH) call_id={} to former sender ISSI {} (now listener)", call_id, sender.ssi);
+            tracing::info!(
+                "-> D-TX GRANTED GrantedToOtherUser (individual simplex, FACCH) call_id={} to former sender ISSI {} (now listener)",
+                call_id,
+                sender.ssi
+            );
             let gtou_pdu = DTxGranted {
                 call_identifier: call_id,
                 transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
@@ -119,12 +151,14 @@ impl CcBsSubentity {
                 transmitting_party_address_ssi: Some(peer_addr.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
-                facility: None,
+                facility: tpi_facility,
                 dm_ms_address: None,
                 proprietary: None,
             };
             let mut gtou_sdu = BitBuffer::new_autoexpand(50);
-            gtou_pdu.to_bitbuf(&mut gtou_sdu).expect("Failed to serialize DTxGranted GrantedToOtherUser");
+            gtou_pdu
+                .to_bitbuf(&mut gtou_sdu)
+                .expect("Failed to serialize DTxGranted GrantedToOtherUser");
             gtou_sdu.seek(0);
             // Former sender is now listener: DL-only assignment (already set by ceased_msg above,
             // but the explicit D-TX-GRANTED ensures the radio re-enables its PTT request button).
@@ -221,7 +255,14 @@ impl CcBsSubentity {
             } else {
                 (call.calling_addr, call.calling_ts, call.calling_usage)
             };
-            tracing::info!("U-TX DEMAND (individual) call_id={} from ISSI {} -> granting floor, notifying peer ISSI {}", call_id, requesting_party.ssi, peer_addr.ssi);
+            tracing::info!(
+                "U-TX DEMAND (individual) call_id={} from ISSI {} -> granting floor, notifying peer ISSI {}",
+                call_id,
+                requesting_party.ssi,
+                peer_addr.ssi
+            );
+            self.tpi_update_talker(call_id, requesting_party.ssi);
+            let tpi_facility = self.tpi_inform_for_call(call_id);
 
             // D-TX-GRANTED to requester (Granted) — they may now transmit.
             // For simplex: give them UL-only so they transmit but don't receive their own TX.
@@ -236,16 +277,28 @@ impl CcBsSubentity {
                 transmitting_party_address_ssi: Some(requesting_party.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
-                facility: None,
+                facility: tpi_facility.clone(),
                 dm_ms_address: None,
                 proprietary: None,
             };
-            tracing::info!("-> D-TX GRANTED Granted (individual simplex) call_id={} to ISSI {}", call_id, requesting_party.ssi);
+            tracing::info!(
+                "-> D-TX GRANTED Granted (individual simplex) call_id={} to ISSI {}",
+                call_id,
+                requesting_party.ssi
+            );
             let mut dtg_req_sdu = BitBuffer::new_autoexpand(50);
             dtg_req.to_bitbuf(&mut dtg_req_sdu).expect("Failed to serialize DTxGranted");
             dtg_req_sdu.seek(0);
-            let req_ts = if requesting_party.ssi == call.calling_addr.ssi { call.calling_ts } else { call.called_ts };
-            let req_usage = if requesting_party.ssi == call.calling_addr.ssi { call.calling_usage } else { call.called_usage };
+            let req_ts = if requesting_party.ssi == call.calling_addr.ssi {
+                call.calling_ts
+            } else {
+                call.called_ts
+            };
+            let req_usage = if requesting_party.ssi == call.calling_addr.ssi {
+                call.calling_usage
+            } else {
+                call.called_usage
+            };
             // Requester now owns the floor: give UL-only assignment so they transmit.
             let dtg_req_msg = Self::build_sapmsg_stealing_ul_dl(dtg_req_sdu, requesting_party, req_ts, Some(req_usage), UlDlAssignment::Ul);
             queue.push_back(dtg_req_msg);
@@ -265,11 +318,15 @@ impl CcBsSubentity {
                 transmitting_party_address_ssi: Some(requesting_party.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
-                facility: None,
+                facility: tpi_facility,
                 dm_ms_address: None,
                 proprietary: None,
             };
-            tracing::info!("-> D-TX GRANTED GrantedToOtherUser (individual simplex) call_id={} to ISSI {}", call_id, peer_addr.ssi);
+            tracing::info!(
+                "-> D-TX GRANTED GrantedToOtherUser (individual simplex) call_id={} to ISSI {}",
+                call_id,
+                peer_addr.ssi
+            );
             let mut dtg_peer_sdu = BitBuffer::new_autoexpand(50);
             dtg_peer.to_bitbuf(&mut dtg_peer_sdu).expect("Failed to serialize DTxGranted peer");
             dtg_peer_sdu.seek(0);

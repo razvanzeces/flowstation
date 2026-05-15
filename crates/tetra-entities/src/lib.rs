@@ -16,6 +16,7 @@ pub mod network;
 pub mod net_brew;
 pub mod net_control;
 pub mod net_dashboard;
+pub mod net_identity;
 pub mod net_telemetry;
 
 // Re-export commonly used items from router

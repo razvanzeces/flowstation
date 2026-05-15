@@ -1,6 +1,7 @@
 use core::fmt;
 
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
+use crate::cmce::fields::ss_tpi::SsTpiInform;
 use tetra_core::typed_pdu_fields::*;
 use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
@@ -35,7 +36,7 @@ pub struct DTxGranted {
     /// Type3, External subscriber number
     pub external_subscriber_number: Option<Type3FieldGeneric>,
     /// Type3, Facility
-    pub facility: Option<Type3FieldGeneric>,
+    pub facility: Option<SsTpiInform>,
     /// Type3, DM-MS address
     pub dm_ms_address: Option<Type3FieldGeneric>,
     /// Type3, Proprietary
@@ -85,7 +86,7 @@ impl DTxGranted {
         let external_subscriber_number = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::ExtSubscriberNum)?;
 
         // Type3
-        let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
+        let facility = typed::parse_type3_struct(obit, buffer, CmceType3ElemId::Facility, SsTpiInform::from_bitbuf)?;
 
         // Type3
         let dm_ms_address = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::DmMsAddr)?;
@@ -162,7 +163,7 @@ impl DTxGranted {
 
         // Type3
 
-        typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
+        typed::write_type3_struct(obit, buffer, &self.facility, CmceType3ElemId::Facility, SsTpiInform::to_bitbuf)?;
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.dm_ms_address, CmceType3ElemId::DmMsAddr)?;

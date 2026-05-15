@@ -2,6 +2,7 @@ use super::*;
 
 impl CcBsSubentity {
     pub fn new(config: SharedConfig) -> Self {
+        let identity_resolver = Self::tpi_resolver_for_config(&config);
         CcBsSubentity {
             config,
             dltime: TdmaTime::default(),
@@ -13,6 +14,8 @@ impl CcBsSubentity {
             group_listeners: HashMap::new(),
             telemetry: None,
             echo_session: None,
+            tpi_contexts: HashMap::new(),
+            identity_resolver,
         }
     }
 
@@ -47,6 +50,8 @@ impl CcBsSubentity {
     }
 
     pub fn set_config(&mut self, config: SharedConfig) {
+        self.identity_resolver = Self::tpi_resolver_for_config(&config);
+        self.tpi_contexts.clear();
         self.config = config;
     }
 
@@ -771,6 +776,7 @@ impl CcBsSubentity {
 
     /// Send D-TX GRANTED via FACCH stealing on the group traffic channel.
     pub(super) fn send_d_tx_granted_facch(&mut self, queue: &mut MessageQueue, call_id: u16, source_issi: u32, dest_gssi: u32, ts: u8) {
+        let facility = self.tpi_for_speaker(call_id, source_issi);
         let pdu = DTxGranted {
             call_identifier: call_id,
             transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
@@ -782,7 +788,7 @@ impl CcBsSubentity {
             transmitting_party_address_ssi: Some(source_issi as u64),
             transmitting_party_extension: None,
             external_subscriber_number: None,
-            facility: None,
+            facility,
             dm_ms_address: None,
             proprietary: None,
         };
@@ -884,6 +890,7 @@ impl CcBsSubentity {
 
         self.cached_setups.remove(&call_id);
         self.active_calls.remove(&call_id);
+        self.tpi_end_context(call_id);
         // Notify dashboard immediately — don't wait for tick_start_with_events
         self.emit(crate::net_telemetry::TelemetryEvent::GroupCallEnded { call_id, gssi: 0 });
     }
@@ -973,6 +980,7 @@ impl CcBsSubentity {
             self.release_timeslot(ts);
         }
         self.cached_setups.remove(&call_id);
+        self.tpi_end_context(call_id);
 
         if (call.called_over_brew || call.calling_over_brew) && disconnect_cause != DisconnectCause::SwmiRequestedDisconnection {
             if let Some(brew_uuid) = call.brew_uuid {

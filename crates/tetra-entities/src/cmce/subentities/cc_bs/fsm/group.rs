@@ -63,7 +63,7 @@ impl CcBsSubentity {
             transmitting_party_address_ssi: transmitting_party_issi.map(|ssi| ssi as u64),
             transmitting_party_extension: None,
             external_subscriber_number: None,
-            facility: None,
+            facility: self.tpi_inform_for_call(call_id),
             dm_ms_address: None,
             proprietary: None,
         };
@@ -105,6 +105,9 @@ impl CcBsSubentity {
         } else {
             Some(call.queue_tx_demand(requesting_party))
         };
+        if grant_now {
+            self.tpi_update_talker(call_id, requesting_party.ssi);
+        }
 
         let Some(cached) = self.cached_setups.get(&call_id) else {
             return Err(GroupTransitionError::MissingCachedSetup(call_id));
@@ -230,6 +233,7 @@ impl CcBsSubentity {
         let dest_addr = cached.dest_addr;
 
         if let Some(requester) = queued_request {
+            self.tpi_update_talker(call_id, requester.ssi);
             self.fsm_send_d_tx_granted_individual(queue, call_id, requester, ts, TransmissionGrant::Granted, Some(requester.ssi));
             self.send_d_tx_granted_facch(queue, call_id, requester.ssi, dest_addr.ssi, ts);
 
@@ -332,6 +336,7 @@ impl CcBsSubentity {
         let usage = call.usage;
         let dest_gssi = call.dest_gssi;
 
+        self.tpi_update_talker(call_id, source_issi);
         self.send_d_tx_granted_facch(queue, call_id, source_issi, dest_gssi, ts);
 
         queue.push_back(SapMsg {

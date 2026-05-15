@@ -31,5 +31,8 @@ pub use sec_control::*;
 pub mod sec_security;
 pub use sec_security::*;
 
+pub mod sec_identity;
+pub use sec_identity::*;
+
 pub mod state;
 pub use state::*;
