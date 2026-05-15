@@ -343,6 +343,10 @@ impl TetraEntityTrait for MleBs {
         // Use a constant multiframe/frame offset to avoid congestion with other
         // hyperframe-triggered events.
         if ts.m == MLE_BROADCAST_MULTIFRAME && ts.f == MLE_BROADCAST_FRAME && ts.t == 1 {
+            tracing::debug!(
+                "MLE: hyperframe broadcast slot (hf={} m={} f={} t={})",
+                ts.h, ts.m, ts.f, ts.t
+            );
             self.broadcast.send_broadcast(queue);
         }
     }

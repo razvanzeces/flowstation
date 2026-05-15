@@ -82,6 +82,21 @@ colour_code = 1
 # radios can synchronize their clocks. Daylight saving time is handled automatically.
 # timezone = "Europe/Bucharest"
 
+###############################################################################
+# OPTIONAL: Home Mode Display (PID 220)
+#
+# Periodically broadcasts a text string to all MSs on the cell via D-SDS-DATA.
+# The MS displays this text on its home screen (e.g. base station callsign).
+# Enabled by the presence of this sub-section; remove to disable.
+#
+# [cell_info.home_mode_display]
+# source_issi = 16777215          # ISSI shown as sender on the radio (default: 16777215)
+# interval_multiframes = 96       # Broadcast interval (1 MF ≈ 1s; default: 96 ≈ 96s)
+# protocol_id = 220               # SDS protocol ID for Home Mode Display (default: 220)
+# text_coding_scheme = "LATIN"    # "LATIN" = ISO-8859-1, "UTF16" = UCS-2/UTF-16BE
+# text = "FlowStation"            # Text shown on radio display
+###############################################################################
+
 # Local SSI ranges for this cell. Traffic for these ranges will not leave the cell.
 # Overrides any settings in the brew section, if enabled.
 # Incoming brew traffic on these ranges will also be rejected.
@@ -212,6 +227,12 @@ voice_service = true
 
 # Enable SDS forwarding between local clients and Brew. Enabled by default.
 # feature_sds_enabled = true
+
+# Export RSSI measurements to the Brew server as Service (0xf4) JSON messages.
+# Disabled by default. Enable if your Brew server supports RSSI data ingestion.
+# When enabled, each radio's signal level is sent at most once every 5 seconds.
+# Format: {"issi": 2260570, "rssi_dbfs": -42.3}
+# feature_rssi_export = false
 
 # Uncomment to allow only calls for selected SSIs to be forwarded through Brew.
 # If left commented, all calls (outside local_ssi_ranges) are allowed through Brew.

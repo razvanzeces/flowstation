@@ -405,6 +405,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <div class="card-title">config.toml</div>
       <div class="card-header-actions">
         <button class="btn btn-warn" onclick="restartService()" data-i18n="restart">⟳ Restart</button>
+        <button class="btn btn-danger" onclick="shutdownService()" data-i18n="shutdown">⏻ Shutdown</button>
         <button class="btn btn-primary" onclick="saveConfig()" data-i18n="save">Save</button>
       </div>
     </div>
@@ -451,7 +452,7 @@ const LANGS={
     registered_terminals:'Registered Terminals',
     no_terminals:'No terminals registered',no_calls:'No active calls',
     live_log:'Live Log',autoscroll:'Auto-scroll',filter_all:'All',
-    clear:'Clear',restart:'⟳ Restart',save:'Save',
+    clear:'Clear',restart:'⟳ Restart',shutdown:'⏻ Shutdown',save:'Save',
     sds_title:'⬡ Send SDS Message',sds_dest:'Destination ISSI',
     sds_msg_label:'Message',cancel:'Cancel',send:'Send',
     th_issi:'ISSI',th_groups:'Groups',th_ee:'EE',th_signal:'Signal',
@@ -465,6 +466,7 @@ const LANGS={
     call_group:'GROUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
     confirm_kick:'Kick ISSI {issi}?\nTerminal will be deregistered and forced to re-attach.',
     confirm_restart:'Restart FlowStation?\nAll active calls will be dropped.',
+    confirm_shutdown:'Shutdown FlowStation?\nThe service will stop and must be restarted manually.',
     saved:'✓ Saved — restart to apply.',save_fail:'✗ Save failed',conn_error:'Connection error.',
   },
   ro:{
@@ -476,7 +478,7 @@ const LANGS={
     registered_terminals:'Terminale Înregistrate',
     no_terminals:'Nicio stație înregistrată',no_calls:'Niciun apel activ',
     live_log:'Log Live',autoscroll:'Auto-scroll',filter_all:'Toate',
-    clear:'Șterge',restart:'⟳ Repornire',save:'Salvează',
+    clear:'Șterge',restart:'⟳ Repornire',shutdown:'⏻ Oprire',save:'Salvează',
     sds_title:'⬡ Trimite Mesaj SDS',sds_dest:'ISSI Destinatar',
     sds_msg_label:'Mesaj',cancel:'Anulează',send:'Trimite',
     th_issi:'ISSI',th_groups:'Grupuri',th_ee:'EE',th_signal:'Semnal',
@@ -490,6 +492,7 @@ const LANGS={
     call_group:'GRUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
     confirm_kick:'Kick ISSI {issi}?\nTerminalul va fi deînregistrat și forțat să se reconecteze.',
     confirm_restart:'Repornire FlowStation?\nToate apelurile active vor fi întrerupte.',
+    confirm_shutdown:'Oprire FlowStation?\nServiciul se va opri și trebuie repornit manual.',
     saved:'✓ Salvat — repornire pentru aplicare.',save_fail:'✗ Salvare eșuată',conn_error:'Eroare de conexiune.',
   },
   de:{
@@ -501,7 +504,7 @@ const LANGS={
     registered_terminals:'Registrierte Terminals',
     no_terminals:'Keine Terminals registriert',no_calls:'Keine aktiven Anrufe',
     live_log:'Live-Log',autoscroll:'Auto-Scroll',filter_all:'Alle',
-    clear:'Löschen',restart:'⟳ Neustart',save:'Speichern',
+    clear:'Löschen',restart:'⟳ Neustart',shutdown:'⏻ Herunterfahren',save:'Speichern',
     sds_title:'⬡ SDS-Nachricht senden',sds_dest:'Ziel-ISSI',
     sds_msg_label:'Nachricht',cancel:'Abbrechen',send:'Senden',
     th_issi:'ISSI',th_groups:'Gruppen',th_ee:'EE',th_signal:'Signal',
@@ -515,6 +518,7 @@ const LANGS={
     call_group:'GRUPPE',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
     confirm_kick:'ISSI {issi} entfernen?\nDas Terminal wird abgemeldet und zur Neuanmeldung gezwungen.',
     confirm_restart:'FlowStation neu starten?\nAlle aktiven Anrufe werden beendet.',
+    confirm_shutdown:'FlowStation herunterfahren?\nDer Dienst wird gestoppt und muss manuell neu gestartet werden.',
     saved:'✓ Gespeichert — Neustart zum Anwenden.',save_fail:'✗ Fehler beim Speichern',conn_error:'Verbindungsfehler.',
   },
   es:{
@@ -526,7 +530,7 @@ const LANGS={
     registered_terminals:'Terminales Registrados',
     no_terminals:'No hay terminales registrados',no_calls:'No hay llamadas activas',
     live_log:'Log en Vivo',autoscroll:'Auto-desplaz.',filter_all:'Todos',
-    clear:'Limpiar',restart:'⟳ Reiniciar',save:'Guardar',
+    clear:'Limpiar',restart:'⟳ Reiniciar',shutdown:'⏻ Apagar',save:'Guardar',
     sds_title:'⬡ Enviar Mensaje SDS',sds_dest:'ISSI Destino',
     sds_msg_label:'Mensaje',cancel:'Cancelar',send:'Enviar',
     th_issi:'ISSI',th_groups:'Grupos',th_ee:'EE',th_signal:'Señal',
@@ -540,6 +544,7 @@ const LANGS={
     call_group:'GRUPO',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
     confirm_kick:'¿Expulsar ISSI {issi}?\nEl terminal será desregistrado y forzado a reconectarse.',
     confirm_restart:'¿Reiniciar FlowStation?\nTodas las llamadas activas se interrumpirán.',
+    confirm_shutdown:'¿Apagar FlowStation?\nEl servicio se detendrá y deberá reiniciarse manualmente.',
     saved:'✓ Guardado — reinicia para aplicar.',save_fail:'✗ Error al guardar',conn_error:'Error de conexión.',
   },
 };
@@ -803,6 +808,7 @@ async function saveConfig(){
 }
 function setConfigMsg(txt,ok){const el=document.getElementById('config-msg');el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';}
 async function restartService(){if(!confirm(t('confirm_restart')))return;ws&&ws.send(JSON.stringify({type:'restart'}));}
+async function shutdownService(){if(!confirm(t('confirm_shutdown')))return;ws&&ws.send(JSON.stringify({type:'shutdown'}));}
 function kickMs(issi){if(!confirm(t('confirm_kick',{issi})))return;ws&&ws.send(JSON.stringify({type:'kick',issi}));}
 function openSds(issi){sdsDest=issi;document.getElementById('sds-dest').value=issi;document.getElementById('sds-msg').value='';document.getElementById('sds-modal').classList.add('open');}
 function closeSdsModal(){document.getElementById('sds-modal').classList.remove('open');}

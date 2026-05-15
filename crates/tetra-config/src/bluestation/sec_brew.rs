@@ -25,6 +25,9 @@ pub struct CfgBrew {
 
     /// Set to true when SDS between local and Brew clients is enabled
     pub feature_sds_enabled: bool,
+    /// If true, RSSI measurements are exported to the Brew server as Service (0xf4) JSON messages.
+    /// Disabled by default. Enable only if the Brew server supports and expects RSSI data.
+    pub feature_rssi_export: bool,
     /// If present, restrict Brew call to these remote SSIs
     pub whitelisted_ssis: Option<Vec<u32>>,
 }
@@ -56,6 +59,10 @@ pub struct CfgBrewDto {
     #[serde(default = "default_brew_feature_sds_enabled")]
     pub feature_sds_enabled: bool,
 
+    /// Export RSSI measurements to the Brew server as Service JSON messages. Default: false.
+    #[serde(default)]
+    pub feature_rssi_export: bool,
+
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -83,6 +90,7 @@ pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
         reconnect_delay: Duration::from_secs(src.reconnect_delay_secs),
         jitter_initial_latency_frames: src.jitter_initial_latency_frames,
         feature_sds_enabled: src.feature_sds_enabled,
+        feature_rssi_export: src.feature_rssi_export,
         whitelisted_ssis: src.whitelisted_ssis,
     }
 }

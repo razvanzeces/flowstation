@@ -91,6 +91,15 @@ impl CmceBs {
                         .status();
                 });
             }
+            ControlCommand::ShutdownService => {
+                tracing::info!("CMCE: ShutdownService requested");
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    let _ = std::process::Command::new("systemctl")
+                        .args(["stop", "tetra"])
+                        .status();
+                });
+            }
             _ => {
                 tracing::warn!("CMCE: ignoring unsupported control command {:?}", cmd);
             }
@@ -172,6 +181,7 @@ impl TetraEntityTrait for CmceBs {
     fn set_config(&mut self, config: SharedConfig) { self.config = config; }
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
+        self.sds.tick_start(queue, ts);
         let call_events = self.cc.tick_start_with_events(queue, ts);
         if let Some(sink) = &self.telemetry {
             for event in call_events { sink.send(event); }

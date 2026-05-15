@@ -27,6 +27,9 @@ pub enum ControlCommand {
     /// Restart the FlowStation service (systemctl restart tetra)
     RestartService,
 
+    /// Stop the FlowStation service (systemctl stop tetra)
+    ShutdownService,
+
     /// Placeholder command A.
     CommandA { handle: u32, parameter: u32 },
     /// Placeholder command B.

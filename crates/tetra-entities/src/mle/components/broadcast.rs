@@ -27,6 +27,18 @@ pub struct MleBroadcast {
 impl MleBroadcast {
     pub fn new(config: SharedConfig) -> Self {
         let time_broadcast = config.config().cell.timezone.clone();
+
+        // Log starea initiala la startup — primul semn vizibil ca feature-ul e activ sau nu
+        match &time_broadcast {
+            Some(tz) => tracing::info!(
+                "MLE broadcast: D-NWRK-BROADCAST activ, timezone='{}' (broadcast o data per hyperframe ~61s)",
+                tz
+            ),
+            None => tracing::info!(
+                "MLE broadcast: D-NWRK-BROADCAST inactiv — cell.timezone neconfigurat in config.toml"
+            ),
+        }
+
         Self {
             config,
             last_broadcast_type: BroadcastType::None,
@@ -37,6 +49,13 @@ impl MleBroadcast {
     /// Send the next broadcast message based on the configured broadcast types and internal state.
     pub fn send_broadcast(&mut self, queue: &mut MessageQueue) {
         let broadcast_type = self.determine_next_broadcast_type();
+
+        tracing::debug!(
+            "MLE broadcast: slot fired, last={:?} -> next={:?}",
+            self.last_broadcast_type,
+            broadcast_type
+        );
+
         self.last_broadcast_type = broadcast_type;
 
         match broadcast_type {
@@ -44,7 +63,7 @@ impl MleBroadcast {
                 self.send_d_nwrk_broadcast(queue);
             }
             BroadcastType::None => {
-                // No broadcast to send
+                tracing::debug!("MLE broadcast: nimic de trimis (timezone neconfigurat)");
             }
         }
     }
@@ -64,15 +83,34 @@ impl MleBroadcast {
     }
 
     fn send_d_nwrk_broadcast(&self, queue: &mut MessageQueue) {
-        // Timezone is validated at config parse time, so encode cannot fail here
         let tz = self.time_broadcast.as_deref().unwrap();
-        let time_value = match network_time::encode_tetra_network_time(tz) {
-            Some(v) => v,
-            None => {
-                tracing::warn!("D-NWRK-BROADCAST: failed to encode network time for tz='{}', skipping", tz);
-                return;
-            }
-        };
+
+        tracing::debug!("D-NWRK-BROADCAST: encoding time pentru tz='{}'", tz);
+
+        // FIX: timezone-ul a trecut validarea din SharedConfig::from_parts() la startup,
+        // deci encode_tetra_network_time() nu ar trebui sa returneze niciodata None aici.
+        // Daca se intampla totusi, este un bug grav (chrono feature lipsit, divergenta
+        // de versiune chrono-tz) si trebuie sa fie vizibil imediat, nu ignorat silentios.
+        //
+        // Versiunea anterioara facea `return` cu un simplu `warn`, ceea ce insemna ca
+        // PDU-ul nu se trimitea niciodata fara nicio notificare vizibila pentru utilizator.
+        let time_value = network_time::encode_tetra_network_time(tz)
+            .unwrap_or_else(|| {
+                panic!(
+                    "D-NWRK-BROADCAST: encode_tetra_network_time returned None pentru tz='{}' \
+                     desi timezone-ul a trecut validarea la startup. \
+                     Verifica ca chrono este compilat cu feature 'std' (vezi workspace Cargo.toml).",
+                    tz
+                )
+            });
+
+        tracing::debug!(
+            "D-NWRK-BROADCAST: time encodat 0x{:012X} (sign={} offset_x15min={} year={})",
+            time_value,
+            (time_value >> 23) & 1,
+            (time_value >> 17) & 0x3F,
+            (time_value >> 11) & 0x3F,
+        );
 
         // Build neighbor cell list from config
         let cfg = self.config.config();
@@ -122,11 +160,13 @@ impl MleBroadcast {
         // can exceed 900 bits, so a fixed-size buffer would silently corrupt the output.
         let mut pdu_buf = BitBuffer::new_autoexpand(256);
         if let Err(e) = pdu.to_bitbuf(&mut pdu_buf) {
-            tracing::warn!("Failed to serialize D-NWRK-BROADCAST: {:?}", e);
+            tracing::warn!("D-NWRK-BROADCAST: serializare esuata: {:?}", e);
             return;
         }
         let pdu_len = pdu_buf.get_pos();
         pdu_buf.seek(0);
+
+        tracing::debug!("D-NWRK-BROADCAST: PDU serializat ({} bits)", pdu_len);
 
         // Prepend 3-bit MLE protocol discriminator
         let mut tl_sdu = BitBuffer::new(3 + pdu_len);
@@ -159,9 +199,17 @@ impl MleBroadcast {
             }),
         };
         queue.push_back(sapmsg);
+
+        // INFO-level: confirmare clara ca PDU-ul a fost pus in coada spre LLC -> UMAC -> PHY.
+        // Offset-ul e afisat si in ore pentru a putea verifica vizual DST-ul (UTC+2 iarna, UTC+3 vara).
         tracing::info!(
-            "D-NWRK-BROADCAST sent (tz={}, time=0x{:012X}, neighbours={})",
-            tz, time_value, neighbour_count
+            "D-NWRK-BROADCAST queued OK \
+             (tz={}, time=0x{:012X}, offset={}x15min={:.2}h, neighbours={})",
+            tz,
+            time_value,
+            (time_value >> 17) & 0x3F,
+            ((time_value >> 17) & 0x3F) as f32 * 0.25,
+            neighbour_count
         );
     }
 }

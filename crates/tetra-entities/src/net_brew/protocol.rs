@@ -676,7 +676,27 @@ pub fn build_sds_report(session_uuid: &Uuid, status: u8) -> Vec<u8> {
     buf
 }
 
-/// Build a service query (query subscriber profiles)
+/// Service type for RSSI measurements
+pub const BREW_SERVICE_RSSI: u8 = 0x10;
+
+/// Build a Service (0xf4) RSSI update message.
+///
+/// Sends the current RSSI reading for an MS to the Brew server as JSON:
+/// `{"issi": 2260570, "rssi_dbfs": -42.3}`
+///
+/// Service type 0x10 is used to distinguish RSSI messages from subscriber
+/// query messages (type 0x01). The JSON is NULL-terminated per SmartConnect convention.
+pub fn build_service_rssi(issi: u32, rssi_dbfs: f32) -> Vec<u8> {
+    let json = format!("{{\"issi\":{},\"rssi_dbfs\":{:.1}}}", issi, rssi_dbfs);
+    let mut buf = Vec::with_capacity(3 + json.len());
+    buf.push(BREW_CLASS_SERVICE);
+    buf.push(BREW_SERVICE_RSSI);
+    buf.extend_from_slice(json.as_bytes());
+    buf.push(0); // NULL terminator
+    buf
+}
+
+/// Build a query subscribers service message
 pub fn build_query_subscribers(issis: &[u32]) -> Vec<u8> {
     let json = serde_json::to_string(issis).unwrap_or_else(|_| "[]".to_string());
     let mut buf = Vec::with_capacity(3 + json.len());

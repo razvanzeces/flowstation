@@ -116,6 +116,7 @@ impl<T: NetworkTransport> ControlWorker<T> {
             ControlCommand::SendSds { .. } => TetraEntity::Cmce,
             ControlCommand::KickMs { .. } => TetraEntity::Cmce,
             ControlCommand::RestartService => TetraEntity::Cmce,
+            ControlCommand::ShutdownService => TetraEntity::Cmce,
             ControlCommand::CommandA { .. } => TetraEntity::Mm,
             ControlCommand::TestCmdB { .. } => TetraEntity::Cmce,
         }

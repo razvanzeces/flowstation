@@ -4,6 +4,41 @@ use std::collections::HashMap;
 use tetra_core::ranges::{SortedDisjointSsiRanges, SsiRange};
 use toml::Value;
 
+/// Text coding scheme for Home Mode Display SDS payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum HomeModeDisplaySdsTextCodingScheme {
+    /// ISO-8859-1 8-bit Latin alphabet
+    LATIN,
+    /// UCS-2 / UTF-16BE for Unicode text
+    UTF16,
+}
+
+/// Compiled Home Mode Display configuration (present when `[cell_info.home_mode_display]` exists).
+#[derive(Debug, Clone)]
+pub struct CfgHomeModeDisplay {
+    /// ISSI used as the source address of the broadcast SDS.
+    pub source_issi: u32,
+    /// Broadcast interval in TDMA multiframes (1 multiframe = 18 frames = 72 timeslots).
+    pub interval_multiframes: u32,
+    /// SDS Type4 protocol identifier byte. Default: 220 (0xDC).
+    pub protocol_id: u8,
+    /// Text coding scheme prepended to user data. LATIN = ISO-8859-1, UTF16 = UCS-2/UTF-16BE.
+    pub text_coding_scheme: HomeModeDisplaySdsTextCodingScheme,
+    /// Text to broadcast (UTF-8 source, encoded per text_coding_scheme on TX).
+    pub text: String,
+}
+
+/// Serde DTO for `[cell_info.home_mode_display]` config block.
+#[derive(Default, Deserialize)]
+pub struct HomeModeDisplayDto {
+    pub source_issi: Option<u32>,
+    #[serde(alias = "interval_frames")]
+    pub interval_multiframes: Option<u32>,
+    pub protocol_id: Option<u8>,
+    pub text_coding_scheme: Option<HomeModeDisplaySdsTextCodingScheme>,
+    pub text: Option<String>,
+}
+
 /// Service details for a neighbor cell — mirrors BsServiceDetails but for config parsing.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CfgBsServiceDetails {
@@ -124,6 +159,11 @@ pub struct CfgCellInfo {
     /// time broadcasting so MSs can synchronize their clocks.
     pub timezone: Option<String>,
 
+    /// Periodic automatic broadcast of Home Mode Display SDS (PID 220).
+    /// Enabled when `Some`, i.e. `[cell_info.home_mode_display]` exists in config.
+    /// Broadcasts the configured text to all MSs once per interval as a D-SDS-DATA to GSSI 0xFFFFFF.
+    pub home_mode_display: Option<CfgHomeModeDisplay>,
+
     /// Neighbor cells to include in D-NWRK-BROADCAST for cell reselection.
     /// Up to 7 entries. MSs use this list to find alternative cells when signal degrades.
     pub neighbor_cells_ca: Vec<CfgNeighborCellCa>,
@@ -192,6 +232,9 @@ pub struct CellInfoDto {
 
     pub timezone: Option<String>,
 
+    /// Home Mode Display periodic SDS broadcast. Enabled by presence of this sub-section.
+    pub home_mode_display: Option<HomeModeDisplayDto>,
+
     /// Neighbor cells for D-NWRK-BROADCAST. Up to 7 entries.
     /// Parsed separately in parsing.rs from toml::Value to avoid serde flatten conflict.
     #[serde(skip)]
@@ -248,6 +291,13 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
             .map(SortedDisjointSsiRanges::from_vec_tuple)
             .unwrap_or(default_tetrapack_local_ranges()),
         timezone: ci.timezone,
+        home_mode_display: ci.home_mode_display.map(|h| CfgHomeModeDisplay {
+            source_issi: h.source_issi.unwrap_or(0),
+            interval_multiframes: h.interval_multiframes.unwrap_or(96),
+            protocol_id: h.protocol_id.unwrap_or(220),
+            text_coding_scheme: h.text_coding_scheme.unwrap_or(HomeModeDisplaySdsTextCodingScheme::LATIN),
+            text: h.text.unwrap_or_default(),
+        }),
         neighbor_cells_ca: ci.neighbor_cells_ca,
         hangtime_secs: ci.hangtime_secs.unwrap_or(5).clamp(0, 300),
         call_timeout_secs: { let v = ci.call_timeout_secs.unwrap_or(120); if v == 0 { 0 } else { v.clamp(30, 86400) } },

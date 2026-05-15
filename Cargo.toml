@@ -17,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Razvan Zeces / TetraFlow.RO"]
 license = "MIT"
@@ -48,5 +48,5 @@ bitcode = "0.6.9"
 tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 uuid = { version = "1", features = ["v4"] }
 ctrlc = "3"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10"

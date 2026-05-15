@@ -1241,6 +1241,14 @@ impl TetraEntityTrait for MmBs {
                         if let Some(sink) = &self.telemetry {
                             sink.send(crate::net_telemetry::TelemetryEvent::MsRssi { issi, rssi_dbfs });
                         }
+                        // Forward to Brew entity for optional export to Brew server.
+                        // BrewEntity applies its own rate limiting and checks feature_rssi_export.
+                        queue.push_back(SapMsg {
+                            sap: Sap::Control,
+                            src: TetraEntity::Mm,
+                            dest: TetraEntity::Brew,
+                            msg: SapMsgInner::MsRssiUpdate { issi, rssi_dbfs },
+                        });
                     }
                     SapMsgInner::MmSubscriberUpdate(update) => {
                         // CMCE can ask MM to deregister an MS (e.g. kick from dashboard)

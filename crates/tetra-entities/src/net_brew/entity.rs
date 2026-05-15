@@ -132,6 +132,10 @@ pub struct BrewEntity {
     /// Optional telemetry sink for emitting brew status events
     telemetry_sink: Option<TelemetrySink>,
 
+    /// Rate limiting for RSSI export: tracks last sent time per ISSI.
+    /// Only used when feature_rssi_export is enabled in config.
+    rssi_last_sent: HashMap<u32, Instant>,
+
     /// Worker thread handle for graceful shutdown
     worker_handle: Option<thread::JoinHandle<()>>,
 }
@@ -176,6 +180,7 @@ impl BrewEntity {
             subscriber_groups: HashMap::new(),
             connected: false,
             telemetry_sink: None,
+            rssi_last_sent: HashMap::new(),
             worker_handle: Some(handle),
         }
     }
@@ -402,6 +407,29 @@ impl BrewEntity {
                     let _ = (uuid, length_bits, data);
                 }
             }
+        }
+    }
+
+    /// Handle RSSI update from MM. Forwards to Brew server if feature_rssi_export is enabled,
+    /// applying rate limiting (one update per MS every 5 seconds) to avoid flooding the server.
+    fn handle_rssi_update(&mut self, issi: u32, rssi_dbfs: f32) {
+        let brew_cfg = self.config.config();
+        let Some(ref brew) = brew_cfg.brew else { return; };
+        if !brew.feature_rssi_export { return; }
+        if !self.connected { return; }
+
+        const RSSI_EXPORT_INTERVAL: Duration = Duration::from_secs(5);
+
+        let now = Instant::now();
+        let should_send = match self.rssi_last_sent.get(&issi) {
+            None => true,
+            Some(last) => now.duration_since(*last) >= RSSI_EXPORT_INTERVAL,
+        };
+
+        if should_send {
+            self.rssi_last_sent.insert(issi, now);
+            let _ = self.command_sender.send(BrewCommand::SendRssiUpdate { issi, rssi_dbfs });
+            tracing::debug!("Brew: queued RSSI export issi={} rssi={:.1}dBFS", issi, rssi_dbfs);
         }
     }
 
@@ -1070,6 +1098,9 @@ impl TetraEntityTrait for BrewEntity {
             }
             SapMsgInner::MmSubscriberUpdate(update) => {
                 self.handle_subscriber_update(update);
+            }
+            SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => {
+                self.handle_rssi_update(issi, rssi_dbfs);
             }
             SapMsgInner::CmceSdsData(sds) => {
                 self.handle_sds_send(sds);

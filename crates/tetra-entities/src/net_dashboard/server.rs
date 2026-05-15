@@ -350,6 +350,10 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
             tracing::info!("Dashboard: restart service requested");
             send_cmd(ControlCommand::RestartService);
         }
+        Some("shutdown") => {
+            tracing::info!("Dashboard: shutdown service requested");
+            send_cmd(ControlCommand::ShutdownService);
+        }
         Some("sds") => {
             let dest = v.get("dest_issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             let msg_text = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
