@@ -124,8 +124,9 @@ impl DashboardServer {
                     s.calls.remove(call_id);
                     s.push_log("INFO", format!("Group call {} ended", call_id));
                 }
-                TelemetryEvent::GroupCallSpeakerChanged { call_id, gssi: _, speaker_issi } => {
+                TelemetryEvent::GroupCallSpeakerChanged { call_id, gssi, speaker_issi } => {
                     if let Some(c) = s.calls.get_mut(call_id) { c.speaker_issi = Some(*speaker_issi); }
+                    s.push_last_heard(*speaker_issi, "call_group", *gssi);
                 }
                 TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex } => {
                     s.calls.insert(*call_id, CallEntry {
@@ -194,8 +195,8 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"group","gssi":gssi,"caller_issi":caller_issi,"last_heard":{"issi":caller_issi,"activity":"call_group","dest":gssi}}),
         TelemetryEvent::GroupCallEnded { call_id, gssi: _ } =>
             serde_json::json!({"type":"call_ended","call_id":call_id}),
-        TelemetryEvent::GroupCallSpeakerChanged { call_id, gssi: _, speaker_issi } =>
-            serde_json::json!({"type":"speaker_changed","call_id":call_id,"speaker_issi":speaker_issi}),
+        TelemetryEvent::GroupCallSpeakerChanged { call_id, gssi, speaker_issi } =>
+            serde_json::json!({"type":"speaker_changed","call_id":call_id,"speaker_issi":speaker_issi,"last_heard":{"issi":speaker_issi,"activity":"call_group","dest":gssi}}),
         TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex } =>
             serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"individual","caller_issi":calling_issi,"called_issi":called_issi,"simplex":simplex,"last_heard":{"issi":calling_issi,"activity":"call_individual","dest":called_issi}}),
         TelemetryEvent::IndividualCallEnded { call_id } =>
@@ -372,7 +373,8 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
 }
 
 fn serve_html(mut stream: TcpStream) {
-    let body = DASHBOARD_HTML.as_bytes();
+    let body = DASHBOARD_HTML.replace("{{STACK_VERSION}}", tetra_core::STACK_VERSION);
+    let body = body.as_bytes();
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()

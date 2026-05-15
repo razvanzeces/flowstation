@@ -102,13 +102,12 @@ impl MleBroadcast {
 
         let neighbour_count = neighbour_cells.len() as u8;
 
-        // Per ETSI EN 300 392-2 clause 18.4.1.4.1 note 2:
-        // number_of_ca_neighbour_cells shall be ABSENT (None) when there are no neighbour cells.
-        // Some(0) has different semantics — it means "explicitly zero", not "no info".
+        // Use Some(0) when no neighbours — matches BlueStation behaviour and what
+        // Motorola radios expect. None (field absent) causes radios to reject the PDU.
         let number_of_ca_neighbour_cells = if neighbour_count > 0 {
             Some(neighbour_count)
         } else {
-            None
+            Some(0)
         };
 
         let pdu = DNwrkBroadcast {

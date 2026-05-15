@@ -419,7 +419,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   <span class="footer-copy">© 2025 <span>Razvan Zeces — YO6RZV</span></span>
   <span class="footer-sep">|</span>
   <span class="footer-build" id="footer-build-str">—</span>
-  <span class="footer-right">TETRA FlowStation v0.0.9</span>
+  <span class="footer-right">TETRA FlowStation {{STACK_VERSION}}</span>
 </footer>
 
 <div class="modal-overlay" id="sds-modal">
@@ -670,6 +670,7 @@ function handleMsg(msg){
       delete state.calls[msg.call_id];renderCalls();break;
     case 'speaker_changed':
       if(state.calls[msg.call_id])state.calls[msg.call_id].active_speaker=msg.speaker_issi;
+      if(msg.last_heard){pushLastHeard(msg.last_heard);renderLastHeard();}
       renderCalls();break;
     case 'ms_energy_saving':
       if(state.ms[msg.issi])state.ms[msg.issi].energy_saving_mode=msg.mode;
