@@ -29,12 +29,14 @@ impl CmceBs {
     pub fn new(config: SharedConfig, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
         let mut cc = CcBsSubentity::new(config.clone());
         if let Some(ref sink) = telemetry { cc.set_telemetry(sink.clone()); }
+        let mut sds = SdsBsSubentity::new(config.clone());
+        if let Some(ref sink) = telemetry { sds.set_telemetry(sink.clone()); }
         Self {
             config: config.clone(),
             telemetry,
             control,
             dashboard_control: None,
-            sds: SdsBsSubentity::new(config.clone()),
+            sds,
             cc,
             ss: SsBsSubentity::new(),
         }

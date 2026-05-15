@@ -39,4 +39,6 @@ pub enum TelemetryEvent {
     MsEnergySaving { issi: u32, mode: u8 },
     /// Brew (TetraPack) backhaul connection status changed
     BrewConnected { connected: bool },
+    /// SDS message activity (local delivery or group)
+    SdsActivity { source_issi: u32, dest_issi: u32 },
 }

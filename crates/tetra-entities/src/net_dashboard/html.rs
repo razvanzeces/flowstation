@@ -287,6 +287,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     <nav>
       <button class="tab active" onclick="showPage('stations',this)" data-i18n-tab="stations">STATIONS</button>
       <button class="tab" onclick="showPage('calls',this)" data-i18n-tab="calls">CALLS</button>
+      <button class="tab" onclick="showPage('lastheard',this)" data-i18n-tab="lastheard">LAST HEARD</button>
       <button class="tab" onclick="showPage('log',this)" data-i18n-tab="log">LOG</button>
       <button class="tab" onclick="showPage('config',this)" data-i18n-tab="config">CONFIG</button>
     </nav>
@@ -348,6 +349,28 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
         </tr></thead>
         <tbody id="calls-tbody">
           <tr><td colspan="6"><div class="empty-state"><div class="empty-icon">☎</div><div class="empty-text" data-i18n="no_calls">No active calls</div></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="page-lastheard">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title" data-i18n="last_heard_title">Last Heard</div>
+      <button class="btn" onclick="clearLastHeard()" data-i18n="clear">Clear</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th data-i18n="th_time">Time</th>
+          <th data-i18n="th_issi">ISSI</th>
+          <th data-i18n="th_activity">Activity</th>
+          <th data-i18n="th_dest">Destination</th>
+        </tr></thead>
+        <tbody id="lastheard-tbody">
+          <tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🎙</div><div class="empty-text" data-i18n="no_activity">No activity yet</div></div></td></tr>
         </tbody>
       </table>
     </div>
@@ -422,7 +445,7 @@ const LANGS={
   en:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'STATIONS',calls:'CALLS',log:'LOG',config:'CONFIG',
+    stations:'STATIONS',calls:'CALLS',lastheard:'LAST HEARD',log:'LOG',config:'CONFIG',
     terminals:'Terminals',registered:'registered',
     active_calls:'Active Calls',circuits:'circuits in use',
     registered_terminals:'Registered Terminals',
@@ -435,6 +458,9 @@ const LANGS={
     th_status:'Status',th_last_seen:'Last seen',th_actions:'Actions',
     th_id:'ID',th_type:'Type',th_caller:'Caller',
     th_dest:'Destination',th_speaker:'Speaker',th_duration:'Duration',
+    th_time:'Time',th_activity:'Activity',
+    last_heard_title:'Last Heard',no_activity:'No activity yet',
+    act_call_group:'Group Call',act_call_individual:'P2P Call',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
     call_group:'GROUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
     confirm_kick:'Kick ISSI {issi}?\nTerminal will be deregistered and forced to re-attach.',
@@ -444,7 +470,7 @@ const LANGS={
   ro:{
     bts_ip:'IP BTS',offline:'DECONECTAT',online:'CONECTAT',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'STAȚII',calls:'APELURI',log:'LOG',config:'CONFIG',
+    stations:'STAȚII',calls:'APELURI',lastheard:'ULTIMA ACTIVITATE',log:'LOG',config:'CONFIG',
     terminals:'Terminale',registered:'înregistrate',
     active_calls:'Apeluri Active',circuits:'circuite active',
     registered_terminals:'Terminale Înregistrate',
@@ -457,6 +483,9 @@ const LANGS={
     th_status:'Status',th_last_seen:'Văzut',th_actions:'Acțiuni',
     th_id:'ID',th_type:'Tip',th_caller:'Apelant',
     th_dest:'Destinatar',th_speaker:'Vorbitor',th_duration:'Durată',
+    th_time:'Oră',th_activity:'Activitate',
+    last_heard_title:'Ultima Activitate',no_activity:'Nicio activitate încă',
+    act_call_group:'Apel Grup',act_call_individual:'Apel P2P',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
     call_group:'GRUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
     confirm_kick:'Kick ISSI {issi}?\nTerminalul va fi deînregistrat și forțat să se reconecteze.',
@@ -466,7 +495,7 @@ const LANGS={
   de:{
     bts_ip:'BTS-IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'STATIONEN',calls:'ANRUFE',log:'LOG',config:'CONFIG',
+    stations:'STATIONEN',calls:'ANRUFE',lastheard:'ZULETZT GEHÖRT',log:'LOG',config:'CONFIG',
     terminals:'Terminals',registered:'registriert',
     active_calls:'Aktive Anrufe',circuits:'Schaltkreise aktiv',
     registered_terminals:'Registrierte Terminals',
@@ -479,6 +508,9 @@ const LANGS={
     th_status:'Status',th_last_seen:'Zuletzt',th_actions:'Aktionen',
     th_id:'ID',th_type:'Typ',th_caller:'Anrufer',
     th_dest:'Ziel',th_speaker:'Sprecher',th_duration:'Dauer',
+    th_time:'Zeit',th_activity:'Aktivität',
+    last_heard_title:'Zuletzt Gehört',no_activity:'Noch keine Aktivität',
+    act_call_group:'Gruppenruf',act_call_individual:'P2P-Ruf',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Entfernen',sds:'SDS',
     call_group:'GRUPPE',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
     confirm_kick:'ISSI {issi} entfernen?\nDas Terminal wird abgemeldet und zur Neuanmeldung gezwungen.',
@@ -488,7 +520,7 @@ const LANGS={
   es:{
     bts_ip:'IP BTS',offline:'SIN CONEXIÓN',online:'EN LÍNEA',
     brew_online:'EN LÍNEA',brew_offline:'SIN CONEXIÓN',
-    stations:'ESTACIONES',calls:'LLAMADAS',log:'LOG',config:'CONFIG',
+    stations:'ESTACIONES',calls:'LLAMADAS',lastheard:'ÚLTIMA ACTIVIDAD',log:'LOG',config:'CONFIG',
     terminals:'Terminales',registered:'registrados',
     active_calls:'Llamadas Activas',circuits:'circuitos en uso',
     registered_terminals:'Terminales Registrados',
@@ -501,6 +533,9 @@ const LANGS={
     th_status:'Estado',th_last_seen:'Visto',th_actions:'Acciones',
     th_id:'ID',th_type:'Tipo',th_caller:'Llamante',
     th_dest:'Destino',th_speaker:'Hablante',th_duration:'Duración',
+    th_time:'Hora',th_activity:'Actividad',
+    last_heard_title:'Última Actividad',no_activity:'Sin actividad aún',
+    act_call_group:'Llamada Grupo',act_call_individual:'Llamada P2P',act_sds:'SDS',
     online_badge:'EN LÍNEA',kick:'Expulsar',sds:'SDS',
     call_group:'GRUPO',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
     confirm_kick:'¿Expulsar ISSI {issi}?\nEl terminal será desregistrado y forzado a reconectarse.',
@@ -553,7 +588,7 @@ function setTheme(theme,btn){
   }catch(e){}
 })();
 
-let ws=null,state={ms:{},calls:{},brewOnline:false},sdsDest=0;
+let ws=null,state={ms:{},calls:{},lastHeard:[],brewOnline:false},sdsDest=0;
 const logFilter=()=>document.getElementById('log-filter').value;
 
 function setBrewStatus(online){
@@ -602,7 +637,7 @@ function connect(){
 function handleMsg(msg){
   switch(msg.type){
     case 'snapshot':
-      state.ms={};state.calls={};
+      state.ms={};state.calls={};state.lastHeard=msg.last_heard||[];
       (msg.ms||[]).forEach(m=>{state.ms[m.issi]={...m,_last_seen_ts:Date.now()-(m.last_seen_secs_ago||0)*1000,energy_saving_mode:m.energy_saving_mode||0};});
       (msg.calls||[]).forEach(c=>{state.calls[c.call_id]={...c,started_at:Date.now()-(c.started_secs_ago||0)*1000};});
       if(msg.log&&msg.log.length){document.getElementById('log-container').innerHTML='';msg.log.forEach(e=>appendLog(e));}
@@ -628,7 +663,9 @@ function handleMsg(msg){
       if(state.ms[msg.issi])state.ms[msg.issi].groups=msg.groups||[];
       renderStations();break;
     case 'call_started':
-      state.calls[msg.call_id]={...msg,started_at:Date.now()};renderCalls();break;
+      state.calls[msg.call_id]={...msg,started_at:Date.now()};
+      if(msg.last_heard){pushLastHeard(msg.last_heard);}
+      renderCalls();renderLastHeard();break;
     case 'call_ended':
       delete state.calls[msg.call_id];renderCalls();break;
     case 'speaker_changed':
@@ -637,6 +674,9 @@ function handleMsg(msg){
     case 'ms_energy_saving':
       if(state.ms[msg.issi])state.ms[msg.issi].energy_saving_mode=msg.mode;
       renderStations();break;
+    case 'last_heard':
+      pushLastHeard({issi:msg.issi,activity:msg.activity,dest:msg.dest,ts:new Date().toTimeString().slice(0,8)});
+      renderLastHeard();break;
     case 'log':appendLog(msg);break;
   }
 }
@@ -656,7 +696,42 @@ function lastSeenLabel(secs){
   if(secs<3600)return `<span style="color:var(--text2)">${Math.floor(secs/60)}m${secs%60}s</span>`;
   return `<span style="color:var(--warn)">${Math.floor(secs/3600)}h${Math.floor((secs%3600)/60)}m</span>`;
 }
-function renderAll(){renderStations();renderCalls();}
+function pushLastHeard(entry){
+  const now=new Date().toTimeString().slice(0,8);
+  state.lastHeard.unshift({ts:entry.ts||now,issi:entry.issi,activity:entry.activity,dest:entry.dest||0});
+  if(state.lastHeard.length>50)state.lastHeard.length=50;
+}
+
+function activityBadge(activity){
+  if(activity==='call_group')return`<span class="badge badge-blue">${t('act_call_group')}</span>`;
+  if(activity==='call_individual')return`<span class="badge badge-yellow">${t('act_call_individual')}</span>`;
+  if(activity==='sds')return`<span class="badge" style="background:rgba(180,100,255,0.15);color:#c87aff;border-color:rgba(180,100,255,0.4)">${t('act_sds')}</span>`;
+  return`<span class="badge badge-dim">${activity}</span>`;
+}
+
+function renderLastHeard(){
+  const tb=document.getElementById('lastheard-tbody');
+  if(!tb)return;
+  if(!state.lastHeard.length){
+    tb.innerHTML=`<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🎙</div><div class="empty-text">${t('no_activity')}</div></div></td></tr>`;
+    return;
+  }
+  tb.innerHTML=state.lastHeard.map(e=>{
+    const destStr=e.dest?`<code>${e.dest}</code>`:'<span style="color:var(--text3)">—</span>';
+    const isOnline=!!state.ms[e.issi];
+    const issiHtml=`<code>${e.issi}</code>${isOnline?` <span class="badge badge-green" style="font-size:9px">${t('online_badge')}</span>`:''}`;
+    return`<tr>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--text2)">${e.ts}</td>
+      <td>${issiHtml}</td>
+      <td>${activityBadge(e.activity)}</td>
+      <td>${destStr}</td>
+    </tr>`;
+  }).join('');
+}
+
+function clearLastHeard(){state.lastHeard=[];renderLastHeard();}
+
+function renderAll(){renderStations();renderCalls();renderLastHeard();}
 function rssiColor(v){if(v==null)return'var(--text3)';if(v>-20)return'var(--accent)';if(v>-30)return'var(--accent2)';if(v>-40)return'var(--warn)';return'var(--danger)';}
 function rssiPct(v){if(v==null)return 0;return Math.max(0,Math.min(100,(v+60)/50*100));}
 
@@ -735,6 +810,7 @@ function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value
 setInterval(()=>{
   if(document.getElementById('page-calls').classList.contains('active'))renderCalls();
   if(document.getElementById('page-stations').classList.contains('active'))renderStations();
+  if(document.getElementById('page-lastheard').classList.contains('active'))renderLastHeard();
 },1000);
 
 setLang(currentLang);

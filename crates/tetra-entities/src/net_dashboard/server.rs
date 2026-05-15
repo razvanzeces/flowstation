@@ -117,6 +117,7 @@ impl DashboardServer {
                         caller_issi: *caller_issi, called_issi: 0,
                         speaker_issi: Some(*caller_issi), started_at: Instant::now(), simplex: false,
                     });
+                    s.push_last_heard(*caller_issi, "call_group", *gssi);
                     s.push_log("INFO", format!("Group call {} started: {} -> GSSI {}", call_id, caller_issi, gssi));
                 }
                 TelemetryEvent::GroupCallEnded { call_id, gssi: _ } => {
@@ -132,6 +133,7 @@ impl DashboardServer {
                         caller_issi: *calling_issi, called_issi: *called_issi,
                         speaker_issi: None, started_at: Instant::now(), simplex: *simplex,
                     });
+                    s.push_last_heard(*calling_issi, "call_individual", *called_issi);
                     s.push_log("INFO", format!("P2P call {} started: {} -> {}", call_id, calling_issi, called_issi));
                 }
                 TelemetryEvent::IndividualCallEnded { call_id } => {
@@ -140,6 +142,9 @@ impl DashboardServer {
                 }
                 TelemetryEvent::BrewConnected { connected } => {
                     s.brew_online = *connected;
+                }
+                TelemetryEvent::SdsActivity { source_issi, dest_issi } => {
+                    s.push_last_heard(*source_issi, "sds", *dest_issi);
                 }
             }
         }
@@ -186,17 +191,19 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
         TelemetryEvent::MsEnergySaving { issi, mode } =>
             serde_json::json!({"type":"ms_energy_saving","issi":issi,"mode":mode}),
         TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi } =>
-            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"group","gssi":gssi,"caller_issi":caller_issi}),
+            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"group","gssi":gssi,"caller_issi":caller_issi,"last_heard":{"issi":caller_issi,"activity":"call_group","dest":gssi}}),
         TelemetryEvent::GroupCallEnded { call_id, gssi: _ } =>
             serde_json::json!({"type":"call_ended","call_id":call_id}),
         TelemetryEvent::GroupCallSpeakerChanged { call_id, gssi: _, speaker_issi } =>
             serde_json::json!({"type":"speaker_changed","call_id":call_id,"speaker_issi":speaker_issi}),
         TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex } =>
-            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"individual","caller_issi":calling_issi,"called_issi":called_issi,"simplex":simplex}),
+            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"individual","caller_issi":calling_issi,"called_issi":called_issi,"simplex":simplex,"last_heard":{"issi":calling_issi,"activity":"call_individual","dest":called_issi}}),
         TelemetryEvent::IndividualCallEnded { call_id } =>
             serde_json::json!({"type":"call_ended","call_id":call_id}),
         TelemetryEvent::BrewConnected { connected } =>
             serde_json::json!({"type":"brew_status","connected":connected}),
+        TelemetryEvent::SdsActivity { source_issi, dest_issi } =>
+            serde_json::json!({"type":"last_heard","issi":source_issi,"activity":"sds","dest":dest_issi}),
     };
     serde_json::to_string(&v).ok()
 }
@@ -280,11 +287,12 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
         let ms = s.snapshot_ms();
         let calls = s.snapshot_calls();
         let logs: Vec<_> = s.log_ring.iter().cloned().collect();
+        let last_heard: Vec<_> = s.last_heard.iter().cloned().collect();
         drop(s);
         let brew_online = state.read().unwrap().brew_online;
         if let Ok(json) = serde_json::to_string(&serde_json::json!({
             "type": "snapshot", "ms": ms, "calls": calls, "log": logs,
-            "brew_online": brew_online
+            "brew_online": brew_online, "last_heard": last_heard
         })) {
             let _ = ws.send(Message::Text(json));
         }

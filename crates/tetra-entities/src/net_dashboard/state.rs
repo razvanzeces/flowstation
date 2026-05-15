@@ -34,15 +34,27 @@ pub struct LogEntry {
     pub msg: String,
 }
 
+/// Last Heard entry — one entry per call start or SDS activity
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LastHeardEntry {
+    pub ts: String,           // HH:MM:SS timestamp
+    pub issi: u32,            // source ISSI
+    pub activity: String,     // "call_group", "call_individual", "sds"
+    pub dest: u32,            // destination GSSI or ISSI (0 if unknown)
+}
+
 /// Shared mutable state for the dashboard, protected by RwLock
 #[derive(Debug, Default)]
 pub struct DashboardStateInner {
     pub ms_map: HashMap<u32, MsEntry>,
     pub calls: HashMap<u16, CallEntry>,
     pub log_ring: std::collections::VecDeque<LogEntry>,
+    pub last_heard: std::collections::VecDeque<LastHeardEntry>,
     pub config_path: String,
     pub brew_online: bool,
 }
+
+pub const LAST_HEARD_MAX: usize = 50;
 
 #[derive(Debug)]
 pub struct MsEntry {
@@ -74,9 +86,23 @@ impl DashboardStateInner {
             ms_map: HashMap::new(),
             calls: HashMap::new(),
             log_ring: std::collections::VecDeque::with_capacity(500),
+            last_heard: std::collections::VecDeque::with_capacity(LAST_HEARD_MAX + 1),
             config_path,
             brew_online: false,
         }
+    }
+
+    pub fn push_last_heard(&mut self, issi: u32, activity: &str, dest: u32) {
+        let entry = LastHeardEntry {
+            ts: chrono::Local::now().format("%H:%M:%S").to_string(),
+            issi,
+            activity: activity.to_string(),
+            dest,
+        };
+        if self.last_heard.len() >= LAST_HEARD_MAX {
+            self.last_heard.pop_back();
+        }
+        self.last_heard.push_front(entry);
     }
 
     pub fn push_log(&mut self, level: &str, msg: String) {
