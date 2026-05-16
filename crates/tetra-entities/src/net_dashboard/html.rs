@@ -23,7 +23,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     --text2:   #7ab0cc;
     --text3:   #304050;
     --mono:    'IBM Plex Mono', monospace;
-    --sans:    'IBM Plex Sans Condensed', sans-serif;
+    --sans:    'IBM Plex Sans Condensed', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     --r:       4px;
   }
   [data-theme="white"] {
@@ -104,7 +104,6 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   .lang-btn+.lang-btn,.theme-btn+.theme-btn{border-left:1px solid var(--border2);}
   .lang-btn:hover,.theme-btn:hover{background:var(--bg4);color:var(--text);}
   .lang-btn.active,.theme-btn.active{background:rgba(0,200,150,0.15);color:var(--accent);}
-  .theme-sep{width:1px;height:14px;background:var(--border2);}
 
   /* Nav */
   nav{display:flex;gap:1px;flex-shrink:0;}
@@ -140,7 +139,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   .card-title{font-family:var(--mono);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.15em;color:var(--text2);}
   .card-header-actions{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
 
-  /* Table — responsive wrapper */
+  /* Table */
   .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
   .table-wrap::-webkit-scrollbar{height:4px;}
   .table-wrap::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
@@ -266,16 +265,17 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <div class="status-led" id="brewDot"></div>
       <div>
         <div class="status-sublabel">BREW</div>
-        <div class="status-label" id="brewText">OFFLINE</div>
+        <div class="status-label" id="brewText" data-i18n="brew_offline">OFFLINE</div>
       </div>
     </div>
   </div>
   <div class="hdr-controls">
     <div class="lang-btns" id="langBtns">
-      <button class="lang-btn active" onclick="setLang('en',this)">EN</button>
+      <button class="lang-btn" onclick="setLang('en',this)">EN</button>
       <button class="lang-btn" onclick="setLang('ro',this)">RO</button>
       <button class="lang-btn" onclick="setLang('de',this)">DE</button>
       <button class="lang-btn" onclick="setLang('es',this)">ES</button>
+      <button class="lang-btn" onclick="setLang('zh',this)">ZH</button>
     </div>
     <div class="theme-sep"></div>
     <div class="theme-btns" id="themeBtns">
@@ -547,15 +547,43 @@ const LANGS={
     confirm_shutdown:'¿Apagar FlowStation?\nEl servicio se detendrá y deberá reiniciarse manualmente.',
     saved:'✓ Guardado — reinicia para aplicar.',save_fail:'✗ Error al guardar',conn_error:'Error de conexión.',
   },
+  zh:{
+    bts_ip:'BTS IP',offline:'离线',online:'在线',
+    brew_online:'在线',brew_offline:'离线',
+    stations:'终端',calls:'通话',lastheard:'最近活动',log:'日志',config:'配置',
+    terminals:'终端',registered:'已注册',
+    active_calls:'活跃通话',circuits:'信道使用中',
+    registered_terminals:'已注册终端',
+    no_terminals:'无终端注册',no_calls:'无活跃通话',
+    live_log:'实时日志',autoscroll:'自动滚动',filter_all:'全部',
+    clear:'清空',restart:'⟳ 重启服务',shutdown:'⏻ 关闭服务',save:'保存',
+    sds_title:'⬡ 发送 SDS 消息',sds_dest:'目标 ISSI',
+    sds_msg_label:'消息内容',cancel:'取消',send:'发送',
+    th_issi:'ISSI',th_groups:'组',th_ee:'省电',th_signal:'信号',
+    th_status:'状态',th_last_seen:'最后在线',th_actions:'操作',
+    th_id:'ID',th_type:'类型',th_caller:'呼叫方',
+    th_dest:'目标',th_speaker:'发言方',th_duration:'时长',
+    th_time:'时间',th_activity:'活动',
+    last_heard_title:'最近活动',no_activity:'暂无活动',
+    act_call_group:'组呼',act_call_individual:'个呼',act_sds:'短数据',
+    online_badge:'在线',kick:'强制下线',sds:'短数据',
+    call_group:'组呼',call_p2p_s:'个呼-半双工',call_p2p_d:'个呼-全双工',
+    confirm_kick:'踢出 ISSI {issi}?\n终端将被注销并强制重新注册。',
+    confirm_restart:'重启 FlowStation?\n所有活跃通话将被中断。',
+    confirm_shutdown:'关闭 FlowStation?\n服务将停止，需手动重启。',
+    saved:'✓ 已保存 — 重启后生效。',save_fail:'✗ 保存失败',conn_error:'连接错误。',
+  },
 };
 
 let currentLang=localStorage.getItem('fs_lang')||'en';
-function t(k,v){let s=(LANGS[currentLang]||LANGS.en)[k]||(LANGS.en[k]||k);if(v)Object.keys(v).forEach(x=>{s=s.replace('{'+x+'}',v[x]);});return s;}
+function t(k,v){let s=(LANGS[currentLang]||LANGS.zh)[k]||(LANGS.zh[k]||k);if(v)Object.keys(v).forEach(x=>{s=s.replace('{'+x+'}',v[x]);});return s;}
 function applyLang(){
   document.querySelectorAll('[data-i18n]').forEach(el=>el.textContent=t(el.getAttribute('data-i18n')));
   document.querySelectorAll('[data-i18n-tab]').forEach(el=>el.textContent=t(el.getAttribute('data-i18n-tab')));
   const st=document.getElementById('statusText');
   if(st)st.textContent=document.getElementById('statusDot').classList.contains('online')?t('online'):t('offline');
+  const bt=document.getElementById('brewText');
+  if(bt)bt.textContent=state.brewOnline?t('brew_online'):t('brew_offline');
   renderStations();renderCalls();
 }
 function setLang(l,btn){
