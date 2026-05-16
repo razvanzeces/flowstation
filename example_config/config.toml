@@ -50,6 +50,49 @@ rx_freq = 433025000
 # rx_gain_lna = 30.0
 
 ###############################################################################
+# OPTIONAL: SX1255 / SoapySX autocalibration and drift guard
+#
+# This is intentionally conservative. Startup checks run before RX/TX streams
+# are activated. Periodic checks use SoapySDR sensors/settings only; if the
+# installed SoapySX driver does not expose temperature/DC correction, FlowStation
+# logs the capability gap and keeps RX/TX running normally.
+#
+# Temperature-based retune is disabled until you provide a board-specific
+# temp_ppm_per_c coefficient. Leave allow_periodic_retune=false unless you have
+# validated that small active-stream retunes are acceptable on your station.
+#
+# [phy_io.soapysdr.sx1255_autocal]
+# enabled = true
+# startup = true
+# periodic = true
+# interval_secs = 3600
+#
+# Try SoapySDR device/channel sensors named like temperature/temp/sx1255_temp.
+# If your driver exposes a known exact key, set it here.
+# read_temperature = true
+# Periodic temperature reads are off by default because SX1255 temperature
+# measurement may share the RX ADC path. Set true only after validating that
+# your SoapySX driver/hardware can tolerate the scheduled measurement.
+# allow_periodic_temperature_read = false
+# temperature_sensor = "temperature"
+# temperature_sensor_keys = ["temperature", "temp", "sx1255_temperature", "sx1255_temp"]
+#
+# First successful reading becomes baseline unless reference_temperature_c is set.
+# min_temperature_delta_c = 2.0
+# reference_temperature_c = 25.0
+#
+# Frequency compensation. 0.0 disables retuning.
+# temp_ppm_per_c = 0.0
+# min_frequency_step_hz = 25.0
+# max_frequency_correction_hz = 5000.0
+# allow_periodic_retune = false
+#
+# Generic SoapySDR correction hooks. Used only if the driver reports support.
+# enable_dc_offset_mode = true
+# rf_loopback_startup_check = true
+###############################################################################
+
+###############################################################################
 
 [net_info]
 # Mobile Country Code (MCC) - identifies your country

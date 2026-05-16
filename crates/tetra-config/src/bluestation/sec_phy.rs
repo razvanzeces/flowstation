@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CfgSoapySdr, SoapySdrDto};
+use crate::bluestation::{CfgSoapySdr, SoapySdrDto, apply_sx1255_autocal_patch};
 
 /// The PHY layer backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -56,6 +56,7 @@ pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
             tx_ch: soapy_dto.tx_channel,
             rx_ant: soapy_dto.rx_antenna,
             tx_ant: soapy_dto.tx_antenna,
+            sx1255_autocal: apply_sx1255_autocal_patch(soapy_dto.sx1255_autocal),
             rx_gains: soapy_dto
                 .extra
                 .iter()

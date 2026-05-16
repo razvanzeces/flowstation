@@ -11,6 +11,7 @@ pub mod modulator;
 pub mod soapy_settings;
 pub mod soapy_time;
 pub mod soapyio;
+pub mod sx1255_autocal;
 
 pub mod soapy_dev;
 // pub mod _rxtxdev_buffer;

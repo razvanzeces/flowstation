@@ -97,6 +97,15 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         if !extra_keys_filtered.is_empty() {
             return Err(format!("Unrecognized fields: phy_io.soapysdr::{:?}", extra_keys_filtered).into());
         }
+        if let Some(ref autocal) = soapy.sx1255_autocal {
+            if !autocal.extra.is_empty() {
+                return Err(format!(
+                    "Unrecognized fields: phy_io.soapysdr.sx1255_autocal::{:?}",
+                    sorted_keys(&autocal.extra)
+                )
+                .into());
+            }
+        }
     }
     if !root.net_info.extra.is_empty() {
         return Err(format!("Unrecognized fields in net_info: {:?}", sorted_keys(&root.net_info.extra)).into());
@@ -380,5 +389,86 @@ bogus = "nope"
 "#
         );
         assert!(from_toml_str(&toml).is_err(), "should reject unknown identity.radioid field");
+    }
+
+    #[test]
+    fn test_sx1255_autocal_config_parses() {
+        let toml = r#"
+config_version = "0.6"
+stack_mode = "Bs"
+
+[phy_io]
+backend = "SoapySdr"
+
+[phy_io.soapysdr]
+rx_freq = 431362500
+tx_freq = 438362500
+
+[phy_io.soapysdr.sx1255_autocal]
+enabled = true
+interval_secs = 1800
+allow_periodic_temperature_read = true
+temperature_sensor = "temperature"
+min_temperature_delta_c = 3.5
+reference_temperature_c = 25.0
+temp_ppm_per_c = 0.12
+allow_periodic_retune = true
+rf_loopback_startup_check = false
+
+[net_info]
+mcc = 901
+mnc = 9999
+
+[cell_info]
+main_carrier = 1534
+freq_band = 4
+freq_offset = 12500
+duplex_spacing = 1
+reverse_operation = false
+location_area = 1
+"#;
+        let cfg = from_toml_str(toml).expect("parse failed");
+        let autocal = &cfg.phy_io.soapysdr.as_ref().expect("soapy config").sx1255_autocal;
+        assert!(autocal.enabled);
+        assert_eq!(autocal.interval_secs, 1800);
+        assert!(autocal.allow_periodic_temperature_read);
+        assert_eq!(autocal.temperature_sensor.as_deref(), Some("temperature"));
+        assert_eq!(autocal.min_temperature_delta_c, 3.5);
+        assert_eq!(autocal.reference_temperature_c, Some(25.0));
+        assert_eq!(autocal.temp_ppm_per_c, 0.12);
+        assert!(autocal.allow_periodic_retune);
+        assert!(!autocal.rf_loopback_startup_check);
+    }
+
+    #[test]
+    fn test_sx1255_autocal_rejects_unknown_nested_fields() {
+        let toml = r#"
+config_version = "0.6"
+stack_mode = "Bs"
+
+[phy_io]
+backend = "SoapySdr"
+
+[phy_io.soapysdr]
+rx_freq = 431362500
+tx_freq = 438362500
+
+[phy_io.soapysdr.sx1255_autocal]
+enabled = true
+bogus = "nope"
+
+[net_info]
+mcc = 901
+mnc = 9999
+
+[cell_info]
+main_carrier = 1534
+freq_band = 4
+freq_offset = 12500
+duplex_spacing = 1
+reverse_operation = false
+location_area = 1
+"#;
+        assert!(from_toml_str(toml).is_err(), "should reject unknown sx1255_autocal field");
     }
 }

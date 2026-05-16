@@ -3,6 +3,7 @@
 use tetra_config::bluestation::{StackMode, sec_phy_soapy::*};
 
 /// Enum of all supported devices
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SupportedDevice {
     LimeSdr(LimeSdrModel),
     SXceiver,
@@ -10,7 +11,7 @@ pub enum SupportedDevice {
     Usrp(UsrpModel),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LimeSdrModel {
     LimeSdrUsb,
     LimeSdrMiniV2,
@@ -21,7 +22,7 @@ pub enum LimeSdrModel {
     OtherFt601,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UsrpModel {
     B200,
     B210,
