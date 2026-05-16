@@ -52,10 +52,9 @@ rx_freq = 433025000
 ###############################################################################
 # OPTIONAL: SX1255 / SoapySX autocalibration and drift guard
 #
-# This is intentionally conservative. Startup checks run before RX/TX streams
-# are activated. Periodic checks use SoapySDR sensors/settings only; if the
-# installed SoapySX driver does not expose temperature/DC correction, FlowStation
-# logs the capability gap and keeps RX/TX running normally.
+# This is intentionally conservative. Startup calibration runs before normal
+# RX/TX streams are activated. Periodic checks are disabled by default because
+# SX1255 temperature measurement shares the RX ADC path on current hardware.
 #
 # Temperature-based retune is disabled until you provide a board-specific
 # temp_ppm_per_c coefficient. Leave allow_periodic_retune=false unless you have
@@ -64,12 +63,12 @@ rx_freq = 433025000
 # [phy_io.soapysdr.sx1255_autocal]
 # enabled = true
 # startup = true
-# periodic = true
+# periodic = false
 # interval_secs = 3600
 #
 # Try SoapySDR device/channel sensors named like temperature/temp/sx1255_temp.
 # If your driver exposes a known exact key, set it here.
-# read_temperature = true
+# read_temperature = false
 # Periodic temperature reads are off by default because SX1255 temperature
 # measurement may share the RX ADC path. Set true only after validating that
 # your SoapySX driver/hardware can tolerate the scheduled measurement.
@@ -90,6 +89,22 @@ rx_freq = 433025000
 # Generic SoapySDR correction hooks. Used only if the driver reports support.
 # enable_dc_offset_mode = true
 # rf_loopback_startup_check = true
+# rf_filter_profile = "TETRA_CLEAN"
+#
+# Startup RF loopback calibration. FlowStation transmits a short internal LB
+# tone, estimates RX DC and image leakage, and installs correction in the
+# enhanced SoapySX driver when available. If the driver lacks the API, it falls
+# back to software correction in FlowStation.
+# rf_loopback_startup_calibration = true
+# rf_loopback_tone_hz = 24000.0
+# rf_loopback_tone_amplitude = 0.8
+# rf_loopback_settle_blocks = 24
+# rf_loopback_capture_blocks = 32
+# rf_loopback_min_snr_db = 20.0
+# rf_loopback_max_image_coeff = 0.5
+# rf_loopback_max_dc = 0.5
+# rf_loopback_apply_dc = true
+# rf_loopback_apply_iq = true
 ###############################################################################
 
 ###############################################################################

@@ -414,6 +414,17 @@ reference_temperature_c = 25.0
 temp_ppm_per_c = 0.12
 allow_periodic_retune = true
 rf_loopback_startup_check = false
+rf_filter_profile = "tetra_clean"
+rf_loopback_startup_calibration = true
+rf_loopback_tone_hz = 25000.0
+rf_loopback_tone_amplitude = 0.75
+rf_loopback_settle_blocks = 12
+rf_loopback_capture_blocks = 16
+rf_loopback_min_snr_db = 24.0
+rf_loopback_max_image_coeff = 0.25
+rf_loopback_max_dc = 0.2
+rf_loopback_apply_dc = true
+rf_loopback_apply_iq = false
 
 [net_info]
 mcc = 901
@@ -438,6 +449,17 @@ location_area = 1
         assert_eq!(autocal.temp_ppm_per_c, 0.12);
         assert!(autocal.allow_periodic_retune);
         assert!(!autocal.rf_loopback_startup_check);
+        assert_eq!(autocal.rf_filter_profile, "TETRA_CLEAN");
+        assert!(autocal.rf_loopback_startup_calibration);
+        assert_eq!(autocal.rf_loopback_tone_hz, 25000.0);
+        assert_eq!(autocal.rf_loopback_tone_amplitude, 0.75);
+        assert_eq!(autocal.rf_loopback_settle_blocks, 12);
+        assert_eq!(autocal.rf_loopback_capture_blocks, 16);
+        assert_eq!(autocal.rf_loopback_min_snr_db, 24.0);
+        assert_eq!(autocal.rf_loopback_max_image_coeff, 0.25);
+        assert_eq!(autocal.rf_loopback_max_dc, 0.2);
+        assert!(autocal.rf_loopback_apply_dc);
+        assert!(!autocal.rf_loopback_apply_iq);
     }
 
     #[test]

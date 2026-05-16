@@ -310,6 +310,8 @@ struct TxDsp {
     block_count: fcfb::BlockCount,
     initial_time: i64,
     modulators: Vec<ModulatorChannel>,
+    headroom: TxHeadroomLimiter,
+    tx_output: Vec<ComplexSample>,
 }
 
 impl TxDsp {
@@ -334,6 +336,8 @@ impl TxDsp {
             block_count: 0,
             initial_time: 0, // TODO: get it from RX
             modulators,
+            headroom: TxHeadroomLimiter::new(0.85),
+            tx_output: Vec::new(),
         }
     }
 
@@ -386,15 +390,16 @@ impl TxDsp {
         }
 
         let tx_signal = self.fcfb.process();
+        self.headroom.apply(tx_signal, &mut self.tx_output);
 
         // TODO: compensate for delay of SDR
-        let sdr_sample_count = tx_signal.len() as SampleCount * self.block_count;
+        let sdr_sample_count = self.tx_output.len() as SampleCount * self.block_count;
 
         // Increment block count before calling sdr.transmit with ?,
         // so we do not end up producing the same block again even if transmit fails.
         self.block_count += 1;
 
-        sdr.transmit(tx_signal, Some(sdr_sample_count))?;
+        sdr.transmit(&self.tx_output, Some(sdr_sample_count))?;
 
         // tracing::trace!("Produced transmit block {} ({} samples in future)",
         //     self.block_count - 1,
@@ -402,6 +407,54 @@ impl TxDsp {
         // );
 
         Ok(true)
+    }
+}
+
+struct TxHeadroomLimiter {
+    scale: RealSample,
+    target: RealSample,
+    target2: RealSample,
+    recovery_per_block: RealSample,
+    warn_cooldown_blocks: usize,
+}
+
+impl TxHeadroomLimiter {
+    fn new(target: RealSample) -> Self {
+        Self {
+            scale: 1.0,
+            target,
+            target2: target * target,
+            recovery_per_block: 1.0005,
+            warn_cooldown_blocks: 0,
+        }
+    }
+
+    fn apply(&mut self, input: &[ComplexSample], output: &mut Vec<ComplexSample>) {
+        let mut peak2: RealSample = 0.0;
+        for sample in input {
+            peak2 = peak2.max(sample.re * sample.re + sample.im * sample.im);
+        }
+
+        let desired_scale = if peak2 > self.target2 { self.target / peak2.sqrt() } else { 1.0 };
+
+        if desired_scale < self.scale {
+            self.scale = desired_scale;
+            if self.warn_cooldown_blocks == 0 {
+                tracing::warn!(
+                    "TX headroom limiter: reducing digital drive to {:.3} (block peak {:.3}, target {:.3})",
+                    self.scale,
+                    peak2.sqrt(),
+                    self.target
+                );
+                self.warn_cooldown_blocks = 6000;
+            }
+        } else {
+            self.scale = (self.scale * self.recovery_per_block).min(1.0);
+            self.warn_cooldown_blocks = self.warn_cooldown_blocks.saturating_sub(1);
+        }
+
+        output.clear();
+        output.extend(input.iter().map(|sample| *sample * self.scale));
     }
 }
 

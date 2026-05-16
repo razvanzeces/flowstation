@@ -46,6 +46,28 @@ pub struct CfgSx1255Autocal {
     /// At startup, switch RX antenna to SoapySX RF loopback (`LB`) and back to
     /// verify that loopback control is available before streams start.
     pub rf_loopback_startup_check: bool,
+    /// SoapySX startup RF filter profile. Empty string disables profile writes.
+    pub rf_filter_profile: String,
+    /// Run an RF loopback startup calibration before normal BS streams start.
+    pub rf_loopback_startup_calibration: bool,
+    /// Calibration tone frequency relative to RF center.
+    pub rf_loopback_tone_hz: f64,
+    /// Calibration tone complex baseband amplitude.
+    pub rf_loopback_tone_amplitude: f64,
+    /// Number of RX/TX blocks discarded before measurements.
+    pub rf_loopback_settle_blocks: usize,
+    /// Number of RX/TX blocks captured for tone and floor measurements.
+    pub rf_loopback_capture_blocks: usize,
+    /// Minimum calibration tone SNR before applying IQ correction.
+    pub rf_loopback_min_snr_db: f64,
+    /// Maximum allowed image-correction coefficient magnitude.
+    pub rf_loopback_max_image_coeff: f64,
+    /// Maximum allowed startup DC correction magnitude.
+    pub rf_loopback_max_dc: f64,
+    /// Apply measured RX DC correction to live samples.
+    pub rf_loopback_apply_dc: bool,
+    /// Apply measured RX IQ image correction to live samples.
+    pub rf_loopback_apply_iq: bool,
 }
 
 impl Default for CfgSx1255Autocal {
@@ -53,9 +75,9 @@ impl Default for CfgSx1255Autocal {
         Self {
             enabled: false,
             startup: true,
-            periodic: true,
+            periodic: false,
             interval_secs: 3600,
-            read_temperature: true,
+            read_temperature: false,
             allow_periodic_temperature_read: false,
             temperature_sensor: None,
             temperature_sensor_keys: vec![
@@ -72,6 +94,17 @@ impl Default for CfgSx1255Autocal {
             allow_periodic_retune: false,
             enable_dc_offset_mode: true,
             rf_loopback_startup_check: true,
+            rf_filter_profile: "TETRA_CLEAN".to_string(),
+            rf_loopback_startup_calibration: true,
+            rf_loopback_tone_hz: 24_000.0,
+            rf_loopback_tone_amplitude: 0.8,
+            rf_loopback_settle_blocks: 24,
+            rf_loopback_capture_blocks: 32,
+            rf_loopback_min_snr_db: 20.0,
+            rf_loopback_max_image_coeff: 0.5,
+            rf_loopback_max_dc: 0.5,
+            rf_loopback_apply_dc: true,
+            rf_loopback_apply_iq: true,
         }
     }
 }
@@ -94,6 +127,17 @@ pub struct CfgSx1255AutocalDto {
     pub allow_periodic_retune: Option<bool>,
     pub enable_dc_offset_mode: Option<bool>,
     pub rf_loopback_startup_check: Option<bool>,
+    pub rf_filter_profile: Option<String>,
+    pub rf_loopback_startup_calibration: Option<bool>,
+    pub rf_loopback_tone_hz: Option<f64>,
+    pub rf_loopback_tone_amplitude: Option<f64>,
+    pub rf_loopback_settle_blocks: Option<usize>,
+    pub rf_loopback_capture_blocks: Option<usize>,
+    pub rf_loopback_min_snr_db: Option<f64>,
+    pub rf_loopback_max_image_coeff: Option<f64>,
+    pub rf_loopback_max_dc: Option<f64>,
+    pub rf_loopback_apply_dc: Option<bool>,
+    pub rf_loopback_apply_iq: Option<bool>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -149,6 +193,39 @@ pub fn apply_sx1255_autocal_patch(src: Option<CfgSx1255AutocalDto>) -> CfgSx1255
         }
         if let Some(v) = src.rf_loopback_startup_check {
             cfg.rf_loopback_startup_check = v;
+        }
+        if let Some(v) = src.rf_filter_profile {
+            cfg.rf_filter_profile = v.trim().to_ascii_uppercase();
+        }
+        if let Some(v) = src.rf_loopback_startup_calibration {
+            cfg.rf_loopback_startup_calibration = v;
+        }
+        if let Some(v) = src.rf_loopback_tone_hz {
+            cfg.rf_loopback_tone_hz = v.max(1.0);
+        }
+        if let Some(v) = src.rf_loopback_tone_amplitude {
+            cfg.rf_loopback_tone_amplitude = v.clamp(0.0, 0.95);
+        }
+        if let Some(v) = src.rf_loopback_settle_blocks {
+            cfg.rf_loopback_settle_blocks = v.max(1);
+        }
+        if let Some(v) = src.rf_loopback_capture_blocks {
+            cfg.rf_loopback_capture_blocks = v.max(1);
+        }
+        if let Some(v) = src.rf_loopback_min_snr_db {
+            cfg.rf_loopback_min_snr_db = v.max(0.0);
+        }
+        if let Some(v) = src.rf_loopback_max_image_coeff {
+            cfg.rf_loopback_max_image_coeff = v.max(0.0);
+        }
+        if let Some(v) = src.rf_loopback_max_dc {
+            cfg.rf_loopback_max_dc = v.max(0.0);
+        }
+        if let Some(v) = src.rf_loopback_apply_dc {
+            cfg.rf_loopback_apply_dc = v;
+        }
+        if let Some(v) = src.rf_loopback_apply_iq {
+            cfg.rf_loopback_apply_iq = v;
         }
     }
     cfg

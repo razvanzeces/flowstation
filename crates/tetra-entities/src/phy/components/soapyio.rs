@@ -166,6 +166,8 @@ impl SoapyIo {
             }
         }
 
+        sx1255_autocal.startup_loopback_calibration(&dev, rx_ch, tx_ch, rx_fs, &sdr_settings.rx_args, &sdr_settings.tx_args);
+
         let mut rx_args = soapysdr::Args::new();
         for (key, value) in sdr_settings.rx_args {
             rx_args.set(key, value);
@@ -214,6 +216,8 @@ impl SoapyIo {
             // RX is enabled
             match rx.read(&mut [buffer], 1000000) {
                 Ok(len) => {
+                    self.sx1255_autocal.rx_startup_compensation().apply(&mut buffer[..len]);
+
                     // Get timestamp, set initial time if not yet set
                     let time = rx.time_ns();
                     // rust-soapysdr does not let us if a timestamp was available
