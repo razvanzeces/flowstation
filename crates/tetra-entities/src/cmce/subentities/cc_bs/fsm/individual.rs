@@ -481,7 +481,7 @@ impl CcBsSubentity {
         };
         let d_connect = DConnect {
             call_identifier: call_id,
-            call_time_out: self.config_call_timeout(),
+            call_time_out: if simplex_duplex { CallTimeout::Infinite } else { self.config_call_timeout() },
             hook_method_selection: cached.pdu.hook_method_selection,
             simplex_duplex_selection: simplex_duplex,
             transmission_grant: calling_grant,
@@ -555,7 +555,7 @@ impl CcBsSubentity {
         // transmission_request_permission=false = 0 = ALLOWED to request transmission (ETSI 14.8.43).
         let d_connect_ack = DConnectAcknowledge {
             call_identifier: call_id,
-            call_time_out: self.config_call_timeout().into_raw() as u8,
+            call_time_out: if simplex_duplex { CallTimeout::Infinite } else { self.config_call_timeout() }.into_raw() as u8,
             transmission_grant: TransmissionGrant::Granted.into_raw() as u8,
             transmission_request_permission: false,
             notification_indicator: None,
