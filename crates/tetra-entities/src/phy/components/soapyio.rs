@@ -107,6 +107,8 @@ impl SoapyIo {
             },
         );
 
+        sx1255_autocal.startup(&dev, rx_ch, tx_ch);
+
         let mut rx_fs: f64 = 0.0;
         if rx_enabled {
             soapycheck!(
@@ -163,8 +165,6 @@ impl SoapyIo {
                 );
             }
         }
-
-        sx1255_autocal.startup(&dev, rx_ch, tx_ch);
 
         let mut rx_args = soapysdr::Args::new();
         for (key, value) in sdr_settings.rx_args {
