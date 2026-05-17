@@ -1180,10 +1180,22 @@ impl TetraEntityTrait for MmBs {
             let already_sent = self.client_mgr.is_pending_command(issi);
             if already_sent {
                 // Second expiry — terminal didn't respond to COMMAND within grace period.
-                // Remove silently: terminal is powered off or out of coverage.
+                // Send D-LOCATION-UPDATE-REJECT(ExpiryOfTimer) so the terminal knows it must
+                // re-attach. Without this, terminals like Sepura stay "connected" locally
+                // while the BS has already removed them, causing a silent desync.
+                let last_handle = self.client_mgr
+                    .get_client_by_issi(issi)
+                    .map(|c| c.last_handle)
+                    .unwrap_or(0);
                 tracing::info!(
-                    "MM: ISSI {} did not respond to D-LOCATION-UPDATE-COMMAND — removing",
+                    "MM: ISSI {} did not respond to D-LOCATION-UPDATE-COMMAND — sending REJECT and removing",
                     issi
+                );
+                Self::send_d_location_update_reject_cause(
+                    queue, issi, last_handle,
+                    LocationUpdateType::PeriodicLocationUpdating,
+                    None,
+                    RejectCause::ExpiryOfTimer,
                 );
                 let detached = self.client_mgr.remove_client(issi);
                 if let Some(client) = detached {

@@ -17,11 +17,160 @@ type CmdSender = crossbeam_channel::Sender<ControlCommand>;
 type WsBroadcastTx = crossbeam_channel::Sender<String>;
 type WsClients = Arc<Mutex<Vec<WsBroadcastTx>>>;
 
+// ---------------------------------------------------------------------------
+// OTA update state — shared between the HTTP handler and the update thread.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, PartialEq)]
+enum UpdatePhase {
+    Idle,
+    Running,
+    Done { success: bool },
+}
+
+struct UpdateState {
+    phase: UpdatePhase,
+    log: String,
+}
+
+impl UpdateState {
+    fn new() -> Self { UpdateState { phase: UpdatePhase::Idle, log: String::new() } }
+    fn append(&mut self, line: &str) { self.log.push_str(line); self.log.push('\n'); }
+    fn start(&mut self) { self.phase = UpdatePhase::Running; self.log.clear(); }
+    fn finish(&mut self, success: bool) { self.phase = UpdatePhase::Done { success }; }
+}
+
+type SharedUpdateState = Arc<Mutex<UpdateState>>;
+
+/// Run git pull + cargo build --release in a background thread.
+/// Steps:
+///   1. Backup config.toml → config.toml.bak
+///   2. git -C <src_dir> pull
+///   3. cargo build --release
+///   4. systemctl restart tetra   (after short delay, gives 200 OK time to reach browser)
+///
+/// src_dir is derived from the binary path: the directory containing the running binary's
+/// parent (i.e. target/release is sibling of src root), so we go up two levels.
+fn run_update(update: SharedUpdateState, config_path: String) {
+    // Derive source root from the running binary's location.
+    // Binary lives at  <src_root>/target/release/bluestation-bs
+    // so src_root = binary_path.parent().parent().parent()
+    let src_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    macro_rules! log {
+        ($update:expr, $($arg:tt)*) => {{
+            let line = format!($($arg)*);
+            tracing::info!("UPDATE: {}", line);
+            $update.lock().unwrap().append(&line);
+        }};
+    }
+
+    /// Run a command, stream stdout+stderr into the log, return Ok(stdout) or Err.
+    fn run_cmd_output(
+        update: &SharedUpdateState,
+        program: &str,
+        args: &[&str],
+        dir: &std::path::Path,
+    ) -> Option<String> {
+        let line = format!("$ {} {}", program, args.join(" "));
+        tracing::info!("UPDATE: {}", line);
+        update.lock().unwrap().append(&line);
+
+        match std::process::Command::new(program).args(args).current_dir(dir).output() {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                for l in stdout.lines() { update.lock().unwrap().append(l); }
+                for l in stderr.lines() { update.lock().unwrap().append(l); }
+                if out.status.success() {
+                    Some(stdout)
+                } else {
+                    update.lock().unwrap().append(&format!("ERROR: exited with {}", out.status));
+                    update.lock().unwrap().finish(false);
+                    None
+                }
+            }
+            Err(e) => {
+                update.lock().unwrap().append(&format!("ERROR: failed to run '{}': {}", program, e));
+                update.lock().unwrap().finish(false);
+                None
+            }
+        }
+    }
+
+    log!(update, "=== FlowStation OTA Update ===");
+    log!(update, "Source dir: {}", src_dir.display());
+
+    let src_str = src_dir.to_str().unwrap_or(".");
+
+    // Step 1: fetch remote without merging — just update refs
+    log!(update, "--- Checking remote for updates ---");
+    if run_cmd_output(&update, "git", &["-C", src_str, "fetch", "origin", "main"], &src_dir).is_none() {
+        return;
+    }
+
+    // Step 2: compare local HEAD with remote origin/main
+    let local_commit = run_cmd_output(&update, "git", &["-C", src_str, "rev-parse", "HEAD"], &src_dir)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if local_commit.is_empty() { return; }
+
+    let remote_commit = run_cmd_output(&update, "git", &["-C", src_str, "rev-parse", "origin/main"], &src_dir)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if remote_commit.is_empty() { return; }
+
+    log!(update, "Local  commit: {}", &local_commit[..local_commit.len().min(12)]);
+    log!(update, "Remote commit: {}", &remote_commit[..remote_commit.len().min(12)]);
+
+    if local_commit == remote_commit {
+        log!(update, "Already up to date — nothing to do.");
+        update.lock().unwrap().finish(true);
+        return;
+    }
+
+    // Step 3: show what changed
+    let _ = run_cmd_output(&update, "git", &["-C", src_str, "log", "--oneline",
+        &format!("HEAD..origin/main")], &src_dir);
+
+    // Step 4: backup config before touching anything
+    let backup_path = format!("{}.bak", config_path);
+    match std::fs::copy(&config_path, &backup_path) {
+        Ok(_)  => log!(update, "Config backed up → {}", backup_path),
+        Err(e) => log!(update, "WARNING: config backup failed: {} (continuing)", e),
+    }
+
+    // Step 5: fast-forward merge (only changed files are touched on disk)
+    log!(update, "--- git merge (fast-forward only) ---");
+    if run_cmd_output(&update, "git", &["-C", src_str, "merge", "--ff-only", "origin/main"], &src_dir).is_none() {
+        return;
+    }
+
+    // Step 6: incremental build (cargo only recompiles changed crates)
+    log!(update, "--- cargo build --release (incremental) ---");
+    if run_cmd_output(&update, "cargo", &["build", "--release"], &src_dir).is_none() {
+        return;
+    }
+
+    // Step 7: done — schedule restart
+    log!(update, "--- Build successful. Restarting service in 2s... ---");
+    update.lock().unwrap().finish(true);
+
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let _ = std::process::Command::new("systemctl").args(["restart", "tetra"]).status();
+    });
+}
+
 pub struct DashboardServer {
     pub state: DashboardState,
     clients: WsClients,
     config_path: String,
     cmd_tx: Option<CmdSender>,
+    update_state: SharedUpdateState,
 }
 
 impl DashboardServer {
@@ -31,6 +180,7 @@ impl DashboardServer {
             clients: Arc::new(Mutex::new(Vec::new())),
             config_path,
             cmd_tx: None,
+            update_state: Arc::new(Mutex::new(UpdateState::new())),
         }
     }
 
@@ -45,6 +195,7 @@ impl DashboardServer {
         let config_path = self.config_path.clone();
         let cmd_tx: Arc<Mutex<Option<CmdSender>>> =
             Arc::new(Mutex::new(self.cmd_tx.take()));
+        let update_state = Arc::clone(&self.update_state);
 
         std::thread::Builder::new()
             .name("dashboard-server".into())
@@ -59,9 +210,10 @@ impl DashboardServer {
                     let clients = Arc::clone(&clients);
                     let config_path = config_path.clone();
                     let cmd_tx = Arc::clone(&cmd_tx);
+                    let update_state = Arc::clone(&update_state);
                     std::thread::Builder::new()
                         .name("dashboard-conn".into())
-                        .spawn(move || handle_connection(stream, state, clients, config_path, cmd_tx))
+                        .spawn(move || handle_connection(stream, state, clients, config_path, cmd_tx, update_state))
                         .ok();
                 }
             })
@@ -215,6 +367,7 @@ fn handle_connection(
     clients: WsClients,
     config_path: String,
     cmd_tx: Arc<Mutex<Option<CmdSender>>>,
+    update_state: SharedUpdateState,
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
 
@@ -224,15 +377,62 @@ fn handle_connection(
     let req_line = peek_str.lines().next().unwrap_or("").to_string();
 
     if req_line.contains("/ws") {
-        handle_ws(stream, state, clients, cmd_tx);
-    } else if req_line.contains("GET /api/config") {
+        handle_ws(stream, state, clients, cmd_tx, update_state);
+    } else if req_line.contains("GET /api/update/status") {
         let mut buf = BufReader::new(stream);
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
             if line == "\r\n" || line.is_empty() || line == "\n" { break; }
         }
-        serve_config_get(buf.into_inner(), &config_path);
+        serve_update_status(buf.into_inner(), &update_state);
+    } else if req_line.contains("POST /api/update") {
+        let mut buf = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+        }
+        {
+            let mut u = update_state.lock().unwrap();
+            if u.phase == UpdatePhase::Running {
+                http_response(buf.into_inner(), 409, "Update already in progress");
+                return;
+            }
+            u.start();
+        }
+        tracing::info!("Dashboard: OTA update triggered");
+        let update_clone = Arc::clone(&update_state);
+        let cfg_clone = config_path.clone();
+        std::thread::Builder::new()
+            .name("ota-update".into())
+            .spawn(move || run_update(update_clone, cfg_clone))
+            .ok();
+        http_response(buf.into_inner(), 200, "OK");
+    } else if req_line.contains("GET /api/config/backup") {
+        let mut buf = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+        }
+        let backup_path = format!("{}.bak", config_path);
+        serve_config_get(buf.into_inner(), &backup_path);
+    } else if req_line.contains("POST /api/config/restore") {
+        let mut buf = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+        }
+        let backup_path = format!("{}.bak", config_path);
+        match std::fs::copy(&backup_path, &config_path) {
+            Ok(_) => {
+                tracing::info!("Dashboard: config restored from backup");
+                http_response(buf.into_inner(), 200, "OK")
+            }
+            Err(e) => http_response(buf.into_inner(), 500, &e.to_string()),
+        }
     } else if req_line.contains("POST /api/config") {
         let mut buf = BufReader::new(stream);
         let mut content_length = 0usize;
@@ -250,10 +450,23 @@ fn handle_connection(
         let mut body = vec![0u8; content_length];
         let _ = buf.read_exact(&mut body);
         let body_str = String::from_utf8_lossy(&body);
+        // Write backup of current config before overwriting
+        let backup_path = format!("{}.bak", config_path);
+        if let Err(e) = std::fs::copy(&config_path, &backup_path) {
+            tracing::warn!("Dashboard: failed to write config backup: {}", e);
+        }
         match std::fs::write(&config_path, body_str.as_ref()) {
             Ok(_) => http_response(buf.into_inner(), 200, "OK"),
             Err(e) => http_response(buf.into_inner(), 500, &e.to_string()),
         }
+    } else if req_line.contains("GET /api/config") {
+        let mut buf = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+        }
+        serve_config_get(buf.into_inner(), &config_path);
     } else {
         let mut buf = BufReader::new(stream);
         loop {
@@ -266,7 +479,7 @@ fn handle_connection(
 }
 
 fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
-             cmd_tx: Arc<Mutex<Option<CmdSender>>>) {
+             cmd_tx: Arc<Mutex<Option<CmdSender>>>, update_state: SharedUpdateState) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(50)));
 
     let callback = |_req: &Request, res: Response| Ok(res);
@@ -310,7 +523,7 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
         // Then check for inbound messages from browser
         match ws.read() {
             Ok(Message::Text(text)) => {
-                handle_ws_command(&text, &state, &cmd_tx);
+                handle_ws_command(&text, &state, &cmd_tx, &update_state);
             }
             Ok(Message::Close(_)) => break,
             Ok(Message::Ping(data)) => { let _ = ws.send(Message::Pong(data)); }
@@ -323,7 +536,7 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
     }
 }
 
-fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Option<CmdSender>>>) {
+fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Option<CmdSender>>>, update_state: &SharedUpdateState) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return };
 
     let send_cmd = |cmd: ControlCommand| -> bool {
@@ -354,6 +567,22 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
             tracing::info!("Dashboard: shutdown service requested");
             send_cmd(ControlCommand::ShutdownService);
         }
+        Some("update") => {
+            let mut u = update_state.lock().unwrap();
+            if u.phase == UpdatePhase::Running {
+                tracing::warn!("Dashboard: update already in progress, ignoring");
+                return;
+            }
+            u.start();
+            drop(u);
+            tracing::info!("Dashboard: OTA update triggered via WS");
+            // config_path not available here; caller must use POST /api/update instead
+            // This WS variant is for UI convenience — it signals the browser to poll /api/update/status
+            // The actual update must be triggered via POST /api/update from JS first.
+            // Here we just ack that status polling should begin.
+            let mut s = state.write().unwrap();
+            s.push_log("INFO", "OTA update started — check /api/update/status for progress".to_string());
+        }
         Some("sds") => {
             let dest = v.get("dest_issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             let msg_text = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
@@ -374,6 +603,32 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
         }
         _ => {}
     }
+}
+
+fn serve_update_status(mut stream: TcpStream, update_state: &SharedUpdateState) {
+    let (phase_str, success, log) = {
+        let u = update_state.lock().unwrap();
+        let phase_str = match &u.phase {
+            UpdatePhase::Idle => "idle",
+            UpdatePhase::Running => "running",
+            UpdatePhase::Done { success: true } => "done_ok",
+            UpdatePhase::Done { success: false } => "done_err",
+        };
+        let success = matches!(u.phase, UpdatePhase::Done { success: true });
+        (phase_str, success, u.log.clone())
+    };
+    let body = format!(
+        "{{\"status\":\"{}\",\"success\":{},\"log\":{}}}",
+        phase_str,
+        success,
+        serde_json::to_string(&log).unwrap_or_else(|_| "\"\"".into())
+    );
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(body.as_bytes());
 }
 
 fn serve_html(mut stream: TcpStream) {

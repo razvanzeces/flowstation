@@ -4,9 +4,8 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>TETRA FlowStation — BS Dashboard</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* ── System font fallbacks (no external requests) ── */
   /* ── Themes ── */
   :root {
     --bg:      #080c0f;
@@ -22,8 +21,8 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     --text:    #e8f4ff;
     --text2:   #7ab0cc;
     --text3:   #304050;
-    --mono:    'IBM Plex Mono', monospace;
-    --sans:    'IBM Plex Sans Condensed', sans-serif;
+    --mono:    'ui-monospace', 'Cascadia Code', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+    --sans:    'ui-sans-serif', 'Inter', 'system-ui', -apple-system, 'Segoe UI', sans-serif;
     --r:       4px;
   }
   [data-theme="white"] {
@@ -203,6 +202,13 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   input:focus,textarea:focus{outline:none;border-color:var(--accent);}
   textarea{min-height:clamp(160px,35vh,260px);font-size:12px;resize:vertical;}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}
+  /* Update terminal */
+  .update-terminal{background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--mono);font-size:11px;line-height:1.6;color:var(--text2);height:320px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:12px 0;}
+  .update-status-msg{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:0.05em;min-height:18px;}
+  .update-status-msg.ok{color:var(--accent);}
+  .update-status-msg.err{color:var(--danger);}
+  .update-status-msg.running{color:var(--warn);}
+  #update-modal .modal{width:min(680px,100%);}
 
   /* Empty */
   .empty-state{text-align:center;padding:32px 16px;color:var(--text3);}
@@ -406,6 +412,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <div class="card-header-actions">
         <button class="btn btn-warn" onclick="restartService()" data-i18n="restart">⟳ Restart</button>
         <button class="btn btn-danger" onclick="shutdownService()" data-i18n="shutdown">⏻ Shutdown</button>
+        <button class="btn" onclick="startUpdate()" data-i18n="update">⬆ Update</button>
         <button class="btn btn-primary" onclick="saveConfig()" data-i18n="save">Save</button>
       </div>
     </div>
@@ -422,6 +429,17 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   <span class="footer-build" id="footer-build-str">—</span>
   <span class="footer-right">TETRA FlowStation {{STACK_VERSION}}</span>
 </footer>
+
+<div class="modal-overlay" id="update-modal">
+  <div class="modal">
+    <div class="modal-title" id="update-modal-title" data-i18n="update_title">⬆ OTA Update</div>
+    <div class="update-status-msg running" id="update-status-msg"></div>
+    <div class="update-terminal" id="update-terminal"></div>
+    <div class="modal-actions">
+      <button class="btn" id="update-close-btn" onclick="closeUpdateModal()" data-i18n="update_close" disabled>Close</button>
+    </div>
+  </div>
+</div>
 
 <div class="modal-overlay" id="sds-modal">
   <div class="modal">
@@ -468,6 +486,12 @@ const LANGS={
     confirm_restart:'Restart FlowStation?\nAll active calls will be dropped.',
     confirm_shutdown:'Shutdown FlowStation?\nThe service will stop and must be restarted manually.',
     saved:'✓ Saved — restart to apply.',save_fail:'✗ Save failed',conn_error:'Connection error.',
+    update:'⬆ Update',update_title:'OTA Update — github.com/razvanzeces/flowstation',
+    update_confirm:'Pull latest from main and rebuild?\nThe service will restart automatically.',
+    update_running:'Updating… do not close this window.',
+    update_done_ok:'✓ Update complete. Restarting…',
+    update_done_err:'✗ Update failed. See log above.',
+    update_close:'Close',
   },
   ro:{
     bts_ip:'IP BTS',offline:'DECONECTAT',online:'CONECTAT',
@@ -494,6 +518,12 @@ const LANGS={
     confirm_restart:'Repornire FlowStation?\nToate apelurile active vor fi întrerupte.',
     confirm_shutdown:'Oprire FlowStation?\nServiciul se va opri și trebuie repornit manual.',
     saved:'✓ Salvat — repornire pentru aplicare.',save_fail:'✗ Salvare eșuată',conn_error:'Eroare de conexiune.',
+    update:'⬆ Update',update_title:'Update OTA — github.com/razvanzeces/flowstation',
+    update_confirm:'Descarcă ultima versiune din main și recompilează?\nServiciul va reporni automat.',
+    update_running:'Se actualizează… nu închide fereastra.',
+    update_done_ok:'✓ Update finalizat. Se repornește…',
+    update_done_err:'✗ Update eșuat. Vezi logul de mai sus.',
+    update_close:'Închide',
   },
   de:{
     bts_ip:'BTS-IP',offline:'OFFLINE',online:'ONLINE',
@@ -520,6 +550,12 @@ const LANGS={
     confirm_restart:'FlowStation neu starten?\nAlle aktiven Anrufe werden beendet.',
     confirm_shutdown:'FlowStation herunterfahren?\nDer Dienst wird gestoppt und muss manuell neu gestartet werden.',
     saved:'✓ Gespeichert — Neustart zum Anwenden.',save_fail:'✗ Fehler beim Speichern',conn_error:'Verbindungsfehler.',
+    update:'⬆ Update',update_title:'OTA-Update — github.com/razvanzeces/flowstation',
+    update_confirm:'Neueste Version von main holen und neu bauen?\nDer Dienst startet automatisch neu.',
+    update_running:'Aktualisierung läuft… Fenster nicht schließen.',
+    update_done_ok:'✓ Update abgeschlossen. Neustart…',
+    update_done_err:'✗ Update fehlgeschlagen. Siehe Log oben.',
+    update_close:'Schließen',
   },
   es:{
     bts_ip:'IP BTS',offline:'SIN CONEXIÓN',online:'EN LÍNEA',
@@ -546,6 +582,12 @@ const LANGS={
     confirm_restart:'¿Reiniciar FlowStation?\nTodas las llamadas activas se interrumpirán.',
     confirm_shutdown:'¿Apagar FlowStation?\nEl servicio se detendrá y deberá reiniciarse manualmente.',
     saved:'✓ Guardado — reinicia para aplicar.',save_fail:'✗ Error al guardar',conn_error:'Error de conexión.',
+    update:'⬆ Update',update_title:'Actualización OTA — github.com/razvanzeces/flowstation',
+    update_confirm:'¿Obtener la última versión de main y recompilar?\nEl servicio se reiniciará automáticamente.',
+    update_running:'Actualizando… no cierres esta ventana.',
+    update_done_ok:'✓ Actualización completa. Reiniciando…',
+    update_done_err:'✗ Actualización fallida. Ver log arriba.',
+    update_close:'Cerrar',
   },
 };
 
@@ -813,6 +855,66 @@ function kickMs(issi){if(!confirm(t('confirm_kick',{issi})))return;ws&&ws.send(J
 function openSds(issi){sdsDest=issi;document.getElementById('sds-dest').value=issi;document.getElementById('sds-msg').value='';document.getElementById('sds-modal').classList.add('open');}
 function closeSdsModal(){document.getElementById('sds-modal').classList.remove('open');}
 function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value),msg=document.getElementById('sds-msg').value.trim();if(!dest||!msg)return;ws&&ws.send(JSON.stringify({type:'sds',dest_issi:dest,message:msg}));closeSdsModal();}
+
+let updatePollTimer=null;
+function closeUpdateModal(){
+  document.getElementById('update-modal').classList.remove('open');
+  if(updatePollTimer){clearInterval(updatePollTimer);updatePollTimer=null;}
+}
+async function startUpdate(){
+  if(!confirm(t('update_confirm')))return;
+  // Open modal first
+  document.getElementById('update-modal').classList.add('open');
+  document.getElementById('update-modal-title').textContent=t('update_title');
+  const termEl=document.getElementById('update-terminal');
+  const msgEl=document.getElementById('update-status-msg');
+  const closeBtn=document.getElementById('update-close-btn');
+  termEl.textContent='';
+  msgEl.className='update-status-msg running';
+  msgEl.textContent=t('update_running');
+  closeBtn.disabled=true;
+  // Trigger update
+  try{
+    const r=await fetch('/api/update',{method:'POST'});
+    if(!r.ok&&r.status!==409){
+      msgEl.className='update-status-msg err';
+      msgEl.textContent='✗ '+await r.text();
+      closeBtn.disabled=false;
+      return;
+    }
+  }catch(e){
+    msgEl.className='update-status-msg err';
+    msgEl.textContent='✗ '+e.message;
+    closeBtn.disabled=false;
+    return;
+  }
+  // Poll for progress
+  let lastLen=0;
+  updatePollTimer=setInterval(async()=>{
+    try{
+      const r=await fetch('/api/update/status');
+      if(!r.ok)return;
+      const j=await r.json();
+      // Append only new log content
+      if(j.log&&j.log.length>lastLen){
+        termEl.textContent+=j.log.slice(lastLen);
+        lastLen=j.log.length;
+        termEl.scrollTop=termEl.scrollHeight;
+      }
+      if(j.status==='done_ok'){
+        clearInterval(updatePollTimer);updatePollTimer=null;
+        msgEl.className='update-status-msg ok';
+        msgEl.textContent=t('update_done_ok');
+        closeBtn.disabled=false;
+      }else if(j.status==='done_err'){
+        clearInterval(updatePollTimer);updatePollTimer=null;
+        msgEl.className='update-status-msg err';
+        msgEl.textContent=t('update_done_err');
+        closeBtn.disabled=false;
+      }
+    }catch(e){/* network blip during restart is expected */}
+  },1000);
+}
 
 setInterval(()=>{
   if(document.getElementById('page-calls').classList.contains('active'))renderCalls();

@@ -523,8 +523,11 @@ impl CcBsSubentity {
 
         let len_bits = nibbles.len() * 4;
         let mut data: u64 = 0;
+        // Pack nibbles MSB-first within the used bits, matching decode_external_subscriber_number.
+        // decode uses shift = total_bits - 4 - (i * 4), so nibble[0] is at the top of used bits.
+        // E.g. "600" (3 nibbles, len=12): nibble[0]=6 at shift=8, nibble[1]=0 at shift=4, nibble[2]=0 at shift=0.
         for (idx, nibble) in nibbles.into_iter().enumerate() {
-            let shift = 60 - (idx * 4);
+            let shift = len_bits - 4 - (idx * 4);
             data |= (nibble as u64) << shift;
         }
 
@@ -998,6 +1001,11 @@ impl CcBsSubentity {
     }
 
     // ── Dashboard / API helpers ────────────────────────────────────────────────
+
+    /// Returns all currently registered ISSI values.
+    pub fn subscriber_issis(&self) -> Vec<u32> {
+        self.subscriber_groups.keys().copied().collect()
+    }
 
     /// Returns the list of GSSIs the given ISSI is affiliated to.
     pub fn subscriber_groups_for(&self, issi: u32) -> Vec<u32> {
