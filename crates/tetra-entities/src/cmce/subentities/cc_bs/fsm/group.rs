@@ -336,6 +336,7 @@ impl CcBsSubentity {
         let dest_gssi = call.dest_gssi;
 
         self.tpi_update_talker(call_id, source_issi);
+        self.send_group_d_setup_refresh(queue, call_id, source_issi, dest_gssi, usage, ts);
         self.send_d_tx_granted_facch(queue, call_id, source_issi, dest_gssi, ts);
 
         queue.push_back(SapMsg {

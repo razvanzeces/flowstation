@@ -104,6 +104,52 @@ impl CcBsSubentity {
         }
     }
 
+    /// Send a refreshed group D-SETUP on the normal CMCE/MLE path.
+    ///
+    /// This is used when a Brew/network speaker takes over an existing group
+    /// call during hangtime or an active speaker change. The FACCH/STCH
+    /// D-TX GRANTED stays small and standards-safe; the optional SS-TPI
+    /// mnemonic is carried by D-SETUP where the PDU has enough capacity.
+    pub(super) fn send_group_d_setup_refresh(
+        &mut self,
+        queue: &mut MessageQueue,
+        call_id: u16,
+        source_issi: u32,
+        dest_gssi: u32,
+        usage: u8,
+        ts: u8,
+    ) {
+        let tpi_facility = self.tpi_inform_for_call(call_id);
+        let Some(cached) = self.cached_setups.get_mut(&call_id) else {
+            tracing::debug!(
+                "CMCE: skipping group D-SETUP refresh for call_id={} gssi={} source={} (no cached setup)",
+                call_id,
+                dest_gssi,
+                source_issi
+            );
+            return;
+        };
+        if cached.is_individual {
+            tracing::debug!(
+                "CMCE: skipping group D-SETUP refresh for call_id={} gssi={} source={} (cached setup is individual)",
+                call_id,
+                dest_gssi,
+                source_issi
+            );
+            return;
+        }
+
+        cached.dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
+        cached.pdu.calling_party_address_ssi = Some(source_issi);
+        cached.pdu.transmission_grant = TransmissionGrant::GrantedToOtherUser;
+        cached.pdu.transmission_request_permission = false;
+        cached.pdu.facility = tpi_facility;
+
+        let (sdu, chan_alloc) = Self::build_d_setup_prim(&cached.pdu, usage, ts, UlDlAssignment::Both);
+        let prim = Self::build_sapmsg(sdu, Some(chan_alloc), cached.dest_addr, Layer2Service::Unacknowledged, None);
+        queue.push_back(prim);
+    }
+
     /// Build a SAP message with explicit LLC link context (handle/link_id/endpoint_id).
     /// Used for individually-addressed responses that must be routed back through
     /// the established LLC link of a specific MS.

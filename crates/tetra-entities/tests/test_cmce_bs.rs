@@ -1,17 +1,24 @@
 mod common;
 
-use tetra_config::bluestation::StackMode;
+use std::time::Duration;
+
+use tetra_config::bluestation::{CfgBrew, CfgManualIdentity, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, TxState, debug};
 use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
+use tetra_pdus::cmce::enums::transmission_grant::TransmissionGrant;
 use tetra_pdus::cmce::fields::basic_service_information::BasicServiceInformation;
+use tetra_pdus::cmce::pdus::d_setup::DSetup;
+use tetra_pdus::cmce::pdus::d_tx_granted::DTxGranted;
 use tetra_pdus::cmce::pdus::u_facility::UFacility;
 use tetra_pdus::cmce::pdus::u_setup::USetup;
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
+use tetra_saps::control::call_control::CallControl;
 use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 use tetra_saps::control::enums::communication_type::CommunicationType;
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
+use uuid::Uuid;
 
 use crate::common::ComponentTest;
 
@@ -121,6 +128,128 @@ fn count_d_setups(msgs: &[SapMsg]) -> usize {
                     if prim.chan_alloc.as_ref().is_some_and(|ca| ca.usage.is_some()))
         })
         .count()
+}
+
+fn build_network_call_start_msg(brew_uuid: Uuid, source_issi: u32, dest_gssi: u32) -> SapMsg {
+    SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
+            brew_uuid,
+            source_issi,
+            dest_gssi,
+            priority: 0,
+        }),
+    }
+}
+
+fn build_network_call_end_msg(brew_uuid: Uuid) -> SapMsg {
+    SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+    }
+}
+
+fn decode_d_setups(msgs: &[SapMsg]) -> Vec<DSetup> {
+    msgs.iter()
+        .filter_map(|msg| {
+            let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
+                return None;
+            };
+            let mut sdu = prim.sdu.clone();
+            sdu.seek(0);
+            DSetup::from_bitbuf(&mut sdu).ok()
+        })
+        .collect()
+}
+
+fn decode_d_tx_granted(msgs: &[SapMsg]) -> Vec<DTxGranted> {
+    msgs.iter()
+        .filter_map(|msg| {
+            let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
+                return None;
+            };
+            let mut sdu = prim.sdu.clone();
+            sdu.seek(0);
+            DTxGranted::from_bitbuf(&mut sdu).ok()
+        })
+        .collect()
+}
+
+#[test]
+fn test_network_hangtime_reuse_refreshes_group_dsetup_with_tpi_mnemonic() {
+    debug::setup_logging_verbose();
+
+    const FIRST_SPEAKER: u32 = 2_260_571;
+    const SECOND_SPEAKER: u32 = 2_260_580;
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.brew = Some(CfgBrew {
+        host: "test.invalid".to_string(),
+        port: 443,
+        tls: true,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_secs(1),
+        jitter_initial_latency_frames: 0,
+        feature_sds_enabled: true,
+        feature_rssi_export: false,
+        whitelisted_ssis: None,
+    });
+    config.identity.enabled = true;
+    config.identity.manual.push(CfgManualIdentity {
+        ssi: SECOND_SPEAKER,
+        mnemonic: Some("YO3TCO".to_string()),
+        label: None,
+    });
+
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+    register_subscriber(&mut test, TEST_ISSI, TEST_GSSI);
+
+    let first_uuid = Uuid::new_v4();
+    test.submit_message(build_network_call_start_msg(first_uuid, FIRST_SPEAKER, TEST_GSSI));
+    test.run_stack(Some(2));
+    test.dump_sinks();
+
+    test.submit_message(build_network_call_end_msg(first_uuid));
+    test.run_stack(Some(2));
+    test.dump_sinks();
+
+    let second_uuid = Uuid::new_v4();
+    test.submit_message(build_network_call_start_msg(second_uuid, SECOND_SPEAKER, TEST_GSSI));
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+
+    let refreshed_setup = decode_d_setups(&msgs)
+        .into_iter()
+        .find(|setup| setup.calling_party_address_ssi == Some(SECOND_SPEAKER))
+        .expect("hangtime reuse must immediately refresh group D-SETUP for the new Brew speaker");
+    assert_eq!(refreshed_setup.transmission_grant, TransmissionGrant::GrantedToOtherUser);
+    let facility = refreshed_setup
+        .facility
+        .expect("refreshed group D-SETUP must carry SS-TPI for RX display");
+    assert_eq!(facility.mnemonic_name.as_deref(), Some("YO3TCO"));
+    assert_eq!(
+        facility.talking_sending_party_ssi, None,
+        "group D-SETUP already carries the caller SSI; SS-TPI should add mnemonic only"
+    );
+
+    let granted = decode_d_tx_granted(&msgs)
+        .into_iter()
+        .find(|granted| granted.transmitting_party_address_ssi == Some(SECOND_SPEAKER as u64))
+        .expect("speaker change must still send D-TX GRANTED");
+    assert!(
+        granted.facility.is_none(),
+        "D-TX GRANTED is sent over FACCH/STCH and must remain facility-free to stay within signalling capacity"
+    );
 }
 
 #[test]
