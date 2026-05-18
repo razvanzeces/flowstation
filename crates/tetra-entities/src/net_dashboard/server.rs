@@ -10,7 +10,7 @@ use tungstenite::{
 
 use crate::net_control::commands::ControlCommand;
 use crate::net_dashboard::html::DASHBOARD_HTML;
-use crate::net_dashboard::state::{CallEntry, DashboardState, DashboardStateInner, MsEntry};
+use crate::net_dashboard::state::{CallEntry, DashboardState, DashboardStateInner, MsEntry, RfLoopbackFrame};
 use crate::net_telemetry::TelemetryEvent;
 
 type CmdSender = crossbeam_channel::Sender<ControlCommand>;
@@ -387,8 +387,29 @@ impl DashboardServer {
                 TelemetryEvent::TsVoiceActivity { .. } => {
                     // Handled below with rate limiting — no state update needed
                 }
-                TelemetryEvent::TxMonitor { .. } | TelemetryEvent::RfLoopbackMonitor { .. } => {
+                TelemetryEvent::TxMonitor { .. } => {
                     // Stateless live RF monitor payload.
+                }
+                TelemetryEvent::RfLoopbackMonitor {
+                    sample_rate,
+                    center_freq_hz,
+                    tone_hz,
+                    amplitude,
+                    rms_dbfs,
+                    peak_dbfs,
+                    spectrum_db_tenths,
+                    constellation_iq,
+                } => {
+                    s.last_rf_loopback = Some(RfLoopbackFrame {
+                        sample_rate: *sample_rate,
+                        center_freq_hz: *center_freq_hz,
+                        tone_hz: *tone_hz,
+                        amplitude: *amplitude,
+                        rms_dbfs: *rms_dbfs,
+                        peak_dbfs: *peak_dbfs,
+                        spectrum_db_tenths: spectrum_db_tenths.clone(),
+                        constellation_iq: constellation_iq.clone(),
+                    });
                 }
             }
         }
@@ -734,12 +755,14 @@ fn handle_ws(
         let calls = s.snapshot_calls();
         let logs: Vec<_> = s.log_ring.iter().cloned().collect();
         let last_heard: Vec<_> = s.last_heard.iter().cloned().collect();
+        let last_rf_loopback = s.last_rf_loopback.clone();
         drop(s);
         let brew_online = state.read().unwrap().brew_online;
         let brew_version = state.read().unwrap().brew_version;
         if let Ok(json) = serde_json::to_string(&serde_json::json!({
             "type": "snapshot", "ms": ms, "calls": calls, "log": logs,
-            "brew_online": brew_online, "brew_version": brew_version, "last_heard": last_heard
+            "brew_online": brew_online, "brew_version": brew_version, "last_heard": last_heard,
+            "last_rf_loopback": last_rf_loopback
         })) {
             let _ = ws.send(Message::Text(json));
         }

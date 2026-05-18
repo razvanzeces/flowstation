@@ -1311,6 +1311,7 @@ function handleMsg(msg){
       });
       if(msg.log&&msg.log.length){document.getElementById('log-container').innerHTML='';msg.log.forEach(e=>appendLog(e));}
       setBrewStatus(!!msg.brew_online,msg.brew_version||0);
+      if(msg.last_rf_loopback)updateRfMonitor({...msg.last_rf_loopback,type:'rf_loopback_monitor'});
       renderAll();break;
     case 'brew_status':
       setBrewStatus(!!msg.connected,msg.brew_version||0);break;
@@ -1397,7 +1398,7 @@ function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocks();}
 
 // ── RF Monitor ───────────────────────────────────────────────────────────
-const rfState={waterfall:[],avg:null,maxHold:null,lastTs:0,frames:0,rateTs:0};
+const rfState={waterfall:[],avg:null,maxHold:null,lastTs:0,frames:0,rateTs:0,accumSource:null,accum:[],accumLimit:4096};
 function fmtMHz(v){return v?`${(v/1e6).toFixed(6)} MHz`:'—';}
 function rfResizeCanvas(id){
   const c=document.getElementById(id);if(!c)return null;
@@ -1412,6 +1413,7 @@ function updateRfMonitor(msg){
   const dt=(rfState.lastTs-rfState.rateTs)/1000;
   if(dt>=1){document.getElementById('rf-rate').textContent=`${(rfState.frames/dt).toFixed(1)} fps`;rfState.frames=0;rfState.rateTs=rfState.lastTs;}
   const isLoopback=msg.type==='rf_loopback_monitor';
+  if(rfState.accumSource!==msg.type){rfState.accumSource=msg.type;rfState.accum=[];}
   document.getElementById('rf-center').textContent=fmtMHz(msg.center_freq_hz);
   document.getElementById('rf-rms').textContent=`${msg.rms_dbfs.toFixed(1)} dBFS`;
   document.getElementById('rf-peak').textContent=`${msg.peak_dbfs.toFixed(1)} dBFS`;
@@ -1425,6 +1427,7 @@ function updateRfMonitor(msg){
   if(rfState.waterfall.length>180)rfState.waterfall.shift();
   drawRfWaterfall();
 }
+function rfResetAccum(){rfState.accum=[];drawRfConstellation([],rfState.accumSource==='rf_loopback_monitor');}
 function drawRfGrid(ctx,w,h,yMin,yMax,fs){
   ctx.fillStyle='#050607';ctx.fillRect(0,0,w,h);
   ctx.strokeStyle='rgba(255,255,255,0.14)';ctx.lineWidth=1;
@@ -1489,33 +1492,56 @@ function drawRfConstellation(iq,isLoopback=false){
   ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.beginPath();ctx.moveTo(cx,8);ctx.lineTo(cx,h-8);ctx.moveTo(8,cy);ctx.lineTo(w-8,cy);ctx.stroke();
   ctx.strokeStyle='rgba(255,255,255,0.08)';
   for(const r of [0.5,1.0]){ctx.beginPath();ctx.arc(cx,cy,s*r,0,Math.PI*2);ctx.stroke();}
+  if(!isLoopback)return drawTetraSymbolConstellation(ctx,cx,cy,s,iq);
+  ctx.fillStyle='rgba(76,216,255,0.82)';
+  let sum2=0,peak=0,count=0;
+  for(let i=0;i+1<iq.length;i+=2){
+    const ix=iq[i]/32767,iy=iq[i+1]/32767,x=cx+ix*s,y=cy-iy*s,r=Math.hypot(ix,iy);
+    sum2+=r*r;peak=Math.max(peak,r);count++;
+    ctx.fillRect(x-1.3,y-1.3,2.6,2.6);
+  }
+  const rms=count?Math.sqrt(sum2/count)*100:0,pk=peak*100;
+  const label=document.getElementById('rf-vector');
+  if(label)label.textContent=count?`RF LB RMS ${rms.toFixed(1)}% PK ${pk.toFixed(1)}%`:'RF LB';
+}
+function drawTetraSymbolConstellation(ctx,cx,cy,s,iq){
   const ideals=[];
-  if(!isLoopback){
-    for(let k=0;k<8;k++){
-      const a=k*Math.PI/4,x=cx+Math.cos(a)*s,y=cy-Math.sin(a)*s;
-      ideals.push([Math.cos(a),Math.sin(a)]);
-      ctx.strokeStyle='rgba(0,212,168,0.65)';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.stroke();
-      ctx.fillStyle='rgba(0,212,168,0.32)';ctx.fillRect(x-1.5,y-1.5,3,3);
-    }
+  let radiusSum=0,radiusCount=0;
+  for(let i=0;i+1<iq.length;i+=2){
+    const r=Math.hypot(iq[i]/32767,iq[i+1]/32767);
+    if(r>0.02){radiusSum+=r;radiusCount++;}
+  }
+  const gain=radiusCount?radiusSum/radiusCount:1;
+  const cloudScale=Math.min(4.5,Math.max(1.0,0.72/Math.max(0.08,gain)));
+  for(let k=0;k<8;k++){
+    const a=k*Math.PI/4,x=cx+Math.cos(a)*s,y=cy-Math.sin(a)*s;
+    ideals.push([Math.cos(a),Math.sin(a)]);
+    ctx.strokeStyle='rgba(0,212,168,0.62)';ctx.beginPath();ctx.arc(x,y,Math.max(10,s*0.13),0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='rgba(0,212,168,0.25)';ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();
   }
   ctx.fillStyle='rgba(76,216,255,0.82)';
-  let err2=0,peak=0,count=0;
   for(let i=0;i+1<iq.length;i+=2){
-    const ix=iq[i]/32767,iy=iq[i+1]/32767,x=cx+ix*s,y=cy-iy*s;
-    let best=Math.hypot(ix,iy);
-    if(ideals.length){
-      best=10;
-      for(const p of ideals){
-        const e=Math.hypot(ix-p[0],iy-p[1]);
-        if(e<best)best=e;
-      }
-    }
+    const ix=iq[i]/32767,iy=iq[i+1]/32767,r=Math.hypot(ix,iy);
+    if(r<0.01)continue;
+    const k=(Math.round(((Math.atan2(iy,ix)+Math.PI*2)%(Math.PI*2))/(Math.PI/4)))&7;
+    const p=ideals[k],ux=p[0],uy=p[1];
+    const ex=ix/gain-ux,ey=iy/gain-uy;
+    rfState.accum.push({k,ex,ey});
+  }
+  if(rfState.accum.length>rfState.accumLimit)rfState.accum.splice(0,rfState.accum.length-rfState.accumLimit);
+  let err2=0,peak=0,count=0;
+  for(const pt of rfState.accum){
+    const p=ideals[pt.k],ux=p[0],uy=p[1],ex=pt.ex,ey=pt.ey;
+    const x=cx+(ux+ex*cloudScale)*s,y=cy-(uy+ey*cloudScale)*s;
+    const best=Math.hypot(ex,ey);
     err2+=best*best;peak=Math.max(peak,best);count++;
-    ctx.fillRect(x-1.3,y-1.3,2.6,2.6);
+    if(x>4&&x<ctx.canvas.width-4&&y>4&&y<ctx.canvas.height-4){
+      ctx.fillRect(x-1.3,y-1.3,2.6,2.6);
+    }
   }
   const rms=count?Math.sqrt(err2/count)*100:0,pk=peak*100;
   const label=document.getElementById('rf-vector');
-  if(label)label.textContent=count?(isLoopback?`RF LB RMS ${rms.toFixed(1)}% PK ${pk.toFixed(1)}%`:`RMS ${rms.toFixed(1)}%  PK ${pk.toFixed(1)}%`):(isLoopback?'RF LB':'full-scale IQ');
+  if(label)label.textContent=count?`ACCUM ${count}  RMS ${rms.toFixed(1)}%  PK ${pk.toFixed(1)}%`:'ACCUM reset';
 }
 function wfColor(v){
   const t=Math.max(0,Math.min(1,(v+110)/72));
@@ -1539,6 +1565,7 @@ function drawRfWaterfall(){
   }
 }
 setInterval(()=>{if(rfState.lastTs){const el=document.getElementById('rf-age');if(el&&!el.textContent.startsWith('RF LB'))el.textContent=`${((Date.now()-rfState.lastTs)/1000).toFixed(1)}s`;};},250);
+setTimeout(()=>{const c=document.getElementById('rf-constellation');if(c)c.addEventListener('click',rfResetAccum);},0);
 
 // ── TS Visualizer ─────────────────────────────────────────────────────────
 // ts_state[ts-1]: {call_id, call_type, label, sub, voice_ts} (voice_ts = Date.now() of last frame)

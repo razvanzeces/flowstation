@@ -44,6 +44,18 @@ pub struct LastHeardEntry {
     pub dest: u32,            // destination GSSI or ISSI (0 if unknown)
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RfLoopbackFrame {
+    pub sample_rate: f32,
+    pub center_freq_hz: f64,
+    pub tone_hz: f32,
+    pub amplitude: f32,
+    pub rms_dbfs: f32,
+    pub peak_dbfs: f32,
+    pub spectrum_db_tenths: Vec<i16>,
+    pub constellation_iq: Vec<i16>,
+}
+
 /// Shared mutable state for the dashboard, protected by RwLock
 #[derive(Debug, Default)]
 pub struct DashboardStateInner {
@@ -54,6 +66,7 @@ pub struct DashboardStateInner {
     pub config_path: String,
     pub brew_online: bool,
     pub brew_version: u8,
+    pub last_rf_loopback: Option<RfLoopbackFrame>,
 }
 
 pub const LAST_HEARD_MAX: usize = 50;
@@ -93,6 +106,7 @@ impl DashboardStateInner {
             config_path,
             brew_online: false,
             brew_version: 0,
+            last_rf_loopback: None,
         }
     }
 
