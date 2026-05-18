@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 use soapysdr::{Args, Device, Direction};
 use tetra_config::bluestation::CfgSx1255Autocal;
@@ -51,6 +54,7 @@ struct ToneMeasurement {
     positive_bin: ComplexSample,
     negative_bin: ComplexSample,
     main_mag: RealSample,
+    freq_error_hz: RealSample,
     snr_db: RealSample,
     image_dbc: RealSample,
     image_coeff: ComplexSample,
@@ -99,6 +103,10 @@ impl RxStartupCompensation {
 
     fn enabled(&self) -> bool {
         self.apply_dc || self.apply_iq
+    }
+
+    fn score(&self) -> u8 {
+        u8::from(self.apply_dc) + 2 * u8::from(self.apply_iq)
     }
 }
 
@@ -169,10 +177,11 @@ impl Sx1255Autocal {
         }
 
         tracing::info!(
-            "SX1255 autocal: enabled startup={} periodic={} interval={}s",
+            "SX1255 autocal: enabled startup={} periodic={} interval={}s startup_temp_stabilize={}",
             self.cfg.startup,
             self.cfg.periodic,
-            self.cfg.interval_secs
+            self.cfg.interval_secs,
+            self.cfg.startup_temperature_stabilize
         );
 
         self.last_run = Some(Instant::now());
@@ -191,7 +200,9 @@ impl Sx1255Autocal {
             self.probe_rf_loopback(dev, rx_ch);
         }
 
-        if let Some(temp_c) = self.read_temperature(dev, rx_ch, tx_ch) {
+        if self.cfg.startup_temperature_stabilize {
+            self.startup_temperature_stabilization(dev, rx_ch, tx_ch);
+        } else if let Some(temp_c) = self.read_temperature(dev, rx_ch, tx_ch) {
             self.observe_temperature(temp_c);
             self.apply_temperature_compensation(dev, rx_ch, tx_ch, temp_c, true, "startup");
         }
@@ -213,29 +224,73 @@ impl Sx1255Autocal {
             return;
         }
 
-        match self.measure_loopback_calibration(dev, rx_ch, tx_ch, rx_sample_rate, rx_args, tx_args) {
-            Ok(mut compensation) => {
-                if compensation.enabled() {
-                    compensation = self.install_driver_compensation(dev, rx_ch, compensation);
-                    if compensation.enabled() {
-                        tracing::info!(
-                            "SX1255 autocal: startup RX software compensation active dc=({:+.6},{:+.6}) image_coeff=({:+.6},{:+.6})",
-                            compensation.dc.re,
-                            compensation.dc.im,
-                            compensation.image_coeff.re,
-                            compensation.image_coeff.im
-                        );
-                        self.rx_startup_compensation = compensation;
-                    } else {
-                        tracing::info!("SX1255 autocal: startup RX compensation installed in driver; software fallback disabled");
-                    }
-                } else {
-                    tracing::info!("SX1255 autocal: startup loopback calibration completed without live RX correction");
+        let attempts = self.cfg.rf_loopback_calibration_attempts.max(1);
+        let mut best_compensation = None;
+
+        for attempt in 1..=attempts {
+            if attempt > 1 {
+                let delay = Duration::from_secs(self.cfg.rf_loopback_retry_delay_secs);
+                if !delay.is_zero() {
+                    tracing::info!(
+                        "SX1255 autocal: waiting {}s before loopback calibration attempt {}/{}",
+                        delay.as_secs(),
+                        attempt,
+                        attempts
+                    );
+                    thread::sleep(delay);
+                }
+                if let Some(temp_c) = self.read_temperature(dev, rx_ch, tx_ch) {
+                    self.observe_temperature(temp_c);
+                    self.apply_temperature_compensation(dev, rx_ch, tx_ch, temp_c, true, "startup-loopback");
                 }
             }
-            Err(err) => {
-                tracing::warn!("SX1255 autocal: startup loopback calibration skipped: {}", err);
+
+            tracing::info!("SX1255 autocal: loopback calibration attempt {}/{}", attempt, attempts);
+            match self.measure_loopback_calibration(dev, rx_ch, tx_ch, rx_sample_rate, rx_args, tx_args) {
+                Ok(compensation) => {
+                    if compensation.enabled() {
+                        let replace = best_compensation
+                            .map(|best: RxStartupCompensation| compensation.score() >= best.score())
+                            .unwrap_or(true);
+                        if replace {
+                            best_compensation = Some(compensation);
+                        }
+                    } else if best_compensation.is_none() {
+                        best_compensation = Some(compensation);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "SX1255 autocal: loopback calibration attempt {}/{} skipped: {}",
+                        attempt,
+                        attempts,
+                        err
+                    );
+                }
             }
+        }
+
+        let Some(mut compensation) = best_compensation else {
+            tracing::warn!("SX1255 autocal: startup loopback calibration produced no usable capture");
+            return;
+        };
+
+        if compensation.enabled() {
+            compensation = self.install_driver_compensation(dev, rx_ch, compensation);
+            if compensation.enabled() {
+                tracing::info!(
+                    "SX1255 autocal: startup RX software compensation active dc=({:+.6},{:+.6}) image_coeff=({:+.6},{:+.6})",
+                    compensation.dc.re,
+                    compensation.dc.im,
+                    compensation.image_coeff.re,
+                    compensation.image_coeff.im
+                );
+                self.rx_startup_compensation = compensation;
+            } else {
+                tracing::info!("SX1255 autocal: startup RX compensation installed in driver; software fallback disabled");
+            }
+        } else {
+            tracing::info!("SX1255 autocal: startup loopback calibration completed without live RX correction");
         }
     }
 
@@ -270,6 +325,110 @@ impl Sx1255Autocal {
         if let Some(temp_c) = self.read_temperature(dev, rx_ch, tx_ch) {
             self.observe_temperature(temp_c);
             self.apply_temperature_compensation(dev, rx_ch, tx_ch, temp_c, self.cfg.allow_periodic_retune, "periodic");
+        }
+    }
+
+    fn startup_temperature_stabilization(&mut self, dev: &Device, rx_ch: usize, tx_ch: usize) {
+        if !self.cfg.read_temperature {
+            tracing::info!("SX1255 autocal: startup temperature stabilization skipped because read_temperature=false");
+            return;
+        }
+
+        let interval = Duration::from_secs(self.cfg.startup_temperature_interval_secs.max(1));
+        let min_wait = Duration::from_secs(self.cfg.startup_temperature_min_wait_secs);
+        let max_wait = Duration::from_secs(
+            self.cfg
+                .startup_temperature_max_wait_secs
+                .max(self.cfg.startup_temperature_min_wait_secs),
+        );
+        let stable_delta_c = self.cfg.startup_temperature_stable_delta_c.max(0.0);
+        let required_stable_checks = self.cfg.startup_temperature_stable_checks.max(1);
+
+        tracing::info!(
+            "SX1255 autocal: startup temperature stabilization begin interval={}s min={}s max={}s stable_delta={:.2}C checks={}",
+            interval.as_secs(),
+            min_wait.as_secs(),
+            max_wait.as_secs(),
+            stable_delta_c,
+            required_stable_checks
+        );
+
+        let started = Instant::now();
+        let mut previous_temp: Option<f64> = None;
+        let mut first_temp: Option<f64> = None;
+        let mut stable_checks = 0usize;
+
+        loop {
+            let elapsed = started.elapsed();
+            let temp_c = match self.read_temperature(dev, rx_ch, tx_ch) {
+                Some(temp_c) => temp_c,
+                None => {
+                    tracing::warn!("SX1255 autocal: startup temperature stabilization stopped; SX1255 temperature read failed");
+                    return;
+                }
+            };
+
+            first_temp.get_or_insert(temp_c);
+            self.observe_temperature(temp_c);
+            self.apply_temperature_compensation(dev, rx_ch, tx_ch, temp_c, true, "startup-warmup");
+
+            let delta_c = previous_temp.map(|previous| temp_c - previous);
+            let total_delta_c = first_temp.map(|first| temp_c - first).unwrap_or(0.0);
+            let slope_c_per_min = if elapsed.as_secs_f64() > 0.0 {
+                total_delta_c / (elapsed.as_secs_f64() / 60.0)
+            } else {
+                0.0
+            };
+            if let Some(delta_c) = delta_c {
+                if elapsed >= min_wait && delta_c.abs() <= stable_delta_c {
+                    stable_checks += 1;
+                } else {
+                    stable_checks = 0;
+                }
+
+                tracing::info!(
+                    "SX1255 autocal: startup temperature sample elapsed={}s temp={:.2}C delta={:+.2}C total_delta={:+.2}C slope={:+.2}C/min stable_checks={}/{}",
+                    elapsed.as_secs(),
+                    temp_c,
+                    delta_c,
+                    total_delta_c,
+                    slope_c_per_min,
+                    stable_checks,
+                    required_stable_checks
+                );
+            } else {
+                tracing::info!(
+                    "SX1255 autocal: startup temperature sample elapsed={}s temp={:.2}C delta=n/a total_delta={:+.2}C slope={:+.2}C/min stable_checks=0/{}",
+                    elapsed.as_secs(),
+                    temp_c,
+                    total_delta_c,
+                    slope_c_per_min,
+                    required_stable_checks
+                );
+            }
+
+            previous_temp = Some(temp_c);
+
+            if elapsed >= min_wait && stable_checks >= required_stable_checks {
+                tracing::info!(
+                    "SX1255 autocal: startup temperature stabilized at {:.2}C after {}s",
+                    temp_c,
+                    elapsed.as_secs()
+                );
+                return;
+            }
+
+            if elapsed >= max_wait {
+                tracing::warn!(
+                    "SX1255 autocal: startup temperature stabilization reached max wait {}s at {:.2}C; continuing startup",
+                    max_wait.as_secs(),
+                    temp_c
+                );
+                return;
+            }
+
+            let remaining = max_wait.saturating_sub(elapsed);
+            thread::sleep(interval.min(remaining));
         }
     }
 
@@ -438,6 +597,7 @@ impl Sx1255Autocal {
         let original_rx_antenna = dev.antenna(Direction::Rx, rx_ch).unwrap_or_else(|_| "RX".to_string());
         let original_rx_frequency = dev.frequency(Direction::Rx, rx_ch).ok();
         let original_tx_frequency = dev.frequency(Direction::Tx, tx_ch).ok();
+        let original_tx_gains = self.apply_loopback_tx_gains(dev, tx_ch);
         let calibration_frequency = original_tx_frequency.or(original_rx_frequency);
         let block_len = stream_period_samples(rx_args).unwrap_or(900).max(64);
         let capture_blocks = self.cfg.rf_loopback_capture_blocks.max(1);
@@ -536,8 +696,50 @@ impl Sx1255Autocal {
                 tracing::warn!("SX1255 autocal: failed to restore TX frequency after calibration: {}", err);
             }
         }
+        self.restore_loopback_tx_gains(dev, tx_ch, original_tx_gains);
 
         result
+    }
+
+    fn apply_loopback_tx_gains(&self, dev: &Device, tx_ch: usize) -> Vec<(String, f64)> {
+        if self.cfg.rf_loopback_tx_gains.is_empty() {
+            return Vec::new();
+        }
+
+        let mut original = Vec::new();
+        for (name, gain) in &self.cfg.rf_loopback_tx_gains {
+            match dev.gain_element(Direction::Tx, tx_ch, name.as_str()) {
+                Ok(current) => match dev.set_gain_element(Direction::Tx, tx_ch, name.as_str(), *gain) {
+                    Ok(()) => {
+                        original.push((name.clone(), current));
+                        tracing::info!("SX1255 autocal: temporary loopback TX gain {}={:.1}", name, gain);
+                    }
+                    Err(err) => tracing::warn!(
+                        "SX1255 autocal: failed to set temporary loopback TX gain {}={:.1}: {}",
+                        name,
+                        gain,
+                        err
+                    ),
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        "SX1255 autocal: could not read original TX gain {}; leaving it unchanged for loopback calibration: {}",
+                        name,
+                        err
+                    );
+                }
+            }
+        }
+        original
+    }
+
+    fn restore_loopback_tx_gains(&self, dev: &Device, tx_ch: usize, original: Vec<(String, f64)>) {
+        for (name, gain) in original {
+            match dev.set_gain_element(Direction::Tx, tx_ch, name.as_str(), gain) {
+                Ok(()) => tracing::info!("SX1255 autocal: restored live TX gain {}={:.1}", name, gain),
+                Err(err) => tracing::warn!("SX1255 autocal: failed to restore live TX gain {}={:.1}: {}", name, gain, err),
+            }
+        }
     }
 
     fn read_temperature(&mut self, dev: &Device, rx_ch: usize, tx_ch: usize) -> Option<f64> {
@@ -854,20 +1056,24 @@ fn compute_loopback_compensation(
     let image_dbc = pos_measurement.image_dbc.max(neg_measurement.image_dbc);
     let max_component_abs = pos_measurement.max_component_abs.max(neg_measurement.max_component_abs);
     let clipped_fraction = pos_measurement.clipped_fraction.max(neg_measurement.clipped_fraction);
+    let dc_abs = complex_abs(floor_dc);
+    let apply_dc = cfg.rf_loopback_apply_dc && dc_abs <= cfg.rf_loopback_max_dc as RealSample;
 
     tracing::info!(
-        "SX1255 autocal: loopback measured +tone={:.6}/{}({}/{}) -tone={:.6}/{}({}/{}) floor={:.6} snr={:.1} dB image={:.1} dBc dc=({:+.6},{:+.6}) floor_drift={:+.1} dB clip={:.4}/{:.3}",
-        pos_measurement.main_mag,
-        pos_measurement.orientation.label(),
-        pos_measurement.good_blocks,
-        pos_measurement.total_blocks,
-        neg_measurement.main_mag,
-        neg_measurement.orientation.label(),
-        neg_measurement.good_blocks,
-        neg_measurement.total_blocks,
-        floor_mag,
-        snr_db,
-        image_dbc,
+            "SX1255 autocal: loopback measured +tone={:.6}/{}({}/{}) ferr={:+.1}Hz -tone={:.6}/{}({}/{}) ferr={:+.1}Hz floor={:.6} snr={:.1} dB image={:.1} dBc dc=({:+.6},{:+.6}) floor_drift={:+.1} dB clip={:.4}/{:.3}",
+            pos_measurement.main_mag,
+            pos_measurement.orientation.label(),
+            pos_measurement.good_blocks,
+            pos_measurement.total_blocks,
+            pos_measurement.freq_error_hz,
+            neg_measurement.main_mag,
+            neg_measurement.orientation.label(),
+            neg_measurement.good_blocks,
+            neg_measurement.total_blocks,
+            neg_measurement.freq_error_hz,
+            floor_mag,
+            snr_db,
+            image_dbc,
         floor_dc.re,
         floor_dc.im,
         floor_drift_db,
@@ -887,21 +1093,28 @@ fn compute_loopback_compensation(
         floor_after_mag
     );
 
-    if tone_mag <= 1.0e-9 || !tone_mag.is_finite() || !snr_db.is_finite() || snr_db < cfg.rf_loopback_min_snr_db as RealSample {
-        return Err(format!(
-            "calibration tone SNR {:.1} dB below threshold {:.1} dB",
-            snr_db, cfg.rf_loopback_min_snr_db
-        ));
-    }
-
-    let dc_abs = complex_abs(floor_dc);
-    let apply_dc = cfg.rf_loopback_apply_dc && dc_abs <= cfg.rf_loopback_max_dc as RealSample;
     if cfg.rf_loopback_apply_dc && !apply_dc {
         tracing::warn!(
             "SX1255 autocal: measured DC magnitude {:.6} exceeds limit {:.6}; DC correction disabled",
             dc_abs,
             cfg.rf_loopback_max_dc
         );
+    }
+
+    let tone_snr_ok = tone_mag > 1.0e-9 && tone_mag.is_finite() && snr_db.is_finite() && snr_db >= cfg.rf_loopback_min_snr_db as RealSample;
+    if !tone_snr_ok {
+        tracing::warn!(
+            "SX1255 autocal: IQ correction disabled because calibration tone SNR {:.1} dB is below threshold {:.1} dB; DC correction eligible={}",
+            snr_db,
+            cfg.rf_loopback_min_snr_db,
+            apply_dc
+        );
+        return Ok(RxStartupCompensation {
+            dc: if apply_dc { floor_dc } else { ComplexSample { re: 0.0, im: 0.0 } },
+            image_coeff: ComplexSample { re: 0.0, im: 0.0 },
+            apply_dc,
+            apply_iq: false,
+        });
     }
 
     let mut image_coeff = ComplexSample { re: 0.0, im: 0.0 };
@@ -1114,6 +1327,7 @@ fn measure_loopback_tone(
     } else {
         (negative_bin, positive_bin, negative_mag, positive_mag)
     };
+    let freq_error_hz = estimate_tone_frequency_error(samples, dc, tone_hz, sample_rate, block_len, main_is_positive_bin);
     let snr_db = ratio_db(main_mag, floor_mag);
     let image_dbc = ratio_db(image_mag, main_mag);
     let image_coeff = if main_mag > 1.0e-9 && main_mag.is_finite() {
@@ -1128,6 +1342,7 @@ fn measure_loopback_tone(
         positive_bin,
         negative_bin,
         main_mag,
+        freq_error_hz,
         snr_db,
         image_dbc,
         image_coeff,
@@ -1224,6 +1439,52 @@ fn tone_bins_centered_robust(
     }
 }
 
+fn estimate_tone_frequency_error(
+    samples: &[ComplexSample],
+    dc: ComplexSample,
+    tone_hz: f64,
+    sample_rate: RealSample,
+    block_len: usize,
+    main_is_positive_bin: bool,
+) -> RealSample {
+    if block_len == 0 || samples.len() < block_len || sample_rate <= 0.0 {
+        return 0.0;
+    }
+
+    let mut prev_phase = None;
+    let mut sum_hz = 0.0;
+    let mut count = 0usize;
+    let block_duration_s = block_len as RealSample / sample_rate;
+    if block_duration_s <= 0.0 {
+        return 0.0;
+    }
+
+    for (block_idx, block) in samples.chunks(block_len).enumerate() {
+        if block.len() != block_len {
+            continue;
+        }
+        let bins = tone_bins_centered_skip_clipped(block, dc, tone_hz, sample_rate, block_idx * block_len);
+        let bin = if main_is_positive_bin { bins.0 } else { bins.1 };
+        if bins.2 == 0 || complex_abs(bin) <= 1.0e-9 {
+            continue;
+        }
+        let phase = complex_phase(bin);
+        if let Some(prev_phase) = prev_phase {
+            let phase_delta = wrap_phase(phase - prev_phase);
+            let signed_phase_delta = if main_is_positive_bin { phase_delta } else { -phase_delta };
+            sum_hz += signed_phase_delta / (std::f32::consts::TAU * block_duration_s);
+            count += 1;
+        }
+        prev_phase = Some(phase);
+    }
+
+    if count == 0 {
+        0.0
+    } else {
+        sum_hz / count as RealSample
+    }
+}
+
 fn tone_bins_centered_skip_clipped(
     samples: &[ComplexSample],
     dc: ComplexSample,
@@ -1263,6 +1524,21 @@ fn tone_bins_centered_skip_clipped(
     } else {
         (positive_sum / count as RealSample, negative_sum / count as RealSample, count)
     }
+}
+
+fn complex_phase(value: ComplexSample) -> RealSample {
+    value.im.atan2(value.re)
+}
+
+fn wrap_phase(phase: RealSample) -> RealSample {
+    let mut wrapped = phase;
+    while wrapped > std::f32::consts::PI {
+        wrapped -= std::f32::consts::TAU;
+    }
+    while wrapped < -std::f32::consts::PI {
+        wrapped += std::f32::consts::TAU;
+    }
+    wrapped
 }
 
 fn corrected_tone_metrics(measurement: &ToneMeasurement, image_coeff: ComplexSample) -> (RealSample, RealSample, RealSample) {
@@ -1309,7 +1585,11 @@ fn parse_temperature_c(raw: &str) -> Option<f64> {
             break;
         }
     }
-    if token.is_empty() { None } else { token.parse::<f64>().ok() }
+    if token.is_empty() {
+        None
+    } else {
+        token.parse::<f64>().ok()
+    }
 }
 
 fn clamp_frequency_correction(freq_hz: f64, ppm: f64, max_abs_hz: f64) -> f64 {
@@ -1402,6 +1682,23 @@ mod tests {
 
         assert!(compensation.apply_dc);
         assert!(!compensation.apply_iq);
+    }
+
+    #[test]
+    fn loopback_low_snr_disables_iq_but_keeps_dc() {
+        let cfg = iq_test_cfg();
+        let dc = ComplexSample { re: 0.02, im: -0.03 };
+        let coeff = ComplexSample { re: 0.08, im: -0.04 };
+        let floor = synthetic_floor(dc, 0.20);
+        let pos = synthetic_tone_capture(true, false, dc, coeff);
+        let neg = synthetic_tone_capture(false, false, dc, coeff);
+
+        let compensation = compute_loopback_compensation(&pos, &neg, &floor, &floor, TEST_TONE_HZ, TEST_SAMPLE_RATE, TEST_BLOCK_LEN, &cfg)
+            .expect("low tone SNR should still produce DC-only calibration");
+
+        assert!(compensation.apply_dc);
+        assert!(!compensation.apply_iq);
+        assert_complex_close(compensation.dc, dc, 1.0e-5);
     }
 
     const TEST_SAMPLE_RATE: RealSample = 600_000.0;

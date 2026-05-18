@@ -28,6 +28,18 @@ pub struct CfgSx1255Autocal {
     pub temperature_sensor: Option<String>,
     /// Candidate sensor names probed when `temperature_sensor` is unset.
     pub temperature_sensor_keys: Vec<String>,
+    /// Delay normal stream startup until the SX1255 temperature stabilizes.
+    pub startup_temperature_stabilize: bool,
+    /// Temperature sampling interval during startup stabilization.
+    pub startup_temperature_interval_secs: u64,
+    /// Minimum startup stabilization wait before accepting a stable temperature.
+    pub startup_temperature_min_wait_secs: u64,
+    /// Maximum startup stabilization wait.
+    pub startup_temperature_max_wait_secs: u64,
+    /// Temperature delta considered stable during startup stabilization.
+    pub startup_temperature_stable_delta_c: f64,
+    /// Number of consecutive stable temperature intervals required at startup.
+    pub startup_temperature_stable_checks: usize,
     /// Minimum temperature delta that is considered meaningful.
     pub min_temperature_delta_c: f64,
     /// Optional reference temperature for frequency compensation.
@@ -58,6 +70,12 @@ pub struct CfgSx1255Autocal {
     pub rf_loopback_settle_blocks: usize,
     /// Number of RX/TX blocks captured for tone and floor measurements.
     pub rf_loopback_capture_blocks: usize,
+    /// Number of startup RF loopback calibration attempts.
+    pub rf_loopback_calibration_attempts: usize,
+    /// Delay between RF loopback calibration attempts.
+    pub rf_loopback_retry_delay_secs: u64,
+    /// Optional temporary TX gains used only during RF loopback calibration.
+    pub rf_loopback_tx_gains: HashMap<String, f64>,
     /// Minimum calibration tone SNR before applying IQ correction.
     pub rf_loopback_min_snr_db: f64,
     /// Maximum allowed image-correction coefficient magnitude.
@@ -86,11 +104,17 @@ impl Default for CfgSx1255Autocal {
                 "sx1255_temperature".to_string(),
                 "sx1255_temp".to_string(),
             ],
+            startup_temperature_stabilize: false,
+            startup_temperature_interval_secs: 10,
+            startup_temperature_min_wait_secs: 60,
+            startup_temperature_max_wait_secs: 300,
+            startup_temperature_stable_delta_c: 0.5,
+            startup_temperature_stable_checks: 3,
             min_temperature_delta_c: 2.0,
             reference_temperature_c: None,
             temp_ppm_per_c: 0.0,
             min_frequency_step_hz: 25.0,
-            max_frequency_correction_hz: 5000.0,
+            max_frequency_correction_hz: 300.0,
             allow_periodic_retune: false,
             enable_dc_offset_mode: true,
             rf_loopback_startup_check: true,
@@ -100,6 +124,9 @@ impl Default for CfgSx1255Autocal {
             rf_loopback_tone_amplitude: 0.35,
             rf_loopback_settle_blocks: 24,
             rf_loopback_capture_blocks: 32,
+            rf_loopback_calibration_attempts: 1,
+            rf_loopback_retry_delay_secs: 10,
+            rf_loopback_tx_gains: HashMap::new(),
             rf_loopback_min_snr_db: 20.0,
             rf_loopback_max_image_coeff: 0.95,
             rf_loopback_max_dc: 0.5,
@@ -119,6 +146,12 @@ pub struct CfgSx1255AutocalDto {
     pub allow_periodic_temperature_read: Option<bool>,
     pub temperature_sensor: Option<String>,
     pub temperature_sensor_keys: Option<Vec<String>>,
+    pub startup_temperature_stabilize: Option<bool>,
+    pub startup_temperature_interval_secs: Option<u64>,
+    pub startup_temperature_min_wait_secs: Option<u64>,
+    pub startup_temperature_max_wait_secs: Option<u64>,
+    pub startup_temperature_stable_delta_c: Option<f64>,
+    pub startup_temperature_stable_checks: Option<usize>,
     pub min_temperature_delta_c: Option<f64>,
     pub reference_temperature_c: Option<f64>,
     pub temp_ppm_per_c: Option<f64>,
@@ -133,6 +166,9 @@ pub struct CfgSx1255AutocalDto {
     pub rf_loopback_tone_amplitude: Option<f64>,
     pub rf_loopback_settle_blocks: Option<usize>,
     pub rf_loopback_capture_blocks: Option<usize>,
+    pub rf_loopback_calibration_attempts: Option<usize>,
+    pub rf_loopback_retry_delay_secs: Option<u64>,
+    pub rf_loopback_tx_gains: Option<HashMap<String, f64>>,
     pub rf_loopback_min_snr_db: Option<f64>,
     pub rf_loopback_max_image_coeff: Option<f64>,
     pub rf_loopback_max_dc: Option<f64>,
@@ -169,6 +205,24 @@ pub fn apply_sx1255_autocal_patch(src: Option<CfgSx1255AutocalDto>) -> CfgSx1255
         }
         if let Some(v) = src.temperature_sensor_keys {
             cfg.temperature_sensor_keys = v;
+        }
+        if let Some(v) = src.startup_temperature_stabilize {
+            cfg.startup_temperature_stabilize = v;
+        }
+        if let Some(v) = src.startup_temperature_interval_secs {
+            cfg.startup_temperature_interval_secs = v.max(1);
+        }
+        if let Some(v) = src.startup_temperature_min_wait_secs {
+            cfg.startup_temperature_min_wait_secs = v;
+        }
+        if let Some(v) = src.startup_temperature_max_wait_secs {
+            cfg.startup_temperature_max_wait_secs = v;
+        }
+        if let Some(v) = src.startup_temperature_stable_delta_c {
+            cfg.startup_temperature_stable_delta_c = v.max(0.0);
+        }
+        if let Some(v) = src.startup_temperature_stable_checks {
+            cfg.startup_temperature_stable_checks = v.max(1);
         }
         if let Some(v) = src.min_temperature_delta_c {
             cfg.min_temperature_delta_c = v.max(0.0);
@@ -211,6 +265,15 @@ pub fn apply_sx1255_autocal_patch(src: Option<CfgSx1255AutocalDto>) -> CfgSx1255
         }
         if let Some(v) = src.rf_loopback_capture_blocks {
             cfg.rf_loopback_capture_blocks = v.max(1);
+        }
+        if let Some(v) = src.rf_loopback_calibration_attempts {
+            cfg.rf_loopback_calibration_attempts = v.max(1);
+        }
+        if let Some(v) = src.rf_loopback_retry_delay_secs {
+            cfg.rf_loopback_retry_delay_secs = v;
+        }
+        if let Some(v) = src.rf_loopback_tx_gains {
+            cfg.rf_loopback_tx_gains = v.into_iter().map(|(name, value)| (name.to_ascii_uppercase(), value)).collect();
         }
         if let Some(v) = src.rf_loopback_min_snr_db {
             cfg.rf_loopback_min_snr_db = v.max(0.0);

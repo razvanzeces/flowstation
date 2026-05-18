@@ -409,6 +409,12 @@ enabled = true
 interval_secs = 1800
 allow_periodic_temperature_read = true
 temperature_sensor = "temperature"
+startup_temperature_stabilize = true
+startup_temperature_interval_secs = 5
+startup_temperature_min_wait_secs = 20
+startup_temperature_max_wait_secs = 120
+startup_temperature_stable_delta_c = 0.4
+startup_temperature_stable_checks = 2
 min_temperature_delta_c = 3.5
 reference_temperature_c = 25.0
 temp_ppm_per_c = 0.12
@@ -420,6 +426,9 @@ rf_loopback_tone_hz = 25000.0
 rf_loopback_tone_amplitude = 0.75
 rf_loopback_settle_blocks = 12
 rf_loopback_capture_blocks = 16
+rf_loopback_calibration_attempts = 3
+rf_loopback_retry_delay_secs = 7
+rf_loopback_tx_gains = { DAC = 9.0, MIXER = 30.0 }
 rf_loopback_min_snr_db = 24.0
 rf_loopback_max_image_coeff = 0.25
 rf_loopback_max_dc = 0.2
@@ -444,6 +453,12 @@ location_area = 1
         assert_eq!(autocal.interval_secs, 1800);
         assert!(autocal.allow_periodic_temperature_read);
         assert_eq!(autocal.temperature_sensor.as_deref(), Some("temperature"));
+        assert!(autocal.startup_temperature_stabilize);
+        assert_eq!(autocal.startup_temperature_interval_secs, 5);
+        assert_eq!(autocal.startup_temperature_min_wait_secs, 20);
+        assert_eq!(autocal.startup_temperature_max_wait_secs, 120);
+        assert_eq!(autocal.startup_temperature_stable_delta_c, 0.4);
+        assert_eq!(autocal.startup_temperature_stable_checks, 2);
         assert_eq!(autocal.min_temperature_delta_c, 3.5);
         assert_eq!(autocal.reference_temperature_c, Some(25.0));
         assert_eq!(autocal.temp_ppm_per_c, 0.12);
@@ -455,6 +470,10 @@ location_area = 1
         assert_eq!(autocal.rf_loopback_tone_amplitude, 0.75);
         assert_eq!(autocal.rf_loopback_settle_blocks, 12);
         assert_eq!(autocal.rf_loopback_capture_blocks, 16);
+        assert_eq!(autocal.rf_loopback_calibration_attempts, 3);
+        assert_eq!(autocal.rf_loopback_retry_delay_secs, 7);
+        assert_eq!(autocal.rf_loopback_tx_gains.get("DAC"), Some(&9.0));
+        assert_eq!(autocal.rf_loopback_tx_gains.get("MIXER"), Some(&30.0));
         assert_eq!(autocal.rf_loopback_min_snr_db, 24.0);
         assert_eq!(autocal.rf_loopback_max_image_coeff, 0.25);
         assert_eq!(autocal.rf_loopback_max_dc, 0.2);

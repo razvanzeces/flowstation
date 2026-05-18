@@ -57,8 +57,10 @@ rx_freq = 433025000
 # SX1255 temperature measurement shares the RX ADC path on current hardware.
 #
 # Temperature-based retune is disabled until you provide a board-specific
-# temp_ppm_per_c coefficient. Leave allow_periodic_retune=false unless you have
-# validated that small active-stream retunes are acceptable on your station.
+# temp_ppm_per_c coefficient. On SXceiver boards with a 38.4 MHz 0.5 ppm TCXO,
+# keep max_frequency_correction_hz small unless external RF measurement proves
+# otherwise. Leave allow_periodic_retune=false unless you have validated that
+# small active-stream retunes are acceptable on your station.
 #
 # [phy_io.soapysdr.sx1255_autocal]
 # enabled = true
@@ -76,6 +78,16 @@ rx_freq = 433025000
 # temperature_sensor = "temperature"
 # temperature_sensor_keys = ["temperature", "temp", "sx1255_temperature", "sx1255_temp"]
 #
+# Optional startup-only warm-up. This uses only the SX1255 SoapySDR temperature
+# sensor before normal RX/TX streams are activated. It intentionally delays BS
+# startup until the board temperature is near stable, or until max wait expires.
+# startup_temperature_stabilize = false
+# startup_temperature_interval_secs = 10
+# startup_temperature_min_wait_secs = 60
+# startup_temperature_max_wait_secs = 300
+# startup_temperature_stable_delta_c = 0.5
+# startup_temperature_stable_checks = 3
+#
 # First successful reading becomes baseline unless reference_temperature_c is set.
 # min_temperature_delta_c = 2.0
 # reference_temperature_c = 25.0
@@ -83,7 +95,7 @@ rx_freq = 433025000
 # Frequency compensation. 0.0 disables retuning.
 # temp_ppm_per_c = 0.0
 # min_frequency_step_hz = 25.0
-# max_frequency_correction_hz = 5000.0
+# max_frequency_correction_hz = 300.0
 # allow_periodic_retune = false
 #
 # Generic SoapySDR correction hooks. Used only if the driver reports support.
@@ -100,6 +112,11 @@ rx_freq = 433025000
 # rf_loopback_tone_amplitude = 0.35
 # rf_loopback_settle_blocks = 24
 # rf_loopback_capture_blocks = 32
+# rf_loopback_calibration_attempts = 1
+# rf_loopback_retry_delay_secs = 10
+# Optional temporary TX gains used only during loopback calibration. This lets
+# live TX stay low for desense testing while the internal LB tone remains strong.
+# rf_loopback_tx_gains = { DAC = 9.0, MIXER = 30.0 }
 # rf_loopback_min_snr_db = 20.0
 # rf_loopback_max_image_coeff = 0.95
 # rf_loopback_max_dc = 0.5
