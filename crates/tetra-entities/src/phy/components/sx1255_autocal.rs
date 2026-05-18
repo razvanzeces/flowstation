@@ -194,6 +194,7 @@ impl Sx1255Autocal {
         }
 
         self.apply_rf_filter_profile(dev);
+        self.apply_temperature_reference(dev);
 
         if self.cfg.enable_dc_offset_mode {
             self.enable_dc_offset_mode(dev, Direction::Rx, rx_ch);
@@ -493,6 +494,21 @@ impl Sx1255Autocal {
                 self.cfg.rf_filter_profile,
                 err
             ),
+        }
+    }
+
+    fn apply_temperature_reference(&self, dev: &Device) {
+        if let Some(reference_c) = self.cfg.temperature_reference_c {
+            match dev.write_setting("TEMP_REF_C", &format!("{reference_c:.6}")) {
+                Ok(()) => tracing::info!("SX1255 autocal: applied temperature reference TEMP_REF_C={reference_c:.3} C"),
+                Err(err) => tracing::warn!("SX1255 autocal: failed to apply TEMP_REF_C={reference_c:.3}: {err}"),
+            }
+        }
+        if let Some(reference_raw) = self.cfg.temperature_reference_raw {
+            match dev.write_setting("TEMP_REF_RAW", &format!("{reference_raw:.6}")) {
+                Ok(()) => tracing::info!("SX1255 autocal: applied temperature reference TEMP_REF_RAW={reference_raw:.3} LSB"),
+                Err(err) => tracing::warn!("SX1255 autocal: failed to apply TEMP_REF_RAW={reference_raw:.3}: {err}"),
+            }
         }
     }
 

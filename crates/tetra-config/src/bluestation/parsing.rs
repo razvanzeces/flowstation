@@ -417,6 +417,8 @@ startup_temperature_stable_delta_c = 0.4
 startup_temperature_stable_checks = 2
 min_temperature_delta_c = 3.5
 reference_temperature_c = 25.0
+temperature_reference_c = 52.0
+temperature_reference_raw = 203.6
 temp_ppm_per_c = 0.12
 allow_periodic_retune = true
 rf_loopback_startup_check = false
@@ -461,6 +463,8 @@ location_area = 1
         assert_eq!(autocal.startup_temperature_stable_checks, 2);
         assert_eq!(autocal.min_temperature_delta_c, 3.5);
         assert_eq!(autocal.reference_temperature_c, Some(25.0));
+        assert_eq!(autocal.temperature_reference_c, Some(52.0));
+        assert_eq!(autocal.temperature_reference_raw, Some(203.6));
         assert_eq!(autocal.temp_ppm_per_c, 0.12);
         assert!(autocal.allow_periodic_retune);
         assert!(!autocal.rf_loopback_startup_check);

@@ -45,6 +45,10 @@ pub struct CfgSx1255Autocal {
     /// Optional reference temperature for frequency compensation.
     /// If unset, the first successful reading becomes the baseline.
     pub reference_temperature_c: Option<f64>,
+    /// Optional calibrated Celsius reference written to SoapySX TEMP_REF_C.
+    pub temperature_reference_c: Option<f64>,
+    /// Optional calibrated raw SX1255 ADC code written to SoapySX TEMP_REF_RAW.
+    pub temperature_reference_raw: Option<f64>,
     /// Frequency drift coefficient in ppm/degC. 0.0 disables retuning.
     pub temp_ppm_per_c: f64,
     /// Minimum absolute retune step per RF chain.
@@ -116,6 +120,8 @@ impl Default for CfgSx1255Autocal {
             startup_temperature_stable_checks: 3,
             min_temperature_delta_c: 2.0,
             reference_temperature_c: None,
+            temperature_reference_c: None,
+            temperature_reference_raw: None,
             temp_ppm_per_c: 0.0,
             min_frequency_step_hz: 25.0,
             max_frequency_correction_hz: 300.0,
@@ -160,6 +166,8 @@ pub struct CfgSx1255AutocalDto {
     pub startup_temperature_stable_checks: Option<usize>,
     pub min_temperature_delta_c: Option<f64>,
     pub reference_temperature_c: Option<f64>,
+    pub temperature_reference_c: Option<f64>,
+    pub temperature_reference_raw: Option<f64>,
     pub temp_ppm_per_c: Option<f64>,
     pub min_frequency_step_hz: Option<f64>,
     pub max_frequency_correction_hz: Option<f64>,
@@ -237,6 +245,12 @@ pub fn apply_sx1255_autocal_patch(src: Option<CfgSx1255AutocalDto>) -> CfgSx1255
         }
         if let Some(v) = src.reference_temperature_c {
             cfg.reference_temperature_c = Some(v);
+        }
+        if let Some(v) = src.temperature_reference_c {
+            cfg.temperature_reference_c = Some(v);
+        }
+        if let Some(v) = src.temperature_reference_raw {
+            cfg.temperature_reference_raw = Some(v);
         }
         if let Some(v) = src.temp_ppm_per_c {
             cfg.temp_ppm_per_c = v;
