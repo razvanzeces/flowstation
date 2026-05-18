@@ -104,13 +104,12 @@ impl CcBsSubentity {
             // will not enable PTT after a D-TX-CEASED — they require an explicit D-TX-GRANTED.
             // Use UL-only so the new speaker transmits but does not loop back its own audio.
             self.tpi_update_talker(call_id, peer_addr.ssi);
-            let tpi_facility = self.tpi_inform_for_call(call_id);
             tracing::info!(
                 "-> D-TX GRANTED Granted (individual simplex, FACCH) call_id={} to peer ISSI {}",
                 call_id,
                 peer_addr.ssi
             );
-            let mut granted_pdu = DTxGranted {
+            let granted_pdu = DTxGranted {
                 call_identifier: call_id,
                 transmission_grant: TransmissionGrant::Granted.into_raw() as u8,
                 transmission_request_permission: false,
@@ -121,11 +120,10 @@ impl CcBsSubentity {
                 transmitting_party_address_ssi: Some(peer_addr.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
-                facility: tpi_facility.clone(),
+                facility: None,
                 dm_ms_address: None,
                 proprietary: None,
             };
-            Self::omit_d_tx_granted_facility_if_stch_would_overflow(&mut granted_pdu, call_id, peer_addr.ssi);
             let mut granted_sdu = BitBuffer::new_autoexpand(50);
             granted_pdu.to_bitbuf(&mut granted_sdu).expect("Failed to serialize DTxGranted");
             granted_sdu.seek(0);
@@ -141,7 +139,7 @@ impl CcBsSubentity {
                 call_id,
                 sender.ssi
             );
-            let mut gtou_pdu = DTxGranted {
+            let gtou_pdu = DTxGranted {
                 call_identifier: call_id,
                 transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
                 transmission_request_permission: false,
@@ -152,11 +150,10 @@ impl CcBsSubentity {
                 transmitting_party_address_ssi: Some(peer_addr.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
-                facility: tpi_facility,
+                facility: None,
                 dm_ms_address: None,
                 proprietary: None,
             };
-            Self::omit_d_tx_granted_facility_if_stch_would_overflow(&mut gtou_pdu, call_id, sender.ssi);
             let mut gtou_sdu = BitBuffer::new_autoexpand(50);
             gtou_pdu
                 .to_bitbuf(&mut gtou_sdu)
@@ -264,11 +261,10 @@ impl CcBsSubentity {
                 peer_addr.ssi
             );
             self.tpi_update_talker(call_id, requesting_party.ssi);
-            let tpi_facility = self.tpi_inform_for_call(call_id);
 
             // D-TX-GRANTED to requester (Granted) — they may now transmit.
             // For simplex: give them UL-only so they transmit but don't receive their own TX.
-            let mut dtg_req = DTxGranted {
+            let dtg_req = DTxGranted {
                 call_identifier: call_id,
                 transmission_grant: TransmissionGrant::Granted.into_raw() as u8,
                 transmission_request_permission: false,
@@ -279,11 +275,10 @@ impl CcBsSubentity {
                 transmitting_party_address_ssi: Some(requesting_party.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
-                facility: tpi_facility.clone(),
+                facility: None,
                 dm_ms_address: None,
                 proprietary: None,
             };
-            Self::omit_d_tx_granted_facility_if_stch_would_overflow(&mut dtg_req, call_id, requesting_party.ssi);
             tracing::info!(
                 "-> D-TX GRANTED Granted (individual simplex) call_id={} to ISSI {}",
                 call_id,
@@ -310,7 +305,7 @@ impl CcBsSubentity {
             // ETSI 14.8.43: permission=false means "allowed to request transmission".
             // Peer should still be allowed to U-TX-DEMAND once the current speaker releases
             // the floor; sending true (= not allowed) would lock peer out of PTT permanently.
-            let mut dtg_peer = DTxGranted {
+            let dtg_peer = DTxGranted {
                 call_identifier: call_id,
                 transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
                 transmission_request_permission: false,
@@ -321,11 +316,10 @@ impl CcBsSubentity {
                 transmitting_party_address_ssi: Some(requesting_party.ssi as u64),
                 transmitting_party_extension: None,
                 external_subscriber_number: None,
-                facility: tpi_facility,
+                facility: None,
                 dm_ms_address: None,
                 proprietary: None,
             };
-            Self::omit_d_tx_granted_facility_if_stch_would_overflow(&mut dtg_peer, call_id, peer_addr.ssi);
             tracing::info!(
                 "-> D-TX GRANTED GrantedToOtherUser (individual simplex) call_id={} to ISSI {}",
                 call_id,

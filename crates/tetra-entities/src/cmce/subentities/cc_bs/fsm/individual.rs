@@ -479,7 +479,6 @@ impl CcBsSubentity {
         } else {
             TransmissionGrant::GrantedToOtherUser
         };
-        let tpi_facility = self.tpi_inform_for_call(call_id);
         let d_connect = DConnect {
             call_identifier: call_id,
             call_time_out: if simplex_duplex { CallTimeout::Infinite } else { self.config_call_timeout() },
@@ -492,7 +491,7 @@ impl CcBsSubentity {
             basic_service_information: None,
             temporary_address: None,
             notification_indicator: None,
-            facility: tpi_facility.clone(),
+            facility: None,
             proprietary: None,
         };
 
@@ -560,7 +559,7 @@ impl CcBsSubentity {
             transmission_grant: TransmissionGrant::Granted.into_raw() as u8,
             transmission_request_permission: false,
             notification_indicator: None,
-            facility: tpi_facility,
+            facility: None,
             proprietary: None,
         };
 

@@ -305,7 +305,7 @@ impl CcBsSubentity {
             basic_service_information: None,
             temporary_address: None,
             notification_indicator: None,
-            facility: self.tpi_inform_for_call(call_id),
+            facility: None,
             proprietary: None,
         };
 
@@ -459,7 +459,7 @@ impl CcBsSubentity {
             transmission_grant: grant_enum.into_raw() as u8,
             transmission_request_permission: permission != 0,
             notification_indicator: None,
-            facility: self.tpi_inform_for_call(call_id),
+            facility: None,
             proprietary: None,
         };
 
@@ -759,7 +759,7 @@ impl CcBsSubentity {
             basic_service_information: None,
             temporary_address: None,
             notification_indicator: None,
-            facility: tpi_facility,
+            facility: None,
             proprietary: None,
         };
 

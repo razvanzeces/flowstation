@@ -1,15 +1,5 @@
 use super::*;
 
-const STCH_BITS: usize = 124;
-const STEALING_MAC_RESOURCE_HEADER_BITS: usize = 43;
-const LCMC_TO_TMA_UNACK_OVERHEAD_BITS: usize = 7;
-
-fn stch_required_bits_without_overflow(payload_bits: usize, mac_header_bits: usize) -> usize {
-    let raw_bits = payload_bits + mac_header_bits;
-    let fill_bits = (8 - (raw_bits % 8)) % 8;
-    raw_bits + fill_bits
-}
-
 impl CcBsSubentity {
     pub fn new(config: SharedConfig) -> Self {
         let identity_resolver = Self::tpi_resolver_for_config(&config);
@@ -786,8 +776,8 @@ impl CcBsSubentity {
 
     /// Send D-TX GRANTED via FACCH stealing on the group traffic channel.
     pub(super) fn send_d_tx_granted_facch(&mut self, queue: &mut MessageQueue, call_id: u16, source_issi: u32, dest_gssi: u32, ts: u8) {
-        let facility = self.tpi_for_speaker(call_id, source_issi);
-        let mut pdu = DTxGranted {
+        self.tpi_update_talker(call_id, source_issi);
+        let pdu = DTxGranted {
             call_identifier: call_id,
             transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
             transmission_request_permission: false,
@@ -798,11 +788,10 @@ impl CcBsSubentity {
             transmitting_party_address_ssi: Some(source_issi as u64),
             transmitting_party_extension: None,
             external_subscriber_number: None,
-            facility,
+            facility: None,
             dm_ms_address: None,
             proprietary: None,
         };
-        Self::omit_d_tx_granted_facility_if_stch_would_overflow(&mut pdu, call_id, source_issi);
 
         tracing::debug!("-> D-TX GRANTED (FACCH) {:?}", pdu);
         let mut sdu = BitBuffer::new_autoexpand(30);
@@ -812,27 +801,6 @@ impl CcBsSubentity {
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
         let msg = Self::build_sapmsg_stealing(sdu, dest_addr, ts, None);
         queue.push_back(msg);
-    }
-
-    pub(super) fn omit_d_tx_granted_facility_if_stch_would_overflow(pdu: &mut DTxGranted, call_id: u16, party_ssi: u32) {
-        if pdu.facility.is_some() && !Self::facch_dtg_fits_stch(pdu) {
-            tracing::warn!(
-                "CMCE: omitting SS-TPI from D-TX GRANTED FACCH call_id={} party={} because encoded PDU exceeds STCH capacity",
-                call_id,
-                party_ssi
-            );
-            pdu.facility = None;
-        }
-    }
-
-    fn facch_dtg_fits_stch(pdu: &DTxGranted) -> bool {
-        let mut sdu = BitBuffer::new_autoexpand(128);
-        if pdu.to_bitbuf(&mut sdu).is_err() {
-            return false;
-        }
-
-        let payload_bits = sdu.get_len() + LCMC_TO_TMA_UNACK_OVERHEAD_BITS;
-        stch_required_bits_without_overflow(payload_bits, STEALING_MAC_RESOURCE_HEADER_BITS) <= STCH_BITS
     }
 
     /// Send D-TX CEASED via FACCH stealing on the group traffic channel.
@@ -1113,35 +1081,7 @@ impl CcBsSubentity {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use tetra_pdus::cmce::fields::ss_tpi::SsTpiInform;
-
-    fn test_d_tx_granted(facility: Option<SsTpiInform>) -> DTxGranted {
-        DTxGranted {
-            call_identifier: 4,
-            transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
-            transmission_request_permission: false,
-            encryption_control: false,
-            reserved: false,
-            notification_indicator: None,
-            transmitting_party_type_identifier: Some(1),
-            transmitting_party_address_ssi: Some(2_260_616),
-            transmitting_party_extension: None,
-            external_subscriber_number: None,
-            facility,
-            dm_ms_address: None,
-            proprietary: None,
-        }
-    }
-
-    #[test]
-    fn d_tx_granted_facch_omits_tpi_when_stch_capacity_would_be_exceeded() {
-        let with_tpi = test_d_tx_granted(Some(SsTpiInform::for_ssi(2_260_616, Some("YO3TCO".to_string()))));
-        assert!(!CcBsSubentity::facch_dtg_fits_stch(&with_tpi));
-
-        let without_tpi = test_d_tx_granted(None);
-        assert!(CcBsSubentity::facch_dtg_fits_stch(&without_tpi));
-    }
+    use super::CcBsSubentity;
 
     #[test]
     fn external_subscriber_number_supports_16_digits() {

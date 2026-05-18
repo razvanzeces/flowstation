@@ -102,7 +102,7 @@ impl CcBsSubentity {
             basic_service_information: None,
             temporary_address: None,
             notification_indicator: None,
-            facility: tpi_facility.clone(),
+            facility: None,
             proprietary: None,
         };
 
@@ -745,7 +745,7 @@ impl CcBsSubentity {
                 basic_service_information: None,
                 temporary_address: None,
                 notification_indicator: None,
-                facility: self.tpi_inform_for_call(call_id),
+                facility: None,
                 proprietary: None,
             };
             tracing::info!("CMCE: echo service -> {:?}", d_connect);
