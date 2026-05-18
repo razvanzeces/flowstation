@@ -12,7 +12,7 @@ const IQ_MIN_IMAGE_IMPROVEMENT_DB: RealSample = 6.0;
 const IQ_MIN_MAIN_RETAINED_RATIO: RealSample = 0.35;
 const IQ_FLOOR_DRIFT_DISABLE_DB: RealSample = 12.0;
 const IQ_CLIP_LEVEL: RealSample = 0.98;
-const IQ_MAX_CLIPPED_FRACTION: RealSample = 0.01;
+const IQ_MAX_CLIPPED_FRACTION: RealSample = 0.05;
 const LOOPBACK_TX_PREFILL_BLOCKS: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
@@ -838,12 +838,12 @@ fn compute_loopback_compensation(
         return Err("empty calibration capture".to_string());
     }
 
-    let floor_dc = mean_complex_pair(floor_before_samples, floor_after_samples);
-    let floor_before_mag = floor_bin_magnitude(floor_before_samples, floor_dc, tone_hz, sample_rate);
-    let floor_after_mag = floor_bin_magnitude(floor_after_samples, floor_dc, tone_hz, sample_rate);
+    let floor_dc = mean_complex_pair_robust(floor_before_samples, floor_after_samples);
+    let floor_before_mag = floor_bin_magnitude(floor_before_samples, floor_dc, tone_hz, sample_rate, block_len);
+    let floor_after_mag = floor_bin_magnitude(floor_after_samples, floor_dc, tone_hz, sample_rate, block_len);
     let floor_mag = floor_before_mag.max(floor_after_mag).max(1.0e-9);
-    let floor_before_rms = centered_rms(floor_before_samples, floor_dc).max(1.0e-9);
-    let floor_after_rms = centered_rms(floor_after_samples, floor_dc).max(1.0e-9);
+    let floor_before_rms = centered_rms_robust(floor_before_samples, floor_dc).max(1.0e-9);
+    let floor_after_rms = centered_rms_robust(floor_after_samples, floor_dc).max(1.0e-9);
     let floor_drift_db = ratio_db(floor_after_rms, floor_before_rms);
 
     let pos_measurement = measure_loopback_tone(tone_pos_samples, floor_dc, tone_hz, sample_rate, block_len, true, floor_mag);
@@ -987,28 +987,65 @@ fn compute_loopback_compensation(
     })
 }
 
-fn mean_complex_pair(a: &[ComplexSample], b: &[ComplexSample]) -> ComplexSample {
+fn mean_complex_pair_robust(a: &[ComplexSample], b: &[ComplexSample]) -> ComplexSample {
     let mut sum = ComplexSample { re: 0.0, im: 0.0 };
+    let mut count = 0usize;
     for sample in a {
+        if is_clipped(*sample) {
+            continue;
+        }
         sum += *sample;
+        count += 1;
     }
     for sample in b {
+        if is_clipped(*sample) {
+            continue;
+        }
         sum += *sample;
+        count += 1;
     }
-    sum / (a.len() + b.len()) as RealSample
+    if count == 0 {
+        for sample in a {
+            sum += *sample;
+        }
+        for sample in b {
+            sum += *sample;
+        }
+        sum / (a.len() + b.len()) as RealSample
+    } else {
+        sum / count as RealSample
+    }
 }
 
-fn floor_bin_magnitude(samples: &[ComplexSample], dc: ComplexSample, tone_hz: f64, sample_rate: RealSample) -> RealSample {
-    complex_abs(tone_bin_centered(samples, dc, tone_hz, sample_rate, false)).max(complex_abs(tone_bin_centered(
-        samples,
-        dc,
-        tone_hz,
-        sample_rate,
-        true,
-    )))
+fn floor_bin_magnitude(
+    samples: &[ComplexSample],
+    dc: ComplexSample,
+    tone_hz: f64,
+    sample_rate: RealSample,
+    block_len: usize,
+) -> RealSample {
+    let bins = tone_bins_centered_robust(samples, dc, tone_hz, sample_rate, block_len);
+    complex_abs(bins.positive_bin).max(complex_abs(bins.negative_bin))
 }
 
-fn centered_rms(samples: &[ComplexSample], dc: ComplexSample) -> RealSample {
+fn centered_rms_robust(samples: &[ComplexSample], dc: ComplexSample) -> RealSample {
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for sample in samples {
+        if is_clipped(*sample) {
+            continue;
+        }
+        let centered = *sample - dc;
+        sum += centered.re * centered.re + centered.im * centered.im;
+        count += 1;
+    }
+    if count == 0 {
+        return centered_rms_all(samples, dc);
+    }
+    (sum / count as RealSample).sqrt()
+}
+
+fn centered_rms_all(samples: &[ComplexSample], dc: ComplexSample) -> RealSample {
     let mut sum = 0.0;
     for sample in samples {
         let centered = *sample - dc;
@@ -1026,10 +1063,11 @@ fn max_component_abs(samples: &[ComplexSample]) -> RealSample {
 }
 
 fn count_clipped_samples(samples: &[ComplexSample]) -> usize {
-    samples
-        .iter()
-        .filter(|sample| sample.re.abs() >= IQ_CLIP_LEVEL || sample.im.abs() >= IQ_CLIP_LEVEL)
-        .count()
+    samples.iter().filter(|sample| is_clipped(**sample)).count()
+}
+
+fn is_clipped(sample: ComplexSample) -> bool {
+    sample.re.abs() >= IQ_CLIP_LEVEL || sample.im.abs() >= IQ_CLIP_LEVEL
 }
 
 fn clipped_fraction(samples: &[ComplexSample]) -> RealSample {
@@ -1108,18 +1146,30 @@ fn tone_bins_centered_robust(
     block_len: usize,
 ) -> ToneBins {
     if block_len == 0 || samples.len() < block_len {
+        let (positive_bin, negative_bin, good_samples) = tone_bins_centered_skip_clipped(samples, dc, tone_hz, sample_rate, 0);
+        let clipped_ratio = clipped_fraction(samples);
+        let all_clipped = good_samples == 0;
         return ToneBins {
-            positive_bin: tone_bin_centered(samples, dc, tone_hz, sample_rate, false),
-            negative_bin: tone_bin_centered(samples, dc, tone_hz, sample_rate, true),
+            positive_bin: if all_clipped {
+                tone_bin_centered(samples, dc, tone_hz, sample_rate, false)
+            } else {
+                positive_bin
+            },
+            negative_bin: if all_clipped {
+                tone_bin_centered(samples, dc, tone_hz, sample_rate, true)
+            } else {
+                negative_bin
+            },
             max_component_abs: max_component_abs(samples),
-            clipped_fraction: clipped_fraction(samples),
-            good_blocks: 1,
+            clipped_fraction: clipped_ratio,
+            good_blocks: if all_clipped { 0 } else { 1 },
             total_blocks: 1,
         };
     }
 
     let mut positive_sum = ComplexSample { re: 0.0, im: 0.0 };
     let mut negative_sum = ComplexSample { re: 0.0, im: 0.0 };
+    let mut good_samples = 0usize;
     let mut good_blocks = 0;
     let mut total_blocks = 0;
     let mut max_abs: RealSample = 0.0;
@@ -1134,13 +1184,17 @@ fn tone_bins_centered_robust(
         total_samples += block.len();
         let block_max = max_component_abs(block);
         max_abs = max_abs.max(block_max);
-        clipped_samples += count_clipped_samples(block);
-        if block_max >= IQ_CLIP_LEVEL {
-            continue;
+        let block_clipped_samples = count_clipped_samples(block);
+        clipped_samples += block_clipped_samples;
+        let block_clipped_fraction = block_clipped_samples as RealSample / block.len() as RealSample;
+        if block_clipped_fraction <= IQ_MAX_CLIPPED_FRACTION {
+            good_blocks += 1;
         }
-        positive_sum += tone_bin_centered(block, dc, tone_hz, sample_rate, false);
-        negative_sum += tone_bin_centered(block, dc, tone_hz, sample_rate, true);
-        good_blocks += 1;
+        let (positive_bin, negative_bin, block_good_samples) =
+            tone_bins_centered_skip_clipped(block, dc, tone_hz, sample_rate, total_samples - block.len());
+        positive_sum += positive_bin * block_good_samples as RealSample;
+        negative_sum += negative_bin * block_good_samples as RealSample;
+        good_samples += block_good_samples;
     }
 
     let clipped_ratio = if total_samples == 0 {
@@ -1149,7 +1203,7 @@ fn tone_bins_centered_robust(
         clipped_samples as RealSample / total_samples as RealSample
     };
 
-    if good_blocks == 0 {
+    if good_samples == 0 {
         return ToneBins {
             positive_bin: tone_bin_centered(samples, dc, tone_hz, sample_rate, false),
             negative_bin: tone_bin_centered(samples, dc, tone_hz, sample_rate, true),
@@ -1161,12 +1215,53 @@ fn tone_bins_centered_robust(
     }
 
     ToneBins {
-        positive_bin: positive_sum / good_blocks as RealSample,
-        negative_bin: negative_sum / good_blocks as RealSample,
+        positive_bin: positive_sum / good_samples as RealSample,
+        negative_bin: negative_sum / good_samples as RealSample,
         max_component_abs: max_abs,
         clipped_fraction: clipped_ratio,
         good_blocks,
         total_blocks,
+    }
+}
+
+fn tone_bins_centered_skip_clipped(
+    samples: &[ComplexSample],
+    dc: ComplexSample,
+    tone_hz: f64,
+    sample_rate: RealSample,
+    start_idx: usize,
+) -> (ComplexSample, ComplexSample, usize) {
+    let pos_phase_step = -std::f32::consts::TAU * tone_hz as RealSample / sample_rate;
+    let neg_phase_step = std::f32::consts::TAU * tone_hz as RealSample / sample_rate;
+    let mut positive_sum = ComplexSample { re: 0.0, im: 0.0 };
+    let mut negative_sum = ComplexSample { re: 0.0, im: 0.0 };
+    let mut count = 0usize;
+
+    for (offset, sample) in samples.iter().enumerate() {
+        if is_clipped(*sample) {
+            continue;
+        }
+        let idx = start_idx + offset;
+        let centered = *sample - dc;
+        let pos_phase = pos_phase_step * idx as RealSample;
+        let neg_phase = neg_phase_step * idx as RealSample;
+        positive_sum += centered
+            * ComplexSample {
+                re: pos_phase.cos(),
+                im: pos_phase.sin(),
+            };
+        negative_sum += centered
+            * ComplexSample {
+                re: neg_phase.cos(),
+                im: neg_phase.sin(),
+            };
+        count += 1;
+    }
+
+    if count == 0 {
+        (ComplexSample { re: 0.0, im: 0.0 }, ComplexSample { re: 0.0, im: 0.0 }, 0)
+    } else {
+        (positive_sum / count as RealSample, negative_sum / count as RealSample, count)
     }
 }
 
