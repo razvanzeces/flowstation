@@ -14,8 +14,7 @@ const IQ_REPEAT_ABS_TOLERANCE: RealSample = 0.02;
 const IQ_REPEAT_REL_TOLERANCE: RealSample = 0.25;
 const IQ_MAX_TONE_DELTA_DB: RealSample = 8.0;
 const IQ_MIN_IMAGE_IMPROVEMENT_DB: RealSample = 6.0;
-const IQ_MAX_PRE_CORRECTION_IMAGE_DBC: RealSample = -20.0;
-const IQ_MAX_HARD_COEFF: RealSample = 0.12;
+const IQ_WARN_LARGE_COEFF: RealSample = 0.12;
 const IQ_MIN_MAIN_RETAINED_RATIO: RealSample = 0.35;
 const IQ_FLOOR_DRIFT_DISABLE_DB: RealSample = 12.0;
 const IQ_CLIP_LEVEL: RealSample = 0.98;
@@ -1075,20 +1074,17 @@ fn select_repeated_loopback_compensation(measurements: &[RxStartupCompensation],
         required_iq_inliers,
         IQ_REPEAT_ABS_TOLERANCE,
         IQ_REPEAT_REL_TOLERANCE,
-    )
-    .filter(|coeff| {
-        let coeff_abs = complex_abs(*coeff);
-        if coeff_abs <= IQ_MAX_HARD_COEFF {
-            true
-        } else {
+    );
+    if let Some(coeff) = image_coeff {
+        let coeff_abs = complex_abs(coeff);
+        if coeff_abs > IQ_WARN_LARGE_COEFF {
             tracing::warn!(
-                "SX1255 autocal: repeated IQ correction disabled; accepted cluster magnitude {:.6} exceeds hard safety limit {:.6}",
+                "SX1255 autocal: repeated IQ correction coefficient magnitude {:.6} exceeds normal board threshold {:.6}; accepting only because repeated captures were coherent",
                 coeff_abs,
-                IQ_MAX_HARD_COEFF
+                IQ_WARN_LARGE_COEFF
             );
-            false
         }
-    });
+    }
 
     RxStartupCompensation {
         dc: dc.unwrap_or(ComplexSample { re: 0.0, im: 0.0 }),
@@ -1331,8 +1327,6 @@ fn compute_loopback_compensation(
 
         apply_iq = image_coeff_abs.is_finite()
             && image_coeff_abs <= cfg.rf_loopback_max_image_coeff as RealSample
-            && image_coeff_abs <= IQ_MAX_HARD_COEFF
-            && image_dbc <= IQ_MAX_PRE_CORRECTION_IMAGE_DBC
             && coeff_delta <= coeff_delta_limit
             && tone_delta_db <= IQ_MAX_TONE_DELTA_DB
             && same_orientation
@@ -1343,12 +1337,11 @@ fn compute_loopback_compensation(
 
         if !apply_iq {
             tracing::warn!(
-                "SX1255 autocal: IQ correction disabled (coeff_mag={:.6} limit={:.6}/hard {:.6}, image={:.1} dBc max={:.1} dBc, coeff_delta={:.6} limit={:.6}, tone_delta={:.1} dB, orientation=+{} / -{}, floor_drift={:+.1} dB, clipped={} ({:.4}), improvement={:.1} dB, main_retained={:.2})",
+                "SX1255 autocal: IQ correction disabled (coeff_mag={:.6} limit={:.6} normal_warn={:.6}, image={:.1} dBc, coeff_delta={:.6} limit={:.6}, tone_delta={:.1} dB, orientation=+{} / -{}, floor_drift={:+.1} dB, clipped={} ({:.4}), improvement={:.1} dB, main_retained={:.2})",
                 image_coeff_abs,
                 cfg.rf_loopback_max_image_coeff,
-                IQ_MAX_HARD_COEFF,
+                IQ_WARN_LARGE_COEFF,
                 image_dbc,
-                IQ_MAX_PRE_CORRECTION_IMAGE_DBC,
                 coeff_delta,
                 coeff_delta_limit,
                 tone_delta_db,
@@ -1849,7 +1842,7 @@ mod tests {
     }
 
     #[test]
-    fn loopback_iq_calibration_rejects_large_image_coefficients() {
+    fn loopback_iq_calibration_accepts_large_repeatable_image_coefficients() {
         let cfg = iq_test_cfg();
         let dc = ComplexSample { re: 0.0, im: 0.0 };
         let coeff = ComplexSample { re: -0.022, im: 0.381 };
@@ -1858,10 +1851,11 @@ mod tests {
         let neg = synthetic_tone_capture(false, false, dc, coeff);
 
         let compensation = compute_loopback_compensation(&pos, &neg, &floor, &floor, TEST_TONE_HZ, TEST_SAMPLE_RATE, TEST_BLOCK_LEN, &cfg)
-            .expect("large IQ coeff should fall back to DC-only");
+            .expect("large but coherent IQ coeff should be measured");
 
         assert!(compensation.apply_dc);
-        assert!(!compensation.apply_iq);
+        assert!(compensation.apply_iq);
+        assert_complex_close(compensation.image_coeff, coeff, 1.0e-5);
     }
 
     #[test]
@@ -1995,6 +1989,25 @@ mod tests {
         assert!(compensation.apply_iq);
         assert!((compensation.image_coeff.re - 0.04075).abs() < 1.0e-5);
         assert!((compensation.image_coeff.im + 0.0195).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn repeated_loopback_accepts_large_stable_iq_for_deviated_boards() {
+        let measurements = vec![
+            rx_cal(Some((0.01, -0.01)), Some((0.241, -0.179))),
+            rx_cal(Some((0.012, -0.009)), Some((0.239, -0.181))),
+            rx_cal(Some((0.011, -0.011)), Some((0.243, -0.178))),
+            rx_cal(Some((0.010, -0.010)), Some((0.240, -0.180))),
+            rx_cal(Some((0.013, -0.008)), None),
+            rx_cal(Some((0.012, -0.010)), None),
+        ];
+
+        let compensation = select_repeated_loopback_compensation(&measurements, 6);
+
+        assert!(compensation.apply_dc);
+        assert!(compensation.apply_iq);
+        assert!((compensation.image_coeff.re - 0.24075).abs() < 1.0e-5);
+        assert!((compensation.image_coeff.im + 0.1795).abs() < 1.0e-5);
     }
 
     const TEST_SAMPLE_RATE: RealSample = 600_000.0;
