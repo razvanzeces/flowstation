@@ -1,6 +1,7 @@
 use std::{
-    collections::HashMap,
-    sync::Mutex,
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -32,6 +33,7 @@ struct CachedIdentity {
 struct IdentityResolverInner {
     cache: HashMap<u32, CachedIdentity>,
     last_remote_lookup: Option<Instant>,
+    pending_remote: HashSet<u32>,
 }
 
 #[derive(Debug)]
@@ -42,7 +44,7 @@ pub struct IdentityResolver {
     negative_cache_ttl: Duration,
     cache_max_entries: usize,
     radioid: CfgRadioId,
-    inner: Mutex<IdentityResolverInner>,
+    inner: Arc<Mutex<IdentityResolverInner>>,
 }
 
 impl IdentityResolver {
@@ -61,10 +63,11 @@ impl IdentityResolver {
             negative_cache_ttl: Duration::from_secs(config.negative_cache_ttl_secs),
             cache_max_entries: config.cache_max_entries,
             radioid: config.radioid.clone(),
-            inner: Mutex::new(IdentityResolverInner {
+            inner: Arc::new(Mutex::new(IdentityResolverInner {
                 cache: HashMap::new(),
                 last_remote_lookup: None,
-            }),
+                pending_remote: HashSet::new(),
+            })),
         }
     }
 
@@ -86,13 +89,11 @@ impl IdentityResolver {
             return record;
         }
 
-        if !self.radioid.enabled || !self.try_take_remote_slot(now) {
-            return None;
+        if self.radioid.enabled {
+            self.spawn_radioid_lookup(ssi, now);
         }
 
-        let record = self.lookup_radioid(ssi);
-        self.cache_insert(ssi, record.clone(), now);
-        record
+        None
     }
 
     pub fn invalidate(&self, ssi: u32) {
@@ -121,76 +122,99 @@ impl IdentityResolver {
         }
     }
 
-    fn try_take_remote_slot(&self, now: Instant) -> bool {
+    fn try_take_remote_slot(&self, ssi: u32, now: Instant) -> bool {
         let min_interval = Duration::from_millis(self.radioid.min_lookup_interval_ms);
         let mut inner = self.inner.lock().expect("IdentityResolver mutex poisoned");
+        if inner.pending_remote.contains(&ssi) {
+            return false;
+        }
         if let Some(last) = inner.last_remote_lookup {
             if now.duration_since(last) < min_interval {
                 return false;
             }
         }
         inner.last_remote_lookup = Some(now);
+        inner.pending_remote.insert(ssi);
         true
     }
 
-    fn cache_insert(&self, ssi: u32, record: Option<IdentityRecord>, now: Instant) {
-        let ttl = if record.is_some() {
-            self.cache_ttl
-        } else {
-            self.negative_cache_ttl
-        };
-        if ttl.is_zero() {
+    fn spawn_radioid_lookup(&self, ssi: u32, now: Instant) {
+        if !self.try_take_remote_slot(ssi, now) {
             return;
         }
 
-        let mut inner = self.inner.lock().expect("IdentityResolver mutex poisoned");
-        if inner.cache.len() >= self.cache_max_entries {
-            if let Some(expired_key) = inner
-                .cache
-                .iter()
-                .find_map(|(key, entry)| (entry.expires_at <= now).then_some(*key))
-            {
-                inner.cache.remove(&expired_key);
-            } else if let Some(oldest_key) = inner.cache.iter().min_by_key(|(_, entry)| entry.inserted_at).map(|(key, _)| *key) {
-                inner.cache.remove(&oldest_key);
-            }
-        }
+        let radioid = self.radioid.clone();
+        let inner = Arc::clone(&self.inner);
+        let cache_ttl = self.cache_ttl;
+        let negative_cache_ttl = self.negative_cache_ttl;
+        let cache_max_entries = self.cache_max_entries;
 
-        inner.cache.insert(
-            ssi,
-            CachedIdentity {
-                record,
-                expires_at: now + ttl,
-                inserted_at: now,
-            },
-        );
+        thread::spawn(move || {
+            let record = lookup_radioid_with_config(&radioid, ssi);
+            let ttl = if record.is_some() { cache_ttl } else { negative_cache_ttl };
+            let mut inner = inner.lock().expect("IdentityResolver mutex poisoned");
+            inner.pending_remote.remove(&ssi);
+            cache_insert_locked(&mut inner, cache_max_entries, ttl, ssi, record, Instant::now());
+        });
+    }
+}
+
+fn cache_insert_locked(
+    inner: &mut IdentityResolverInner,
+    cache_max_entries: usize,
+    ttl: Duration,
+    ssi: u32,
+    record: Option<IdentityRecord>,
+    now: Instant,
+) {
+    if ttl.is_zero() || cache_max_entries == 0 {
+        return;
     }
 
-    fn lookup_radioid(&self, ssi: u32) -> Option<IdentityRecord> {
-        let url = radioid_lookup_url(&self.radioid.endpoint, ssi);
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(self.radioid.timeout_secs))
-            .build();
-
-        let mut request = agent.get(&url).set("User-Agent", &self.radioid.user_agent);
-        if let Some(token) = &self.radioid.api_token {
-            request = request.set("X-API-Token", token.as_ref());
+    if inner.cache.len() >= cache_max_entries {
+        if let Some(expired_key) = inner
+            .cache
+            .iter()
+            .find_map(|(key, entry)| (entry.expires_at <= now).then_some(*key))
+        {
+            inner.cache.remove(&expired_key);
+        } else if let Some(oldest_key) = inner.cache.iter().min_by_key(|(_, entry)| entry.inserted_at).map(|(key, _)| *key) {
+            inner.cache.remove(&oldest_key);
         }
+    }
 
-        let response = match request.call() {
-            Ok(response) => response,
-            Err(err) => {
-                tracing::debug!("RadioID lookup failed for SSI {}: {}", ssi, err);
-                return None;
-            }
-        };
+    inner.cache.insert(
+        ssi,
+        CachedIdentity {
+            record,
+            expires_at: now + ttl,
+            inserted_at: now,
+        },
+    );
+}
 
-        match response.into_json::<Value>() {
-            Ok(value) => parse_radioid_identity(ssi, &value),
-            Err(err) => {
-                tracing::debug!("RadioID JSON decode failed for SSI {}: {}", ssi, err);
-                None
-            }
+fn lookup_radioid_with_config(radioid: &CfgRadioId, ssi: u32) -> Option<IdentityRecord> {
+    let url = radioid_lookup_url(&radioid.endpoint, ssi);
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(radioid.timeout_secs)).build();
+
+    let mut request = agent.get(&url).set("User-Agent", &radioid.user_agent);
+    if let Some(token) = &radioid.api_token {
+        request = request.set("X-API-Token", token.as_ref());
+    }
+
+    let response = match request.call() {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::debug!("RadioID lookup failed for SSI {}: {}", ssi, err);
+            return None;
+        }
+    };
+
+    match response.into_json::<Value>() {
+        Ok(value) => parse_radioid_identity(ssi, &value),
+        Err(err) => {
+            tracing::debug!("RadioID JSON decode failed for SSI {}: {}", ssi, err);
+            None
         }
     }
 }

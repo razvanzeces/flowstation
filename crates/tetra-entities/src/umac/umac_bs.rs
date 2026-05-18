@@ -1152,25 +1152,37 @@ impl UmacBs {
                         slot_granting_element: None,
                         chan_alloc_element: None,
                     };
-                    mac_pdu.update_len_and_fill_ind(sdu.get_len());
-
-                    let mut stch_block = BitBuffer::new(STCH_CAP);
-                    mac_pdu.to_bitbuf(&mut stch_block);
-
-                    sdu.seek(0);
                     let sdu_len = sdu.get_len();
-                    stch_block.copy_bits(&mut sdu, sdu_len);
+                    let raw_required_bits = mac_pdu.compute_header_len() + sdu_len;
+                    let fill_bits = (8 - (raw_required_bits % 8)) % 8;
+                    let required_bits = raw_required_bits + fill_bits;
+                    if required_bits > STCH_CAP {
+                        tracing::warn!(
+                            "rx_ul_tma_unitdata_req: FACCH stealing on ts {} skipped; {} bits including fill exceed {}-bit STCH capacity, falling back to MCCH",
+                            ts,
+                            required_bits,
+                            STCH_CAP
+                        );
+                    } else {
+                        mac_pdu.update_len_and_fill_ind(sdu_len);
 
-                    tracing::info!(
-                        "rx_ul_tma_unitdata_req: FACCH stealing on ts {} (MAC-RESOURCE + {} SDU bits → {} STCH bits)",
-                        ts,
-                        sdu_len,
-                        stch_block.get_len()
-                    );
+                        let mut stch_block = BitBuffer::new(STCH_CAP);
+                        mac_pdu.to_bitbuf(&mut stch_block);
 
-                    self.channel_scheduler.dl_enqueue_stealing(ts, stch_block, prim.tx_reporter);
+                        sdu.seek(0);
+                        stch_block.copy_bits(&mut sdu, sdu_len);
 
-                    return;
+                        tracing::info!(
+                            "rx_ul_tma_unitdata_req: FACCH stealing on ts {} (MAC-RESOURCE + {} SDU bits -> {} STCH bits)",
+                            ts,
+                            sdu_len,
+                            stch_block.get_len()
+                        );
+
+                        self.channel_scheduler.dl_enqueue_stealing(ts, stch_block, prim.tx_reporter);
+
+                        return;
+                    }
                 } // end circuit_is_active guard
             } else {
                 tracing::warn!("rx_ul_tma_unitdata_req: stealing requested but no active DL circuit, falling back to MCCH");

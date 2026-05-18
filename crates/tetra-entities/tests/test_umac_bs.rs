@@ -2,9 +2,14 @@ mod common;
 
 use tetra_config::bluestation::StackMode;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Layer2Service, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, debug};
+use tetra_core::{BitBuffer, Direction, Layer2Service, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, debug};
+use tetra_saps::control::call_control::{CallControl, Circuit, CircuitDlMediaSource};
+use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
+use tetra_saps::lcmc::enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment};
+use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
+use tetra_saps::tma::TmaUnitdataReq;
 use tetra_saps::tmv::{TmvUnitdataInd, enums::logical_chans::LogicalChannel};
 
 use crate::common::ComponentTest;
@@ -173,4 +178,62 @@ fn test_out_fragmented_resource() {
     test.run_stack(Some(8));
 
     tracing::info!("Validation of result not implemented");
+}
+
+#[test]
+fn test_oversized_stealing_falls_back_without_panic() {
+    debug::setup_logging_verbose();
+    let dltime = TdmaTime::default().add_timeslots(2);
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Lmac]);
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Cmce,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::CmceCallControl(CallControl::Open(Circuit {
+            direction: Direction::Dl,
+            ts: 2,
+            peer_ts: None,
+            usage: 4,
+            circuit_mode: CircuitModeType::TchS,
+            speech_service: Some(0),
+            etee_encrypted: false,
+            dl_media_source: CircuitDlMediaSource::SwMI,
+        })),
+    });
+    test.run_stack(Some(1));
+
+    let mut pdu = BitBuffer::new_autoexpand(220);
+    pdu.write_ones(181);
+    pdu.seek(0);
+
+    test.submit_message(SapMsg {
+        sap: Sap::TmaSap,
+        src: TetraEntity::Llc,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
+            req_handle: 0,
+            pdu,
+            main_address: TetraAddress::new(226333, SsiType::Gssi),
+            endpoint_id: 0,
+            stealing_permission: true,
+            subscriber_class: 0,
+            air_interface_encryption: None,
+            stealing_repeats_flag: None,
+            data_category: None,
+            chan_alloc: Some(CmceChanAllocReq {
+                usage: None,
+                carrier: None,
+                timeslots: [false, true, false, false],
+                alloc_type: ChanAllocType::Replace,
+                ul_dl_assigned: UlDlAssignment::Both,
+            }),
+            tx_reporter: None,
+        }),
+    });
+    test.run_stack(Some(8));
+
+    let sink_msgs = test.dump_sinks();
+    assert!(!sink_msgs.is_empty(), "oversized FACCH fallback should reach LMAC without panic");
 }

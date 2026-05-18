@@ -52,7 +52,7 @@ impl CcBsSubentity {
         transmission_grant: TransmissionGrant,
         transmitting_party_issi: Option<u32>,
     ) {
-        let d_tx_granted = DTxGranted {
+        let mut d_tx_granted = DTxGranted {
             call_identifier: call_id,
             transmission_grant: transmission_grant.into_raw() as u8,
             transmission_request_permission: false,
@@ -67,6 +67,7 @@ impl CcBsSubentity {
             dm_ms_address: None,
             proprietary: None,
         };
+        Self::omit_d_tx_granted_facility_if_stch_would_overflow(&mut d_tx_granted, call_id, target_addr.ssi);
 
         tracing::info!(
             "FSM -> D-TX GRANTED (individual, {}) call_id={} to ISSI {}",
