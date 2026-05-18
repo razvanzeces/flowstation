@@ -1434,12 +1434,13 @@ async function saveConfig(){
   catch(e){setConfigMsg(t('conn_error'),false);}
 }
 function setConfigMsg(txt,ok){const el=document.getElementById('config-msg');el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';}
-async function restartService(){if(!confirm(t('confirm_restart')))return;ws&&ws.send(JSON.stringify({type:'restart'}));}
-async function shutdownService(){if(!confirm(t('confirm_shutdown')))return;ws&&ws.send(JSON.stringify({type:'shutdown'}));}
-function kickMs(issi){if(!confirm(t('confirm_kick',{issi})))return;ws&&ws.send(JSON.stringify({type:'kick',issi}));}
+function wsSend(msg){if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify(msg));return true;}return false;}
+async function restartService(){if(!confirm(t('confirm_restart')))return;wsSend({type:'restart'});}
+async function shutdownService(){if(!confirm(t('confirm_shutdown')))return;wsSend({type:'shutdown'});}
+function kickMs(issi){if(!confirm(t('confirm_kick',{issi})))return;wsSend({type:'kick',issi});}
 function openSds(issi){sdsDest=issi;document.getElementById('sds-dest').value=issi;document.getElementById('sds-msg').value='';document.getElementById('sds-modal').classList.add('open');}
 function closeSdsModal(){document.getElementById('sds-modal').classList.remove('open');}
-function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value),msg=document.getElementById('sds-msg').value.trim();if(!dest||!msg)return;ws&&ws.send(JSON.stringify({type:'sds',dest_issi:dest,message:msg}));closeSdsModal();}
+function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value),msg=document.getElementById('sds-msg').value.trim();if(!dest||!msg)return;wsSend({type:'sds',dest_issi:dest,message:msg});closeSdsModal();}
 
 // ── OTA Update ────────────────────────────────────────────────────────────
 let updatePollTimer=null;
@@ -1515,7 +1516,7 @@ async function activateProfile(name){
   if(!confirm(t('sys_activate_confirm').replace('{name}',name)))return;
   try{
     const r=await fetch('/api/configs/activate',{method:'POST',body:name});
-    if(r.ok){ws&&ws.send(JSON.stringify({type:'restart'}));}
+    if(r.ok){wsSend({type:'restart'});}
     else alert('Failed: '+await r.text());
   }catch(e){alert('Error: '+e.message);}
 }

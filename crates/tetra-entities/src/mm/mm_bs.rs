@@ -275,8 +275,34 @@ impl MmBs {
             // C) DemandLocationUpdating — MS responding to our D-LOCATION-UPDATE-COMMAND.
             //    This is the second message in the normal registration flow; the first message
             //    already registered+affiliated the MS. Do NOT clean up here.
-            let needs_cleanup = pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
-                || pdu.location_update_type == LocationUpdateType::ServiceRestorationRoamingLocationUpdating;
+            let needs_cleanup = if pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
+                || pdu.location_update_type == LocationUpdateType::ServiceRestorationRoamingLocationUpdating
+            {
+                // Some terminals (e.g. Sepura) send RoamingLocationUpdating after every PTT
+                // release, not just on power-cycle or RF loss. If we treat this as a full reboot
+                // and do deregister→register, CMCE has a brief window where it doesn't know the
+                // terminal — a PTT press in that window gets "no listeners" and the terminal
+                // interprets it as a network error and fully disconnects.
+                //
+                // Heuristic: if the terminal was registered less than 60 seconds ago, treat
+                // RoamingLocationUpdating as a soft re-attach (no cleanup). If it's been longer,
+                // it's likely a genuine reboot or RF recovery.
+                let recently_registered = self.client_mgr
+                    .get_client_by_issi(issi)
+                    .map(|c| c.last_registration_time.elapsed().as_secs() < 60)
+                    .unwrap_or(false);
+                if recently_registered {
+                    tracing::debug!(
+                        "MM: ISSI {} RoamingLocationUpdating within 60s of last register — treating as soft re-attach (Sepura post-PTT)",
+                        issi
+                    );
+                    false
+                } else {
+                    true
+                }
+            } else {
+                false
+            };
 
             // needs_cleanup: Roaming = MS rebooted, need CMCE reset
             // was_pending: T351 expired, we already sent Deregister to Brew — just re-register

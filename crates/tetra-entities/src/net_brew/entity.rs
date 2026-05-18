@@ -202,7 +202,7 @@ impl BrewEntity {
                 }
                 BrewEvent::VersionDetected { version } => {
                     tracing::info!("BrewEntity: server Brew version detected from message length: v{}", version);
-                    self.set_network_connected(true, version);
+                    self.emit_brew_version(version);
                     // Notify MM that Brew reconnected so it can send D-LOCATION-UPDATE-COMMAND
                     // to all locally registered MS. Without this, MS units that were registered
                     // before the disconnect believe they are still affiliated and do not
@@ -555,6 +555,13 @@ impl BrewEntity {
             if let Some(ref sink) = self.telemetry_sink {
                 let _ = sink.send(TelemetryEvent::BrewConnected { connected, server_version });
             }
+        }
+    }
+
+    /// Emit a brew version upgrade event directly without changing connection state.
+    fn emit_brew_version(&self, version: u8) {
+        if let Some(ref sink) = self.telemetry_sink {
+            let _ = sink.send(TelemetryEvent::BrewConnected { connected: true, server_version: version });
         }
     }
 
