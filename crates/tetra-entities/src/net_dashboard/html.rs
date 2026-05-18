@@ -854,7 +854,7 @@ td code{
           <canvas id="rf-spectrum" class="rf-canvas" width="900" height="260"></canvas>
         </div>
         <div class="rf-panel">
-          <div class="rf-panel-title"><span>TX Symbol Constellation</span><span id="rf-vector">π/4 DQPSK</span></div>
+          <div class="rf-panel-title"><span>TX Measured Constellation</span><span id="rf-vector">full-scale IQ</span></div>
           <canvas id="rf-constellation" class="rf-canvas small" width="420" height="260"></canvas>
         </div>
         <div class="rf-panel" style="grid-column:1/-1">

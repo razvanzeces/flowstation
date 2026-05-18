@@ -425,7 +425,8 @@ struct TxSignalMonitor {
     fft: Arc<dyn rustfft::Fft<RealSample>>,
     fft_buffer: Vec<ComplexSample>,
     window: Vec<RealSample>,
-    abs_phase: i8,
+    constellation_phase: RealSample,
+    constellation_history: Vec<ComplexSample>,
     min_block_gap: fcfb::BlockCount,
     next_block: fcfb::BlockCount,
 }
@@ -449,7 +450,8 @@ impl TxSignalMonitor {
             fft,
             fft_buffer: vec![ComplexSample::ZERO; Self::FFT_LEN],
             window,
-            abs_phase: 0,
+            constellation_phase: 0.0,
+            constellation_history: Vec::with_capacity(Self::CONSTELLATION_POINTS),
             min_block_gap: 33,
             next_block: 0,
         }
@@ -487,7 +489,8 @@ impl TxSignalMonitor {
             })
             .collect();
 
-        let constellation_iq = self.absolute_constellation(tx_slots);
+        let _ = tx_slots;
+        let constellation_iq = self.measured_constellation(samples);
 
         self.sink.send(TelemetryEvent::TxMonitor {
             sample_rate: self.sample_rate,
@@ -499,25 +502,30 @@ impl TxSignalMonitor {
         });
     }
 
-    fn absolute_constellation(&mut self, tx_slots: &[TxSlotBits]) -> Vec<i16> {
-        let mut points = Vec::with_capacity(Self::CONSTELLATION_POINTS * 2);
-        for slot in tx_slots {
-            let Some(bits) = slot.slot else { continue };
-            for pair in bits.chunks_exact(2).take(Self::CONSTELLATION_POINTS - points.len() / 2) {
-                let phase_inc = match (pair[0] != 0, pair[1] != 0) {
-                    (true, true) => -3,
-                    (true, false) => -1,
-                    (false, false) => 1,
-                    (false, true) => 3,
-                };
-                self.abs_phase = (self.abs_phase + phase_inc) & 7;
-                let phase = self.abs_phase as RealSample * std::f32::consts::FRAC_PI_4;
-                points.push((phase.cos() * 32767.0).round() as i16);
-                points.push((phase.sin() * 32767.0).round() as i16);
-                if points.len() >= Self::CONSTELLATION_POINTS * 2 {
-                    return points;
+    fn measured_constellation(&mut self, samples: &[ComplexSample]) -> Vec<i16> {
+        let samples_per_symbol = self.sample_rate / 18_000.0;
+        if !samples_per_symbol.is_finite() || samples_per_symbol < 1.0 {
+            return Vec::new();
+        }
+
+        let mut sample_at = self.constellation_phase;
+        while sample_at < samples.len() as RealSample {
+            let idx = sample_at.round() as usize;
+            if let Some(sample) = samples.get(idx) {
+                self.constellation_history.push(*sample);
+                if self.constellation_history.len() > Self::CONSTELLATION_POINTS {
+                    let excess = self.constellation_history.len() - Self::CONSTELLATION_POINTS;
+                    self.constellation_history.drain(0..excess);
                 }
             }
+            sample_at += samples_per_symbol;
+        }
+        self.constellation_phase = sample_at - samples.len() as RealSample;
+
+        let mut points = Vec::with_capacity(self.constellation_history.len() * 2);
+        for sample in &self.constellation_history {
+            points.push((sample.re.clamp(-1.0, 1.0) * 32767.0).round() as i16);
+            points.push((sample.im.clamp(-1.0, 1.0) * 32767.0).round() as i16);
         }
         points
     }
