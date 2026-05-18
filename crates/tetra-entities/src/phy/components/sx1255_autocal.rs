@@ -12,6 +12,7 @@ const IQ_MIN_IMAGE_IMPROVEMENT_DB: RealSample = 6.0;
 const IQ_MIN_MAIN_RETAINED_RATIO: RealSample = 0.35;
 const IQ_FLOOR_DRIFT_DISABLE_DB: RealSample = 12.0;
 const IQ_CLIP_LEVEL: RealSample = 0.98;
+const IQ_MAX_CLIPPED_FRACTION: RealSample = 0.01;
 const LOOPBACK_TX_PREFILL_BLOCKS: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
@@ -54,6 +55,19 @@ struct ToneMeasurement {
     image_dbc: RealSample,
     image_coeff: ComplexSample,
     max_component_abs: RealSample,
+    clipped_fraction: RealSample,
+    good_blocks: usize,
+    total_blocks: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ToneBins {
+    positive_bin: ComplexSample,
+    negative_bin: ComplexSample,
+    max_component_abs: RealSample,
+    clipped_fraction: RealSample,
+    good_blocks: usize,
+    total_blocks: usize,
 }
 
 impl Default for RxStartupCompensation {
@@ -493,6 +507,7 @@ impl Sx1255Autocal {
                     &floor_after_samples,
                     tone,
                     rx_sample_rate as RealSample,
+                    block_len,
                     &self.cfg,
                 )
             })();
@@ -816,6 +831,7 @@ fn compute_loopback_compensation(
     floor_after_samples: &[ComplexSample],
     tone_hz: f64,
     sample_rate: RealSample,
+    block_len: usize,
     cfg: &CfgSx1255Autocal,
 ) -> Result<RxStartupCompensation, String> {
     if tone_pos_samples.is_empty() || tone_neg_samples.is_empty() || floor_before_samples.is_empty() || floor_after_samples.is_empty() {
@@ -830,26 +846,32 @@ fn compute_loopback_compensation(
     let floor_after_rms = centered_rms(floor_after_samples, floor_dc).max(1.0e-9);
     let floor_drift_db = ratio_db(floor_after_rms, floor_before_rms);
 
-    let pos_measurement = measure_loopback_tone(tone_pos_samples, floor_dc, tone_hz, sample_rate, true, floor_mag);
-    let neg_measurement = measure_loopback_tone(tone_neg_samples, floor_dc, tone_hz, sample_rate, false, floor_mag);
+    let pos_measurement = measure_loopback_tone(tone_pos_samples, floor_dc, tone_hz, sample_rate, block_len, true, floor_mag);
+    let neg_measurement = measure_loopback_tone(tone_neg_samples, floor_dc, tone_hz, sample_rate, block_len, false, floor_mag);
 
     let tone_mag = pos_measurement.main_mag.min(neg_measurement.main_mag);
     let snr_db = pos_measurement.snr_db.min(neg_measurement.snr_db);
     let image_dbc = pos_measurement.image_dbc.max(neg_measurement.image_dbc);
     let max_component_abs = pos_measurement.max_component_abs.max(neg_measurement.max_component_abs);
+    let clipped_fraction = pos_measurement.clipped_fraction.max(neg_measurement.clipped_fraction);
 
     tracing::info!(
-        "SX1255 autocal: loopback measured +tone={:.6}/{} -tone={:.6}/{} floor={:.6} snr={:.1} dB image={:.1} dBc dc=({:+.6},{:+.6}) floor_drift={:+.1} dB clip={:.3}",
+        "SX1255 autocal: loopback measured +tone={:.6}/{}({}/{}) -tone={:.6}/{}({}/{}) floor={:.6} snr={:.1} dB image={:.1} dBc dc=({:+.6},{:+.6}) floor_drift={:+.1} dB clip={:.4}/{:.3}",
         pos_measurement.main_mag,
         pos_measurement.orientation.label(),
+        pos_measurement.good_blocks,
+        pos_measurement.total_blocks,
         neg_measurement.main_mag,
         neg_measurement.orientation.label(),
+        neg_measurement.good_blocks,
+        neg_measurement.total_blocks,
         floor_mag,
         snr_db,
         image_dbc,
         floor_dc.re,
         floor_dc.im,
         floor_drift_db,
+        clipped_fraction,
         max_component_abs
     );
 
@@ -902,7 +924,7 @@ fn compute_loopback_compensation(
         let main_retained_ratio =
             (pos_corrected_main / pos_measurement.main_mag.max(1.0e-9)).min(neg_corrected_main / neg_measurement.main_mag.max(1.0e-9));
         let same_orientation = pos_measurement.orientation == neg_measurement.orientation;
-        let clipped = max_component_abs >= IQ_CLIP_LEVEL;
+        let clipped = clipped_fraction > IQ_MAX_CLIPPED_FRACTION;
         let floor_unstable = floor_drift_db.abs() > IQ_FLOOR_DRIFT_DISABLE_DB;
 
         tracing::info!(
@@ -936,7 +958,7 @@ fn compute_loopback_compensation(
 
         if !apply_iq {
             tracing::warn!(
-                "SX1255 autocal: IQ correction disabled (coeff_mag={:.6} limit={:.6}, coeff_delta={:.6} limit={:.6}, tone_delta={:.1} dB, orientation=+{} / -{}, floor_drift={:+.1} dB, clipped={}, improvement={:.1} dB, main_retained={:.2})",
+                "SX1255 autocal: IQ correction disabled (coeff_mag={:.6} limit={:.6}, coeff_delta={:.6} limit={:.6}, tone_delta={:.1} dB, orientation=+{} / -{}, floor_drift={:+.1} dB, clipped={} ({:.4}), improvement={:.1} dB, main_retained={:.2})",
                 image_coeff_abs,
                 cfg.rf_loopback_max_image_coeff,
                 coeff_delta,
@@ -946,6 +968,7 @@ fn compute_loopback_compensation(
                 neg_measurement.orientation.label(),
                 floor_drift_db,
                 clipped,
+                clipped_fraction,
                 image_improvement_db,
                 main_retained_ratio
             );
@@ -1002,6 +1025,21 @@ fn max_component_abs(samples: &[ComplexSample]) -> RealSample {
     max_abs
 }
 
+fn count_clipped_samples(samples: &[ComplexSample]) -> usize {
+    samples
+        .iter()
+        .filter(|sample| sample.re.abs() >= IQ_CLIP_LEVEL || sample.im.abs() >= IQ_CLIP_LEVEL)
+        .count()
+}
+
+fn clipped_fraction(samples: &[ComplexSample]) -> RealSample {
+    if samples.is_empty() {
+        0.0
+    } else {
+        count_clipped_samples(samples) as RealSample / samples.len() as RealSample
+    }
+}
+
 fn ratio_db(a: RealSample, b: RealSample) -> RealSample {
     20.0 * (a.max(1.0e-9) / b.max(1.0e-9)).log10()
 }
@@ -1011,11 +1049,13 @@ fn measure_loopback_tone(
     dc: ComplexSample,
     tone_hz: f64,
     sample_rate: RealSample,
+    block_len: usize,
     transmitted_positive_tone: bool,
     floor_mag: RealSample,
 ) -> ToneMeasurement {
-    let positive_bin = tone_bin_centered(samples, dc, tone_hz, sample_rate, false);
-    let negative_bin = tone_bin_centered(samples, dc, tone_hz, sample_rate, true);
+    let bins = tone_bins_centered_robust(samples, dc, tone_hz, sample_rate, block_len);
+    let positive_bin = bins.positive_bin;
+    let negative_bin = bins.negative_bin;
     let positive_mag = complex_abs(positive_bin);
     let negative_mag = complex_abs(negative_bin);
 
@@ -1053,7 +1093,80 @@ fn measure_loopback_tone(
         snr_db,
         image_dbc,
         image_coeff,
-        max_component_abs: max_component_abs(samples),
+        max_component_abs: bins.max_component_abs,
+        clipped_fraction: bins.clipped_fraction,
+        good_blocks: bins.good_blocks,
+        total_blocks: bins.total_blocks,
+    }
+}
+
+fn tone_bins_centered_robust(
+    samples: &[ComplexSample],
+    dc: ComplexSample,
+    tone_hz: f64,
+    sample_rate: RealSample,
+    block_len: usize,
+) -> ToneBins {
+    if block_len == 0 || samples.len() < block_len {
+        return ToneBins {
+            positive_bin: tone_bin_centered(samples, dc, tone_hz, sample_rate, false),
+            negative_bin: tone_bin_centered(samples, dc, tone_hz, sample_rate, true),
+            max_component_abs: max_component_abs(samples),
+            clipped_fraction: clipped_fraction(samples),
+            good_blocks: 1,
+            total_blocks: 1,
+        };
+    }
+
+    let mut positive_sum = ComplexSample { re: 0.0, im: 0.0 };
+    let mut negative_sum = ComplexSample { re: 0.0, im: 0.0 };
+    let mut good_blocks = 0;
+    let mut total_blocks = 0;
+    let mut max_abs: RealSample = 0.0;
+    let mut clipped_samples = 0usize;
+    let mut total_samples = 0usize;
+
+    for block in samples.chunks(block_len) {
+        if block.len() != block_len {
+            continue;
+        }
+        total_blocks += 1;
+        total_samples += block.len();
+        let block_max = max_component_abs(block);
+        max_abs = max_abs.max(block_max);
+        clipped_samples += count_clipped_samples(block);
+        if block_max >= IQ_CLIP_LEVEL {
+            continue;
+        }
+        positive_sum += tone_bin_centered(block, dc, tone_hz, sample_rate, false);
+        negative_sum += tone_bin_centered(block, dc, tone_hz, sample_rate, true);
+        good_blocks += 1;
+    }
+
+    let clipped_ratio = if total_samples == 0 {
+        0.0
+    } else {
+        clipped_samples as RealSample / total_samples as RealSample
+    };
+
+    if good_blocks == 0 {
+        return ToneBins {
+            positive_bin: tone_bin_centered(samples, dc, tone_hz, sample_rate, false),
+            negative_bin: tone_bin_centered(samples, dc, tone_hz, sample_rate, true),
+            max_component_abs: max_abs,
+            clipped_fraction: clipped_ratio,
+            good_blocks,
+            total_blocks,
+        };
+    }
+
+    ToneBins {
+        positive_bin: positive_sum / good_blocks as RealSample,
+        negative_bin: negative_sum / good_blocks as RealSample,
+        max_component_abs: max_abs,
+        clipped_fraction: clipped_ratio,
+        good_blocks,
+        total_blocks,
     }
 }
 
@@ -1144,8 +1257,8 @@ mod tests {
         let pos = synthetic_tone_capture(true, false, dc, coeff);
         let neg = synthetic_tone_capture(false, false, dc, coeff);
 
-        let compensation =
-            compute_loopback_compensation(&pos, &neg, &floor, &floor, TEST_TONE_HZ, TEST_SAMPLE_RATE, &cfg).expect("valid calibration");
+        let compensation = compute_loopback_compensation(&pos, &neg, &floor, &floor, TEST_TONE_HZ, TEST_SAMPLE_RATE, TEST_BLOCK_LEN, &cfg)
+            .expect("valid calibration");
 
         assert!(compensation.apply_dc);
         assert!(compensation.apply_iq);
@@ -1162,7 +1275,7 @@ mod tests {
         let pos = synthetic_tone_capture(true, true, dc, coeff);
         let neg = synthetic_tone_capture(false, true, dc, coeff);
 
-        let compensation = compute_loopback_compensation(&pos, &neg, &floor, &floor, TEST_TONE_HZ, TEST_SAMPLE_RATE, &cfg)
+        let compensation = compute_loopback_compensation(&pos, &neg, &floor, &floor, TEST_TONE_HZ, TEST_SAMPLE_RATE, TEST_BLOCK_LEN, &cfg)
             .expect("valid inverted calibration");
 
         assert!(compensation.apply_iq);
@@ -1180,8 +1293,17 @@ mod tests {
         let pos = synthetic_tone_capture(true, false, dc, coeff);
         let neg = synthetic_tone_capture(false, false, dc, coeff);
 
-        let compensation = compute_loopback_compensation(&pos, &neg, &floor_before, &floor_after, TEST_TONE_HZ, TEST_SAMPLE_RATE, &cfg)
-            .expect("dc calibration can still complete");
+        let compensation = compute_loopback_compensation(
+            &pos,
+            &neg,
+            &floor_before,
+            &floor_after,
+            TEST_TONE_HZ,
+            TEST_SAMPLE_RATE,
+            TEST_BLOCK_LEN,
+            &cfg,
+        )
+        .expect("dc calibration can still complete");
 
         assert!(compensation.apply_dc);
         assert!(!compensation.apply_iq);
