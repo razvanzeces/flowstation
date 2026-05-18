@@ -270,6 +270,9 @@ impl Sx1255Autocal {
             return;
         }
         let mut compensation = select_repeated_loopback_compensation(&measurements, attempts);
+        if self.cfg.startup_temperature_stabilize && attempts > 1 {
+            compensation = prefer_latest_stabilized_compensation(compensation, measurements.last().copied());
+        }
 
         if compensation.enabled() {
             compensation = self.install_driver_compensation(dev, rx_ch, compensation);
@@ -1215,6 +1218,37 @@ fn select_sweep_loopback_compensation(measurements: &[RxStartupCompensation]) ->
         apply_dc: dc.is_some(),
         apply_iq: image_coeff.is_some(),
     }
+}
+
+fn prefer_latest_stabilized_compensation(
+    mut selected: RxStartupCompensation,
+    latest: Option<RxStartupCompensation>,
+) -> RxStartupCompensation {
+    let Some(latest) = latest else {
+        return selected;
+    };
+
+    if !selected.apply_dc && latest.apply_dc {
+        tracing::warn!(
+            "SX1255 autocal: repeated startup DC drifted during warm-up; using latest stabilized sweep DC=({:+.6},{:+.6})",
+            latest.dc.re,
+            latest.dc.im
+        );
+        selected.dc = latest.dc;
+        selected.apply_dc = true;
+    }
+
+    if !selected.apply_iq && latest.apply_iq {
+        tracing::warn!(
+            "SX1255 autocal: repeated startup IQ drifted during warm-up; using latest stabilized sweep IQ=({:+.6},{:+.6})",
+            latest.image_coeff.re,
+            latest.image_coeff.im
+        );
+        selected.image_coeff = latest.image_coeff;
+        selected.apply_iq = true;
+    }
+
+    selected
 }
 
 fn repeated_iq_required_inliers(total_attempts: usize) -> usize {
