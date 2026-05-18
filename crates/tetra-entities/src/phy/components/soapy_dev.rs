@@ -397,7 +397,7 @@ impl TxDsp {
         let tx_signal = self.fcfb.process();
         self.headroom.apply(tx_signal, &mut self.tx_output);
         if let Some(monitor) = &mut self.monitor {
-            monitor.observe(&self.tx_output, self.block_count);
+            monitor.observe(&self.tx_output, tx_slot, self.block_count);
         }
 
         // TODO: compensate for delay of SDR
@@ -453,7 +453,7 @@ impl TxSignalMonitor {
         }
     }
 
-    fn observe(&mut self, samples: &[ComplexSample], block_count: fcfb::BlockCount) {
+    fn observe(&mut self, samples: &[ComplexSample], tx_slots: &[TxSlotBits], block_count: fcfb::BlockCount) {
         if block_count < self.next_block || samples.len() < Self::FFT_LEN {
             return;
         }
@@ -485,12 +485,7 @@ impl TxSignalMonitor {
             })
             .collect();
 
-        let step = (samples.len() / Self::CONSTELLATION_POINTS).max(1);
-        let mut constellation_iq = Vec::with_capacity(Self::CONSTELLATION_POINTS * 2);
-        for sample in samples.iter().step_by(step).take(Self::CONSTELLATION_POINTS) {
-            constellation_iq.push((sample.re.clamp(-1.0, 1.0) * 32767.0).round() as i16);
-            constellation_iq.push((sample.im.clamp(-1.0, 1.0) * 32767.0).round() as i16);
-        }
+        let constellation_iq = self.differential_constellation(tx_slots);
 
         self.sink.send(TelemetryEvent::TxMonitor {
             sample_rate: self.sample_rate,
@@ -500,6 +495,27 @@ impl TxSignalMonitor {
             spectrum_db_tenths,
             constellation_iq,
         });
+    }
+
+    fn differential_constellation(&self, tx_slots: &[TxSlotBits]) -> Vec<i16> {
+        let mut points = Vec::with_capacity(Self::CONSTELLATION_POINTS * 2);
+        for slot in tx_slots {
+            let Some(bits) = slot.slot else { continue };
+            for pair in bits.chunks_exact(2).take(Self::CONSTELLATION_POINTS - points.len() / 2) {
+                let phase = match (pair[0] != 0, pair[1] != 0) {
+                    (true, true) => -3.0 * std::f32::consts::FRAC_PI_4,
+                    (true, false) => -std::f32::consts::FRAC_PI_4,
+                    (false, false) => std::f32::consts::FRAC_PI_4,
+                    (false, true) => 3.0 * std::f32::consts::FRAC_PI_4,
+                };
+                points.push((phase.cos() * 32767.0).round() as i16);
+                points.push((phase.sin() * 32767.0).round() as i16);
+                if points.len() >= Self::CONSTELLATION_POINTS * 2 {
+                    return points;
+                }
+            }
+        }
+        points
     }
 }
 
