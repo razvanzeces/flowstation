@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::net_control::ControlEndpoint;
 use crate::net_telemetry::channel::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait, net_brew};
@@ -32,11 +34,16 @@ use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
 use tetra_pdus::mm::pdus::u_mm_status::UMmStatus;
 use tetra_pdus::mm::pdus::u_tei_provide::UTeiProvide;
 
+const PERIODIC_REGISTRATION_REFRESH_GRACE_SECS: u32 = 60;
+const MAX_PERIODIC_REGISTRATION_REFRESH_ATTEMPTS: u8 = 3;
+
 pub struct MmBs {
     config: SharedConfig,
     telemetry: Option<TelemetrySink>,
     control: Option<ControlEndpoint>,
     client_mgr: MmClientMgr,
+    current_dl_time: TdmaTime,
+    forced_location_updates: HashSet<u32>,
 }
 
 impl MmBs {
@@ -47,7 +54,73 @@ impl MmBs {
             telemetry,
             control,
             client_mgr,
+            current_dl_time: TdmaTime::default(),
+            forced_location_updates: HashSet::new(),
         }
+    }
+
+    fn allocate_energy_saving_information(&self, _requested: EnergySavingMode) -> (EnergySavingInformation, Option<TdmaTime>) {
+        // Real TETRA EE needs complete addressed downlink scheduling around the
+        // MS monitoring window. Until that UMAC path is proven, keep terminals
+        // continuously reachable and mirror the stable Bluestation behaviour.
+        (
+            EnergySavingInformation {
+                energy_saving_mode: EnergySavingMode::StayAlive,
+                frame_number: None,
+                multiframe_number: None,
+            },
+            None,
+        )
+    }
+
+    fn store_and_emit_energy_saving(
+        &mut self,
+        queue: &mut MessageQueue,
+        issi: u32,
+        esi: Option<&EnergySavingInformation>,
+        start_time: Option<TdmaTime>,
+    ) {
+        let mode = esi.map(|e| e.energy_saving_mode).unwrap_or(EnergySavingMode::StayAlive);
+        let frame = esi.and_then(|e| e.frame_number);
+        let multiframe = esi.and_then(|e| e.multiframe_number);
+
+        if let Err(e) = self.client_mgr.set_client_energy_saving_mode(issi, mode) {
+            tracing::warn!("MM: failed updating energy-saving mode for MS {}: {:?}", issi, e);
+        }
+        if let Err(e) = self.client_mgr.set_client_monitoring_window(issi, frame, multiframe) {
+            tracing::warn!("MM: failed updating energy-saving window for MS {}: {:?}", issi, e);
+        }
+
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Umac,
+            msg: SapMsgInner::MmEnergySavingUpdate {
+                issi,
+                mode: mode as u8,
+                start_time,
+            },
+        });
+    }
+
+    fn stored_energy_saving_start_time(&mut self, issi: u32) -> Option<TdmaTime> {
+        let (frame, multiframe) = {
+            let client = self.client_mgr.get_client_by_issi(issi)?;
+            (client.monitoring_frame?, client.monitoring_multiframe?)
+        };
+        let mut start = TdmaTime {
+            h: self.current_dl_time.h,
+            m: multiframe,
+            f: frame,
+            t: 1,
+        };
+        if !start.is_valid() {
+            return None;
+        }
+        if start.diff(self.current_dl_time) > 0 {
+            start = start.add_timeslots(-(60 * 18 * 4));
+        }
+        Some(start)
     }
 
     fn emit_subscriber_update(&self, queue: &mut MessageQueue, issi: u32, groups: Vec<u32>, action: BrewSubscriberAction) {
@@ -93,11 +166,12 @@ impl MmBs {
         queue.push_back(msg);
     }
 
-    fn rx_u_itsi_detach(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
+    fn rx_u_itsi_detach(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_itsi_detach");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
-            };
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
 
         let pdu = match UItsiDetach::from_bitbuf(&mut prim.sdu) {
             Ok(pdu) => {
@@ -122,9 +196,10 @@ impl MmBs {
             self.config.state_write().subscribers.deregister(ssi);
             if !client.groups.is_empty() {
                 let groups: Vec<u32> = client.groups.iter().copied().collect();
-                self.emit_subscriber_update(_queue, ssi, groups, BrewSubscriberAction::Deaffiliate);
+                self.emit_subscriber_update(queue, ssi, groups, BrewSubscriberAction::Deaffiliate);
             }
-            self.emit_subscriber_update(_queue, ssi, Vec::new(), BrewSubscriberAction::Deregister);
+            self.emit_subscriber_update(queue, ssi, Vec::new(), BrewSubscriberAction::Deregister);
+            self.store_and_emit_energy_saving(queue, ssi, None, None);
         } else {
             tracing::warn!("Received UItsiDetach for unknown client with SSI: {}", ssi);
             // return;
@@ -134,8 +209,9 @@ impl MmBs {
     fn rx_u_location_update_demand(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_location_update_demand");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
-            };
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
 
         let pdu = match ULocationUpdateDemand::from_bitbuf(&mut prim.sdu) {
             Ok(pdu) => {
@@ -169,14 +245,9 @@ impl MmBs {
                     self.emit_subscriber_update(queue, issi, groups, BrewSubscriberAction::Deaffiliate);
                 }
                 self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
+                self.store_and_emit_energy_saving(queue, issi, None, None);
             }
-            Self::send_d_location_update_reject(
-                queue,
-                issi,
-                prim.handle,
-                pdu.location_update_type,
-                pdu.address_extension,
-            );
+            Self::send_d_location_update_reject(queue, issi, prim.handle, pdu.location_update_type, pdu.address_extension);
             return;
         }
 
@@ -186,78 +257,36 @@ impl MmBs {
             return;
         }
 
-        // Handle Energy Saving Mode request (clause 23.7.6).
-        // We honour the mode requested by the MS (capped at Eg3 for safety).
-        // LLC retransmissions ensure DL messages are delivered even when the MS is sleeping:
-        // the BS retransmits on the next monitoring window automatically.
-        // frame_number and multiframe_number are derived from ISSI to spread MSs evenly
-        // across monitoring slots and avoid simultaneous wake-ups.
-        // Per clause 16.7.1 NOTE 1: "The BS may allocate a different energy saving mode
-        // than requested and the BS assumes that the allocated value will be used."
-        // For DemandLocationUpdating (response to D-LOCATION-UPDATE-COMMAND), the terminal
-        // often omits energy_saving_mode from the PDU. In that case, reuse the previously
-        // stored ESM — client_mgr retains it because we no longer remove_client at T351 expiry.
-        // Preserve energy saving mode across re-registrations.
-        // If the terminal omits ESM from the PDU (common after T351 expiry),
-        // reuse the previously granted mode so the terminal stays in EE mode.
-        // We no longer filter out StayAlive — if that's what was granted before, keep it.
-        let prior_esm = self.client_mgr.get_client_by_issi(prim.received_address.ssi)
-            .map(|c| c.energy_saving_mode);
-        let effective_esm_request = pdu.energy_saving_mode.or(prior_esm);
-
-        let esi = if let Some(esm) = effective_esm_request {
-            // Cap at Eg3 (~3s max delay) to avoid excessive call setup latency
-            let granted_esm = match esm {
-                EnergySavingMode::StayAlive => EnergySavingMode::StayAlive,
-                EnergySavingMode::Eg1 => EnergySavingMode::Eg1,
-                EnergySavingMode::Eg2 => EnergySavingMode::Eg2,
-                EnergySavingMode::Eg3 => EnergySavingMode::Eg3,
-                // Cap Eg4-Eg7 to Eg3
-                _ => EnergySavingMode::Eg3,
-            };
-
-            if granted_esm != esm {
-                tracing::debug!("MS {} requested {:?}, capping to {:?}", prim.received_address.ssi, esm, granted_esm);
-            }
-
-            let (frame_number, multiframe_number) = if granted_esm == EnergySavingMode::StayAlive {
-                (None, None)
-            } else {
-                // Spread MSs evenly: frame 0-17, multiframe offset within Eg cycle
-                let cycle_len = granted_esm as u8 + 1; // Eg1=2, Eg2=3, Eg3=4
-                // TETRA frames are 1-indexed (1..18); use 1..=18 to avoid frame 0
-                let frame_num = ((prim.received_address.ssi % 18) + 1) as u8;
-                let mframe_num = ((prim.received_address.ssi / 18) % cycle_len as u32) as u8;
+        // Handle Energy Saving Mode request (ETSI EN 300 392-2, clauses 16.10.10/23.7.6).
+        // Real EE support needs UMAC scheduling around MS monitoring windows. Until
+        // that path is complete, explicitly allocate StayAlive in D-LOCATION-UPDATE-ACCEPT.
+        // Omitting EnergySavingInformation after the MS requested EE leaves some terminals
+        // in an ambiguous state; stable Bluestation replies with StayAlive.
+        let (esi, esi_start_time) = if let Some(esm) = pdu.energy_saving_mode {
+            if esm != EnergySavingMode::StayAlive {
                 tracing::info!(
-                    "MS {} granted {:?}: monitoring frame={} multiframe={}",
-                    prim.received_address.ssi, granted_esm, frame_num, mframe_num
+                    "MS {} requested {:?}; overriding to StayAlive because EE scheduling is disabled",
+                    prim.received_address.ssi,
+                    esm,
                 );
-                (Some(frame_num), Some(mframe_num))
-            };
-
-            Some(EnergySavingInformation {
-                energy_saving_mode: granted_esm,
-                frame_number,
-                multiframe_number,
-            })
+            } else {
+                tracing::info!("MS {} requested StayAlive", prim.received_address.ssi);
+            }
+            let (esi, start_time) = self.allocate_energy_saving_information(esm);
+            (Some(esi), start_time)
         } else {
-            None
+            (None, None)
         };
 
         // Try to register the client
         let issi = prim.received_address.ssi;
         let handle = prim.handle;
+        let was_forced_location_update = self.forced_location_updates.remove(&issi);
 
         // ISSI whitelist check — reject if whitelist is non-empty and ISSI not in it
         if !self.config.config().security.is_issi_allowed(issi) {
             tracing::warn!("MM: ISSI {} not in whitelist, rejecting registration", issi);
-            Self::send_d_location_update_reject(
-                queue,
-                issi,
-                handle,
-                pdu.location_update_type,
-                pdu.address_extension,
-            );
+            Self::send_d_location_update_reject(queue, issi, handle, pdu.location_update_type, pdu.address_extension);
             return;
         }
 
@@ -272,16 +301,23 @@ impl MmBs {
             //
             // B) PeriodicLocationUpdating — healthy MS renewing its T351 timer. No cleanup.
             //
-            // C) DemandLocationUpdating — MS responding to our D-LOCATION-UPDATE-COMMAND.
+            // C) MS responding to our D-LOCATION-UPDATE-COMMAND.
             //    This is the second message in the normal registration flow; the first message
             //    already registered+affiliated the MS. Do NOT clean up here.
-            let needs_cleanup = pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
-                || pdu.location_update_type == LocationUpdateType::ServiceRestorationRoamingLocationUpdating;
+            let swmi_commanded_update = was_pending || was_forced_location_update;
+            let needs_cleanup = !swmi_commanded_update
+                && (pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
+                    || pdu.location_update_type == LocationUpdateType::ServiceRestorationRoamingLocationUpdating);
 
-            // needs_cleanup: Roaming = MS rebooted, need CMCE reset
-            // was_pending: T351 expired, we already sent Deregister to Brew — just re-register
-            if needs_cleanup {
-                let old_groups: Vec<u32> = self.client_mgr
+            // needs_cleanup: Roaming = MS rebooted, need CMCE reset.
+            // swmi_commanded_update: terminal may legally answer our command with
+            // several LU types; do not tear down Brew/CMCE state for a commanded
+            // refresh.
+            if swmi_commanded_update {
+                tracing::info!("MM: ISSI {} answered SwMI commanded location update", issi);
+            } else if needs_cleanup {
+                let old_groups: Vec<u32> = self
+                    .client_mgr
                     .get_client_by_issi(issi)
                     .map(|c| c.groups.iter().copied().collect())
                     .unwrap_or_default();
@@ -290,10 +326,6 @@ impl MmBs {
                 }
                 self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
                 self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
-            } else if was_pending {
-                // T351 re-registration: Brew already got Deregister — just re-register
-                // CMCE gets a fresh affiliate when groups are processed below
-                tracing::info!("MM: ISSI {} re-registered after T351 COMMAND", issi);
             }
             // Always reset the registration timer on any re-registration
             self.client_mgr.reset_registration_timer(issi);
@@ -302,10 +334,10 @@ impl MmBs {
         // We do this when:
         //   A) Terminal is genuinely new (never seen before).
         //   B) Terminal is known but re-attaching via ItsiAttach — migrated from another network.
-        //   C) Terminal is known but had pending_command_sent=true — T351 expired, we sent COMMAND
-        //      and deregistered from Brew. Now terminal is back, re-register.
+        //   C) Terminal is known and had pending_command_sent=true — periodic refresh response.
+        //      This is non-destructive and does not require Brew re-registration.
         let is_itsi_attach = pdu.location_update_type == LocationUpdateType::ItsiAttach;
-        let needs_brew_register = is_new || (!is_new && is_itsi_attach) || (!is_new && was_pending);
+        let needs_brew_register = is_new || (!is_new && is_itsi_attach);
 
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
@@ -323,22 +355,26 @@ impl MmBs {
         }
         if needs_brew_register {
             if !is_new {
-                tracing::info!("MM: ISSI {} re-attaching via ItsiAttach (returned from another network) — re-registering in Brew", issi);
+                if is_itsi_attach {
+                    tracing::info!(
+                        "MM: ISSI {} re-attaching via ItsiAttach (returned from another network) — re-registering in Brew",
+                        issi
+                    );
+                }
+                self.config.state_write().subscribers.register(issi);
             }
             self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
+        } else if was_pending {
+            tracing::info!("MM: ISSI {} completed periodic registration refresh", issi);
         }
 
         // Always update the last known L2 handle so we can send downlink PDUs later
         // (e.g. D-LOCATION-UPDATE-COMMAND after Brew reconnection).
         self.client_mgr.set_client_handle(issi, handle);
 
-        // Store energy saving mode and monitoring window in client state
-        let esm = esi.as_ref().map(|e| e.energy_saving_mode).unwrap_or(EnergySavingMode::StayAlive);
-        let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
-        let mf = esi.as_ref().and_then(|e| e.frame_number);
-        let mmf = esi.as_ref().and_then(|e| e.multiframe_number);
-        let _ = self.client_mgr.set_client_monitoring_window(issi, mf, mmf);
-
+        // Store energy saving mode and notify UMAC so addressed downlink is scheduled
+        // on monitoring frames for sleeping MSs.
+        self.store_and_emit_energy_saving(queue, issi, esi.as_ref(), esi_start_time);
 
         // Process optional GroupIdentityLocationDemand field
         let _has_groups = pdu.group_identity_location_demand.is_some();
@@ -392,31 +428,19 @@ impl MmBs {
         // Without this, MS with scan list active stays in scan mode and blocks PTT.
         // Value 0x01: 1 SCCH on frame 18, assigned to TS1 (our MCCH/control channel).
         // Bits: b1-b2 = 01 (1 SCCH), b3-b6 = 0000 (TS2/3/4 not used as SCCH).
-        let scch_info = pdu.class_of_ms.as_ref().and_then(|c| {
-            if c.clch_needed || c.common_scch {
-                Some(0x01u64)
-            } else {
-                None
-            }
-        });
+        let scch_info = pdu
+            .class_of_ms
+            .as_ref()
+            .and_then(|c| if c.clch_needed || c.common_scch { Some(0x01u64) } else { None });
 
         let _ = self.client_mgr.set_client_class_of_ms(issi, pdu.class_of_ms);
 
         // Reset periodic registration timer on every successful registration.
         self.client_mgr.reset_registration_timer(issi);
 
-        // Use PeriodicLocationUpdating accept type when periodic registration is enabled.
-        // This signals to the MS that it must re-register within the configured interval.
-        let periodic_secs = self.config.config().cell.periodic_registration_secs;
-        let accept_type = if periodic_secs > 0 {
-            LocationUpdateType::PeriodicLocationUpdating
-        } else {
-            pdu.location_update_type
-        };
-
         // Build D-LOCATION UPDATE ACCEPT pdu
         let pdu_response = DLocationUpdateAccept {
-            location_update_accept_type: accept_type,
+            location_update_accept_type: pdu.location_update_type,
             ssi: Some(issi as u64),
             address_extension: None,
             subscriber_class: None,
@@ -458,24 +482,19 @@ impl MmBs {
         };
         queue.push_back(msg);
 
-        // Send D-LOCATION-UPDATE-COMMAND only on genuine first attach (ItsiAttach or Demand),
-        // NOT on RoamingLocationUpdating. Motorola terminals (MTM800, MXP600) respond to
-        // D-LOCATION-UPDATE-COMMAND with another RoamingLocationUpdating instead of
-        // DemandLocationUpdating, which triggers needs_cleanup=true → Deregister → is_new=true
-        // again, creating an infinite registration loop.
-        let is_roaming = pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
-            || pdu.location_update_type == LocationUpdateType::ServiceRestorationRoamingLocationUpdating;
-        if is_new && !is_roaming {
-            tracing::info!("Sending D-LOCATION UPDATE COMMAND to MS {} to prompt TEI and group report", issi);
-            Self::send_d_location_update_command(queue, issi, handle);
-        }
+        // ETSI location update is complete after D-LOCATION-UPDATE-ACCEPT.
+        // Do not append a spontaneous D-LOCATION-UPDATE-COMMAND here: when the
+        // group report bit is set, terminals can detach and re-report all group
+        // identities, causing visible service churn. Keep that command for
+        // explicit recovery paths only.
     }
 
     fn rx_u_mm_status(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_mm_status");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
-            };
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
 
         let pdu = match UMmStatus::from_bitbuf(&mut prim.sdu) {
             Ok(pdu) => {
@@ -508,25 +527,27 @@ impl MmBs {
                     EnergySavingMode::StayAlive
                 };
 
+                let (esi, start_time) = self.allocate_energy_saving_information(esm);
                 if esm != EnergySavingMode::StayAlive {
                     tracing::info!(
-                        "MS {} requested energy saving mode change to {:?}, overriding to StayAlive",
+                        "MS {} energy saving mode change request {:?}; forcing StayAlive because EE scheduling is disabled",
                         issi,
-                        esm
+                        esm,
+                    );
+                } else if let Some(start_time) = start_time {
+                    tracing::info!(
+                        "MS {} energy saving mode change request {:?}: monitoring starts frame={} multiframe={} ({})",
+                        issi,
+                        esm,
+                        esi.frame_number.unwrap_or(0),
+                        esi.multiframe_number.unwrap_or(0),
+                        start_time,
                     );
                 } else {
                     tracing::info!("MS {} energy saving mode change request: StayAlive", issi);
                 }
 
-                // Store StayAlive (see clause 16.7.1 NOTE 1)
-                let _ = self.client_mgr.set_client_energy_saving_mode(issi, EnergySavingMode::StayAlive);
-
-                // Respond with StayAlive
-                let esi = EnergySavingInformation {
-                    energy_saving_mode: EnergySavingMode::StayAlive,
-                    frame_number: None,
-                    multiframe_number: None,
-                };
+                self.store_and_emit_energy_saving(queue, issi, Some(&esi), start_time);
                 Self::send_d_mm_status_energy_saving(queue, issi, handle, esi);
                 handled = true;
             }
@@ -545,7 +566,14 @@ impl MmBs {
                 };
 
                 tracing::info!("MS {} energy saving mode change response: {:?}", issi, esm);
-                let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
+                if esm != EnergySavingMode::StayAlive {
+                    tracing::info!(
+                        "MS {} energy saving mode response {:?}; keeping StayAlive because EE scheduling is disabled",
+                        issi,
+                        esm,
+                    );
+                }
+                self.store_and_emit_energy_saving(queue, issi, None, None);
                 handled = true;
             }
             StatusUplink::DualWatchModeRequest
@@ -586,8 +614,9 @@ impl MmBs {
     fn rx_u_attach_detach_group_identity(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_attach_detach_group_identity");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
-            };
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
 
         let issi = prim.received_address.ssi;
 
@@ -607,8 +636,12 @@ impl MmBs {
             // group_identity_uplink missing — terminal is sending a group report response
             // without requesting any group changes. Send ACK with current groups so
             // terminal knows it's affiliated and can use PTT.
-            tracing::info!("UAttachDetachGroupIdentity from {} has no uplink groups — sending ACK with current groups", issi);
-            let current_groups: Vec<u32> = self.client_mgr
+            tracing::info!(
+                "UAttachDetachGroupIdentity from {} has no uplink groups — sending ACK with current groups",
+                issi
+            );
+            let current_groups: Vec<u32> = self
+                .client_mgr
                 .get_client_by_issi(issi)
                 .map(|c| c.groups.iter().copied().collect())
                 .unwrap_or_default();
@@ -702,8 +735,9 @@ impl MmBs {
     fn rx_lmm_mle_unitdata_ind(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         // unimplemented_log!("rx_lmm_mle_unitdata_ind for MM component");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
-            };
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
 
         let Some(bits) = prim.sdu.peek_bits(4) else {
             tracing::warn!("insufficient bits: {}", prim.sdu.dump_bin());
@@ -814,7 +848,8 @@ impl MmBs {
         // Emit a single snapshot of all current groups so the dashboard always has
         // the full list (not just incremental add/remove events).
         let _sink = self.client_mgr.telemetry_sink().cloned();
-        let all_groups: Vec<u32> = self.client_mgr
+        let all_groups: Vec<u32> = self
+            .client_mgr
             .get_client_by_issi(issi)
             .map(|c| c.groups.iter().copied().collect())
             .unwrap_or_default();
@@ -861,18 +896,21 @@ impl MmBs {
     }
 
     fn send_d_attach_detach_ack(&self, queue: &mut MessageQueue, issi: u32, handle: u32, groups: &[u32]) {
-        use tetra_pdus::mm::fields::group_identity_downlink::GroupIdentityDownlink;
         use tetra_pdus::mm::fields::group_identity_attachment::GroupIdentityAttachment;
-        let gid: Vec<GroupIdentityDownlink> = groups.iter().map(|&gssi| GroupIdentityDownlink {
-            group_identity_attachment: Some(GroupIdentityAttachment {
-                group_identity_attachment_lifetime: 1,
-                class_of_usage: 4,
-            }),
-            group_identity_detachment_uplink: None,
-            gssi: Some(gssi),
-            address_extension: None,
-            vgssi: None,
-        }).collect();
+        use tetra_pdus::mm::fields::group_identity_downlink::GroupIdentityDownlink;
+        let gid: Vec<GroupIdentityDownlink> = groups
+            .iter()
+            .map(|&gssi| GroupIdentityDownlink {
+                group_identity_attachment: Some(GroupIdentityAttachment {
+                    group_identity_attachment_lifetime: 1,
+                    class_of_usage: 4,
+                }),
+                group_identity_detachment_uplink: None,
+                gssi: Some(gssi),
+                address_extension: None,
+                vgssi: None,
+            })
+            .collect();
         let ack = DAttachDetachGroupIdentityAcknowledgement {
             group_identity_accept_reject: 0,
             reserved: false,
@@ -903,9 +941,9 @@ impl MmBs {
         }
     }
 
-    fn send_d_location_update_command(queue: &mut MessageQueue, issi: u32, handle: u32) {
+    fn send_d_location_update_command(queue: &mut MessageQueue, issi: u32, handle: u32, group_identity_report: bool) {
         let pdu = DLocationUpdateCommand {
-            group_identity_report: true,
+            group_identity_report,
             cipher_control: false,
             ciphering_parameters: None,
             address_extension: None,
@@ -946,8 +984,12 @@ impl MmBs {
         address_extension: Option<u64>,
     ) {
         Self::send_d_location_update_reject_cause(
-            queue, issi, handle, location_update_type,
-            address_extension, RejectCause::MigrationNotSupported,
+            queue,
+            issi,
+            handle,
+            location_update_type,
+            address_extension,
+            RejectCause::MigrationNotSupported,
         )
     }
 
@@ -1038,7 +1080,8 @@ impl MmBs {
     fn rx_u_tei_provide(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_tei_provide");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
-            tracing::error!("BUG: unexpected message or state -- routing error"); return;
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
         };
 
         let pdu = match UTeiProvide::from_bitbuf(&mut prim.sdu) {
@@ -1053,12 +1096,7 @@ impl MmBs {
         };
 
         let issi = prim.received_address.ssi;
-        tracing::info!(
-            "MM: TEI received from ISSI {} → TEI={} ({:060b})",
-            issi,
-            pdu.tei_hex(),
-            pdu.tei,
-        );
+        tracing::info!("MM: TEI received from ISSI {} → TEI={} ({:060b})", issi, pdu.tei_hex(), pdu.tei,);
 
         // Store TEI in client state for future use (e.g. whitelist checking)
         if let Err(e) = self.client_mgr.set_client_tei(issi, pdu.tei) {
@@ -1142,7 +1180,9 @@ impl TetraEntityTrait for MmBs {
         self.config = config;
     }
 
-    fn tick_start(&mut self, queue: &mut MessageQueue, _ts: TdmaTime) {
+    fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
+        self.current_dl_time = ts;
+
         if let Some(cep) = &self.control {
             while let Some(cmd) = cep.try_recv() {
                 match cmd {
@@ -1153,77 +1193,62 @@ impl TetraEntityTrait for MmBs {
             }
         }
 
-        // Periodic registration expiry check (T351 equivalent, ETSI EN 300 392-2 §16.9).
-        // Uses wall-clock time — no TDMA precision needed.
+        // SwMI-initiated periodic registration refresh. ETSI allows the network
+        // to command a fresh location update, but a missed refresh must not
+        // immediately de-register an otherwise attached MS.
         let interval_secs = self.config.config().cell.periodic_registration_secs;
         let expired = self.client_mgr.collect_expired_registrations(interval_secs);
         for issi in expired {
-            tracing::info!(
-                "MM: ISSI {} periodic registration expired ({}s) — sending D-LOCATION-UPDATE-COMMAND",
-                issi, interval_secs
-            );
-            // Send D-LOCATION-UPDATE-COMMAND to prompt re-registration.
-            //
-            // Analysis of real traffic (MTM800/MXP600/MTM5400) shows these terminals
-            // have their own T351 timer either disabled or set much longer than the BS.
-            // They rely entirely on BS initiative to re-register.
-            //
-            // - REJECT(ExpiryOfTimer): terminals enter waiting state, never re-attach. BAD.
-            // - Silent removal: terminals never notice, never re-register. BAD.
-            // - D-LOCATION-UPDATE-COMMAND: terminals respond with U-LOCATION-UPDATING-DEMAND
-            //   (DemandLocationUpdating), BS re-registers them immediately. GOOD.
-            //
-            // The Roaming loop bug from before is NOT triggered here because:
-            // 1. This command is sent once per expiry, not on every registration.
-            // 2. The fix in rx_u_location_updating_demand already skips sending
-            //    COMMAND after RoamingLocationUpdating.
             let already_sent = self.client_mgr.is_pending_command(issi);
             if already_sent {
-                // Second expiry — terminal didn't respond to COMMAND within grace period.
-                // Send D-LOCATION-UPDATE-REJECT(ExpiryOfTimer) so the terminal knows it must
-                // re-attach. Without this, terminals like Sepura stay "connected" locally
-                // while the BS has already removed them, causing a silent desync.
-                let last_handle = self.client_mgr
-                    .get_client_by_issi(issi)
-                    .map(|c| c.last_handle)
-                    .unwrap_or(0);
+                let attempts = self.client_mgr.periodic_refresh_attempts(issi);
+                if attempts < MAX_PERIODIC_REGISTRATION_REFRESH_ATTEMPTS {
+                    tracing::warn!(
+                        "MM: ISSI {} did not respond to periodic D-LOCATION-UPDATE-COMMAND attempt {}/{} — retrying without de-registering",
+                        issi,
+                        attempts,
+                        MAX_PERIODIC_REGISTRATION_REFRESH_ATTEMPTS
+                    );
+                } else {
+                    tracing::warn!(
+                        "MM: ISSI {} missed {} periodic registration refresh attempts — keeping registration and deferring next refresh",
+                        issi,
+                        attempts
+                    );
+                    self.client_mgr.snooze_periodic_refresh(issi);
+                    continue;
+                }
+            } else {
                 tracing::info!(
-                    "MM: ISSI {} did not respond to D-LOCATION-UPDATE-COMMAND — sending REJECT and removing",
+                    "MM: ISSI {} periodic registration refresh due ({}s) — sending D-LOCATION-UPDATE-COMMAND",
+                    issi,
+                    interval_secs
+                );
+            }
+
+            let handle = self
+                .client_mgr
+                .get_client_by_issi(issi)
+                .map(|client| client.last_handle)
+                .unwrap_or(0);
+            if handle == 0 {
+                tracing::warn!(
+                    "MM: ISSI {} periodic registration refresh skipped because no valid L2 handle is known",
                     issi
                 );
-                Self::send_d_location_update_reject_cause(
-                    queue, issi, last_handle,
-                    LocationUpdateType::PeriodicLocationUpdating,
-                    None,
-                    RejectCause::ExpiryOfTimer,
-                );
-                let detached = self.client_mgr.remove_client(issi);
-                if let Some(client) = detached {
-                    self.config.state_write().subscribers.deregister(issi);
-                    if !client.groups.is_empty() {
-                        let groups: Vec<u32> = client.groups.iter().copied().collect();
-                        self.emit_subscriber_update(queue, issi, groups, BrewSubscriberAction::Deaffiliate);
-                    }
-                    self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
-                }
+                self.client_mgr.snooze_periodic_refresh(issi);
                 continue;
             }
-            // First expiry — send COMMAND and wait grace period (60s) for response.
-            // Do NOT remove_client here: keeping the client in registry preserves ESM
-            // and group state so the terminal re-registers cleanly without losing EE mode.
-            // Only notify Brew so it stops routing calls to this terminal until it re-registers.
-            Self::send_d_location_update_command(queue, issi, 0);
-            self.client_mgr.set_pending_command(issi, 60);
-            let groups: Vec<u32> = self.client_mgr
-                .get_client_by_issi(issi)
-                .map(|c| c.groups.iter().copied().collect())
-                .unwrap_or_default();
-            if !groups.is_empty() {
-                self.emit_subscriber_update(queue, issi, groups, BrewSubscriberAction::Deaffiliate);
-            }
-            self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
-            // Mark as detached in state but keep in client_mgr (preserves ESM + groups)
-            self.config.state_write().subscribers.deregister(issi);
+            Self::send_d_location_update_command(queue, issi, handle, false);
+            let attempt = self.client_mgr.set_pending_command(issi, PERIODIC_REGISTRATION_REFRESH_GRACE_SECS);
+            tracing::debug!(
+                "MM: ISSI {} periodic registration refresh attempt {}/{} queued (handle={}, grace={}s)",
+                issi,
+                attempt,
+                MAX_PERIODIC_REGISTRATION_REFRESH_ATTEMPTS,
+                handle,
+                PERIODIC_REGISTRATION_REFRESH_GRACE_SECS
+            );
         }
     }
 
@@ -1232,20 +1257,28 @@ impl TetraEntityTrait for MmBs {
         // tracing::debug!(ts=%message.dltime, "rx_prim: {:?}", message);
 
         match message.sap {
-            Sap::LmmSap => {
-                match message.msg {
-                    SapMsgInner::LmmMleUnitdataInd(_) => {
-                        self.rx_lmm_mle_unitdata_ind(queue, message);
-                    }
-                    _ => {
-                        tracing::error!("BUG: unexpected message or state -- routing error"); return;
-                    }
+            Sap::LmmSap => match message.msg {
+                SapMsgInner::LmmMleUnitdataInd(_) => {
+                    self.rx_lmm_mle_unitdata_ind(queue, message);
                 }
-            }
+                _ => {
+                    tracing::error!("BUG: unexpected message or state -- routing error");
+                    return;
+                }
+            },
             Sap::Control => {
                 match message.msg {
                     SapMsgInner::BrewReconnected => {
                         self.rx_brew_reconnected(queue);
+                    }
+                    SapMsgInner::MmForceLocationUpdate { issi, handle } => {
+                        tracing::info!(
+                            "MM: forcing location update for ISSI {} from CMCE request (handle={})",
+                            issi,
+                            handle
+                        );
+                        self.forced_location_updates.insert(issi);
+                        Self::send_d_location_update_command(queue, issi, handle, true);
                     }
                     SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => {
                         self.client_mgr.update_client_rssi(issi, rssi_dbfs);
@@ -1266,13 +1299,17 @@ impl TetraEntityTrait for MmBs {
                         // CMCE can ask MM to deregister an MS (e.g. kick from dashboard)
                         if update.action == BrewSubscriberAction::Deregister {
                             let issi = update.issi;
-                            tracing::info!("MM: kicking ISSI {} — sending D-LOCATION-UPDATE-COMMAND to force re-registration", issi);
+                            tracing::info!(
+                                "MM: kicking ISSI {} — sending D-LOCATION-UPDATE-COMMAND to force re-registration",
+                                issi
+                            );
                             // D-LOCATION-UPDATE-COMMAND forces the terminal to immediately
                             // send a new U-LOCATION-UPDATING-DEMAND, effectively re-registering.
                             // This is cleaner than a reject: the terminal stays on the network
                             // but goes through a full re-registration cycle.
-                            Self::send_d_location_update_command(queue, issi, 0);
-                            let groups: Vec<u32> = self.client_mgr
+                            Self::send_d_location_update_command(queue, issi, 0, true);
+                            let groups: Vec<u32> = self
+                                .client_mgr
                                 .get_client_by_issi(issi)
                                 .map(|c| c.groups.iter().copied().collect())
                                 .unwrap_or_default();
@@ -1282,6 +1319,7 @@ impl TetraEntityTrait for MmBs {
                             self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
                             self.client_mgr.remove_client(issi);
                             self.config.state_write().subscribers.deregister(issi);
+                            self.store_and_emit_energy_saving(queue, issi, None, None);
                         }
                     }
                     _ => {
@@ -1312,7 +1350,8 @@ impl MmBs {
         );
         for (issi, handle) in clients {
             tracing::debug!("mm_bs: re-registering ISSI {} (handle={})", issi, handle);
-            Self::send_d_location_update_command(queue, issi, handle);
+            self.forced_location_updates.insert(issi);
+            Self::send_d_location_update_command(queue, issi, handle, true);
         }
     }
 }

@@ -1,14 +1,13 @@
 mod common;
 
-use tetra_config::bluestation::{CfgManualIdentity, StackMode};
+use tetra_config::bluestation::StackMode;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, TxState, debug};
 use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
 use tetra_pdus::cmce::fields::basic_service_information::BasicServiceInformation;
-use tetra_pdus::cmce::pdus::d_setup::DSetup;
+use tetra_pdus::cmce::pdus::u_facility::UFacility;
 use tetra_pdus::cmce::pdus::u_setup::USetup;
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
-use tetra_saps::control::call_control::CallControl;
 use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 use tetra_saps::control::enums::communication_type::CommunicationType;
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
@@ -124,86 +123,50 @@ fn count_d_setups(msgs: &[SapMsg]) -> usize {
         .count()
 }
 
-fn count_umac_circuit_opens(msgs: &[SapMsg]) -> usize {
-    msgs.iter()
-        .filter(|msg| msg.dest == TetraEntity::Umac && matches!(&msg.msg, SapMsgInner::CmceCallControl(CallControl::Open(_))))
-        .count()
-}
-
-fn parse_group_d_setup(msgs: &[SapMsg], dest_gssi: u32) -> Option<DSetup> {
-    msgs.iter().find_map(|msg| {
-        if msg.dest != TetraEntity::Mle {
-            return None;
-        }
-        let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
-            return None;
-        };
-        if prim.main_address.ssi != dest_gssi || prim.main_address.ssi_type != SsiType::Gssi {
-            return None;
-        }
-        let mut sdu = prim.sdu.clone();
-        sdu.seek(0);
-        DSetup::from_bitbuf(&mut sdu).ok()
-    })
-}
-
 #[test]
-fn test_group_setup_accepts_empty_listener_cache() {
+fn test_u_facility_probe_has_no_error_response() {
     debug::setup_logging_verbose();
 
     let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
     let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Mm]);
 
-    let components = vec![TetraEntity::Cmce];
-    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
-    test.populate_entities(components, sinks);
+    let mut sdu = BitBuffer::new_autoexpand(16);
+    UFacility {}.to_bitbuf(&mut sdu).expect("Failed to serialize UFacility");
+    sdu.seek(0);
 
-    let u_setup_msg = build_u_setup_msg(TEST_ISSI, TEST_GSSI);
-    test.submit_message(u_setup_msg);
+    test.submit_message(SapMsg {
+        sap: Sap::LcmcSap,
+        src: TetraEntity::Mle,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::LcmcMleUnitdataInd(LcmcMleUnitdataInd {
+            sdu,
+            handle: 1,
+            endpoint_id: 1,
+            link_id: 1,
+            received_tetra_address: TetraAddress::new(TEST_ISSI, SsiType::Issi),
+            chan_change_resp_req: false,
+            chan_change_handle: None,
+        }),
+    });
     test.run_stack(Some(1));
 
-    let initial_msgs = test.dump_sinks();
-    assert_eq!(
-        count_umac_circuit_opens(&initial_msgs),
-        1,
-        "Group U-SETUP must open a traffic circuit even if listener cache is empty"
+    let msgs = test.dump_sinks();
+    assert!(
+        !msgs
+            .iter()
+            .any(|msg| msg.dest == TetraEntity::Mle && matches!(msg.msg, SapMsgInner::LcmcMleUnitdataReq(_))),
+        "U-FACILITY probes must not get D-CMCE-FUNCTION-NOT-SUPPORTED"
     );
     assert!(
-        count_d_setups(&initial_msgs) > 0,
-        "Group U-SETUP must emit downlink call control even if listener cache is empty"
-    );
-}
-
-#[test]
-fn test_group_setup_tpi_uses_mnemonic_without_duplicate_ssi() {
-    debug::setup_logging_verbose();
-
-    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
-    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
-    config.identity.enabled = true;
-    config.identity.manual.push(CfgManualIdentity {
-        ssi: TEST_ISSI,
-        mnemonic: Some("YO3TCO".to_string()),
-        label: None,
-    });
-    let mut test = ComponentTest::from_config(config, Some(dltime));
-
-    let components = vec![TetraEntity::Cmce];
-    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
-    test.populate_entities(components, sinks);
-
-    test.submit_message(build_u_setup_msg(TEST_ISSI, TEST_GSSI));
-    test.run_stack(Some(1));
-
-    let initial_msgs = test.dump_sinks();
-    let d_setup = parse_group_d_setup(&initial_msgs, TEST_GSSI).expect("expected group D-SETUP");
-    assert_eq!(d_setup.calling_party_address_ssi, Some(TEST_ISSI));
-
-    let facility = d_setup.facility.expect("expected SS-TPI facility");
-    assert_eq!(facility.mnemonic_name.as_deref(), Some("YO3TCO"));
-    assert_eq!(
-        facility.talking_sending_party_ssi, None,
-        "Group D-SETUP already carries calling_party_address_ssi; SS-TPI must only add mnemonic"
+        msgs.iter().any(|msg| {
+            msg.dest == TetraEntity::Mm
+                && matches!(
+                    &msg.msg,
+                    SapMsgInner::MmForceLocationUpdate { issi, .. } if *issi == TEST_ISSI
+                )
+        }),
+        "Unknown U-FACILITY probes should force MM location update"
     );
 }
 

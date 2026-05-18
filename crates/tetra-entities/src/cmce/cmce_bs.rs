@@ -7,9 +7,6 @@ use tetra_core::{Sap, TdmaTime, unimplemented_log};
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use tetra_pdus::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
-use tetra_pdus::cmce::pdus::cmce_function_not_supported::CmceFunctionNotSupported;
-use tetra_core::{BitBuffer, Layer2Service, TetraAddress, SsiType};
-use tetra_saps::lcmc::LcmcMleUnitdataReq;
 
 use super::subentities::cc_bs::CcBsSubentity;
 use super::subentities::sds_bs::{SdsBsSubentity, SdsPendingAction};
@@ -133,40 +130,22 @@ impl CmceBs {
             CmcePduTypeUl::USdsData => { self.sds.route_rf_deliver(queue, message); }
             CmcePduTypeUl::UFacility => {
                 // ETSI EN 300 392-2 §14.7.2.5:
-                // BS does not support supplementary services (SS). Respond with
-                // D-CMCE-FUNCTION-NOT-SUPPORTED, function_not_supported_pointer=0
-                // (the PDU type itself is not supported, not a specific field).
-                tracing::debug!("CMCE: received UFacility from ISSI {} — responding D-CMCE-FUNCTION-NOT-SUPPORTED",
-                    prim.received_tetra_address.ssi);
-                let response = CmceFunctionNotSupported {
-                    not_supported_pdu_type: CmcePduTypeUl::UFacility.into_raw() as u8,
-                    call_identifier_present: false,
-                    call_identifier: None,
-                    function_not_supported_pointer: 0,
-                    length_of_received_pdu_extract: None,
-                    received_pdu_extract: None,
-                };
-                let mut sdu = BitBuffer::new_autoexpand(16);
-                if response.to_bitbuf(&mut sdu).is_ok() {
-                    sdu.seek(0);
+                // U-FACILITY carries call-unrelated supplementary-service data and
+                // has no mandatory response. Some terminals probe it during attach;
+                // answering with FUNCTION-NOT-SUPPORTED makes them mark the SS path
+                // as failed even though the basic subscriber identity is usable.
+                let issi = prim.received_tetra_address.ssi;
+                tracing::debug!("CMCE: received UFacility from ISSI {} — accepting without response", issi);
+                if self.cc.subscriber_groups_for(issi).is_empty() {
+                    tracing::info!(
+                        "CMCE: UFacility from ISSI {} without local subscriber state — forcing location update",
+                        issi
+                    );
                     queue.push_back(SapMsg {
-                        sap: Sap::LcmcSap,
+                        sap: Sap::Control,
                         src: TetraEntity::Cmce,
-                        dest: TetraEntity::Mle,
-                        msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                            sdu,
-                            handle: prim.handle,
-                            endpoint_id: prim.endpoint_id,
-                            link_id: prim.link_id,
-                            layer2service: Layer2Service::Unacknowledged,
-                            pdu_prio: 0,
-                            layer2_qos: 0,
-                            stealing_permission: false,
-                            stealing_repeats_flag: false,
-                            chan_alloc: None,
-                            main_address: TetraAddress { ssi: prim.received_tetra_address.ssi, ssi_type: SsiType::Issi },
-                            tx_reporter: None,
-                        }),
+                        dest: TetraEntity::Mm,
+                        msg: SapMsgInner::MmForceLocationUpdate { issi, handle: prim.handle },
                     });
                 }
             }

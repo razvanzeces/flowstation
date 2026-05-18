@@ -3,6 +3,8 @@ mod common;
 use tetra_config::bluestation::StackMode;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Direction, Layer2Service, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, debug};
+use tetra_pdus::umac::pdus::mac_access::MacAccess;
+use tetra_pdus::umac::pdus::mac_resource::MacResource;
 use tetra_saps::control::call_control::{CallControl, Circuit, CircuitDlMediaSource};
 use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 use tetra_saps::lcmc::enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment};
@@ -13,6 +15,157 @@ use tetra_saps::tma::TmaUnitdataReq;
 use tetra_saps::tmv::{TmvUnitdataInd, enums::logical_chans::LogicalChannel};
 
 use crate::common::ComponentTest;
+
+fn first_downlink_resource_for_ssi(msgs: &[SapMsg], ssi: u32) -> Option<MacResource> {
+    for msg in msgs {
+        let SapMsgInner::TmvUnitdataReq(slot) = &msg.msg else {
+            continue;
+        };
+        for blk in [&slot.blk1, &slot.blk2].into_iter().flatten() {
+            let mut mac = BitBuffer::from_bitstr(&blk.mac_block.to_bitstr());
+            if mac.peek_bits(2) != Some(0) {
+                continue;
+            }
+            if let Ok(resource) = MacResource::from_bitbuf(&mut mac) {
+                if resource.addr.map(|addr| addr.ssi) == Some(ssi) {
+                    return Some(resource);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn mac_access_with_sdu(issi: u32) -> BitBuffer {
+    let mut pdu = BitBuffer::new_autoexpand(48);
+    MacAccess {
+        fill_bits: false,
+        encrypted: false,
+        addr: Some(TetraAddress::issi(issi)),
+        event_label: None,
+        length_ind: Some(6),
+        frag_flag: None,
+        reservation_req: None,
+    }
+    .to_bitbuf(&mut pdu);
+    pdu.write_bits(0b101010101010, 12);
+    pdu.seek(0);
+    pdu
+}
+
+fn plain_issi_tma_req(issi: u32) -> SapMsg {
+    SapMsg {
+        sap: Sap::TmaSap,
+        src: TetraEntity::Llc,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
+            req_handle: 0,
+            pdu: BitBuffer::from_bitstr("00101010"),
+            main_address: TetraAddress::issi(issi),
+            endpoint_id: 0,
+            stealing_permission: false,
+            subscriber_class: 0,
+            air_interface_encryption: None,
+            stealing_repeats_flag: None,
+            data_category: None,
+            chan_alloc: None,
+            tx_reporter: None,
+        }),
+    }
+}
+
+#[test]
+fn test_plain_issi_downlink_response_does_not_carry_random_access_flag() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260082;
+
+    let dltime = TdmaTime::default().add_timeslots(2);
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Lmac]);
+
+    test.submit_message(plain_issi_tma_req(TEST_ISSI));
+    test.run_stack(Some(4));
+    let sink_msgs = test.dump_sinks();
+
+    let resource = first_downlink_resource_for_ssi(&sink_msgs, TEST_ISSI).expect("expected downlink MAC-RESOURCE for ISSI");
+    assert!(
+        !resource.random_access_flag,
+        "random_access_flag acknowledges a real random-access event; it is not implied by ISSI addressing"
+    );
+}
+
+#[test]
+fn test_first_issi_downlink_after_recent_mac_access_carries_random_access_flag() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260082;
+
+    let dltime = TdmaTime::default().add_timeslots(2);
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Lmac]);
+
+    test.submit_message(SapMsg {
+        sap: Sap::TmvSap,
+        src: TetraEntity::Lmac,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmvUnitdataInd(TmvUnitdataInd {
+            pdu: mac_access_with_sdu(TEST_ISSI),
+            block_num: PhyBlockNum::Block1,
+            logical_channel: LogicalChannel::SchHu,
+            crc_pass: true,
+            scrambling_code: 864282631,
+            rssi_dbfs: 0.0,
+        }),
+    });
+    test.run_stack(Some(4));
+    let _ = test.dump_sinks();
+
+    test.submit_message(plain_issi_tma_req(TEST_ISSI));
+    test.run_stack(Some(4));
+    let sink_msgs = test.dump_sinks();
+
+    let resource = first_downlink_resource_for_ssi(&sink_msgs, TEST_ISSI).expect("expected downlink MAC-RESOURCE for ISSI");
+    assert!(
+        resource.random_access_flag,
+        "the first addressed response after a real MAC-ACCESS acknowledges that random access"
+    );
+}
+
+#[test]
+fn test_stale_mac_access_does_not_mark_late_issi_downlink_as_random_access() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260082;
+
+    let dltime = TdmaTime::default().add_timeslots(2);
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Lmac]);
+
+    test.submit_message(SapMsg {
+        sap: Sap::TmvSap,
+        src: TetraEntity::Lmac,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmvUnitdataInd(TmvUnitdataInd {
+            pdu: mac_access_with_sdu(TEST_ISSI),
+            block_num: PhyBlockNum::Block1,
+            logical_channel: LogicalChannel::SchHu,
+            crc_pass: true,
+            scrambling_code: 864282631,
+            rssi_dbfs: 0.0,
+        }),
+    });
+    test.run_stack(Some(4));
+    let _ = test.dump_sinks();
+    test.run_stack(Some(80));
+
+    test.submit_message(plain_issi_tma_req(TEST_ISSI));
+    test.run_stack(Some(4));
+    let sink_msgs = test.dump_sinks();
+
+    let resource = first_downlink_resource_for_ssi(&sink_msgs, TEST_ISSI).expect("expected downlink MAC-RESOURCE for ISSI");
+    assert!(
+        !resource.random_access_flag,
+        "a stale MAC-ACCESS must not make unrelated later ISSI traffic look like random-access acknowledgement"
+    );
+}
 
 #[test]
 fn test_in_fragmented_sch_hu_and_sch_f() {

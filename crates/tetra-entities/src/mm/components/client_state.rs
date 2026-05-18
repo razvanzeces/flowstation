@@ -46,9 +46,12 @@ pub struct MmClientProperties {
     /// Set when the MS sends U-TEI-PROVIDE. None if not yet received.
     pub tei: Option<u64>,
     /// True after BS sends D-LOCATION-UPDATE-COMMAND at T351 expiry.
-    /// If the terminal re-registers, this is cleared. If T351 expires again
-    /// while this is still true, the terminal is silently removed (no response).
+    /// If the terminal re-registers, this is cleared. If the terminal misses
+    /// several refresh attempts, MM keeps it registered and defers retry.
     pub pending_command_sent: bool,
+    /// Number of consecutive SwMI-initiated periodic refresh commands sent
+    /// without a U-LOCATION UPDATE DEMAND response.
+    pub periodic_refresh_attempts: u8,
     /// When Some, terminal has until this instant to respond to D-LOCATION-UPDATE-COMMAND.
     pub grace_expires_at: Option<std::time::Instant>,
     // pub last_seen: TdmaTime,
@@ -65,6 +68,7 @@ impl MmClientProperties {
             monitoring_multiframe: None,
             last_rssi: None,
             pending_command_sent: false,
+            periodic_refresh_attempts: 0,
             grace_expires_at: None,
             last_registration_time: std::time::Instant::now(),
             class_of_ms: None,
@@ -152,7 +156,7 @@ impl MmClientMgr {
     pub fn update_client_rssi(&mut self, issi: u32, rssi_dbfs: f32) {
         if let Some(client) = self.clients.get_mut(&issi) {
             let should_log = match client.last_rssi {
-                None => true, // First measurement
+                None => true,                                  // First measurement
                 Some(prev) => (rssi_dbfs - prev).abs() >= 3.0, // Log on >=3dB change
             };
             client.last_rssi = Some(rssi_dbfs);
@@ -167,6 +171,7 @@ impl MmClientMgr {
         if let Some(client) = self.clients.get_mut(&issi) {
             client.last_registration_time = std::time::Instant::now();
             client.pending_command_sent = false;
+            client.periodic_refresh_attempts = 0;
             client.grace_expires_at = None;
         }
     }
@@ -176,18 +181,34 @@ impl MmClientMgr {
         self.clients.get(&issi).map(|c| c.pending_command_sent).unwrap_or(false)
     }
 
+    pub fn periodic_refresh_attempts(&self, issi: u32) -> u8 {
+        self.clients.get(&issi).map(|c| c.periodic_refresh_attempts).unwrap_or(0)
+    }
+
     /// Mark that we sent D-LOCATION-UPDATE-COMMAND at T351 expiry.
     /// Terminal has grace_secs to respond before being removed.
-    pub fn set_pending_command(&mut self, issi: u32, grace_secs: u32) {
+    pub fn set_pending_command(&mut self, issi: u32, grace_secs: u32) -> u8 {
         if let Some(client) = self.clients.get_mut(&issi) {
             client.pending_command_sent = true;
+            client.periodic_refresh_attempts = client.periodic_refresh_attempts.saturating_add(1);
             // Set last_registration_time so elapsed() > interval after grace_secs.
             // Achieved by back-dating: last_registration_time = now - (interval - grace_secs)
             // But we don't know interval here, so we use a simpler approach:
             // collect_expired_registrations checks pending_command_sent + grace separately.
-            client.grace_expires_at = Some(
-                std::time::Instant::now() + std::time::Duration::from_secs(grace_secs as u64)
-            );
+            client.grace_expires_at = Some(std::time::Instant::now() + std::time::Duration::from_secs(grace_secs as u64));
+            client.periodic_refresh_attempts
+        } else {
+            0
+        }
+    }
+
+    /// Keep the MS registered, but defer the next SwMI-initiated periodic
+    /// refresh until the normal interval elapses again.
+    pub fn snooze_periodic_refresh(&mut self, issi: u32) {
+        if let Some(client) = self.clients.get_mut(&issi) {
+            client.last_registration_time = std::time::Instant::now();
+            client.pending_command_sent = false;
+            client.grace_expires_at = None;
         }
     }
 
