@@ -229,24 +229,41 @@ impl Sx1255Autocal {
         }
 
         let attempts = self.cfg.rf_loopback_calibration_attempts.max(1);
-        let measurements = if attempts > 1 {
-            match self.measure_loopback_calibration_repeated(dev, rx_ch, tx_ch, rx_sample_rate, rx_args, tx_args, attempts) {
-                Ok(measurements) => measurements,
-                Err(err) => {
-                    tracing::warn!("SX1255 autocal: repeated loopback calibration failed: {}", err);
-                    Vec::new()
+        let mut measurements = Vec::new();
+
+        for attempt in 1..=attempts {
+            if attempt > 1 {
+                let delay = Duration::from_secs(self.cfg.rf_loopback_retry_delay_secs);
+                if !delay.is_zero() {
+                    tracing::info!(
+                        "SX1255 autocal: waiting {}s before loopback calibration attempt {}/{}",
+                        delay.as_secs(),
+                        attempt,
+                        attempts
+                    );
+                    thread::sleep(delay);
+                }
+                if let Some(temp_c) = self.read_temperature(dev, rx_ch, tx_ch) {
+                    self.observe_temperature(temp_c);
+                    self.apply_temperature_compensation(dev, rx_ch, tx_ch, temp_c, true, "startup-loopback");
                 }
             }
-        } else {
-            tracing::info!("SX1255 autocal: loopback calibration attempt 1/1");
+
+            tracing::info!("SX1255 autocal: loopback calibration attempt {}/{}", attempt, attempts);
             match self.measure_loopback_calibration(dev, rx_ch, tx_ch, rx_sample_rate, rx_args, tx_args) {
-                Ok(compensation) => vec![compensation],
+                Ok(compensation) => {
+                    measurements.push(compensation);
+                }
                 Err(err) => {
-                    tracing::warn!("SX1255 autocal: loopback calibration attempt 1/1 skipped: {}", err);
-                    Vec::new()
+                    tracing::warn!(
+                        "SX1255 autocal: loopback calibration attempt {}/{} skipped: {}",
+                        attempt,
+                        attempts,
+                        err
+                    );
                 }
             }
-        };
+        }
 
         if measurements.is_empty() {
             tracing::warn!("SX1255 autocal: startup loopback calibration produced no usable capture");
@@ -685,149 +702,6 @@ impl Sx1255Autocal {
         result
     }
 
-    fn measure_loopback_calibration_repeated(
-        &self,
-        dev: &Device,
-        rx_ch: usize,
-        tx_ch: usize,
-        rx_sample_rate: f64,
-        rx_args: &[(String, String)],
-        tx_args: &[(String, String)],
-        attempts: usize,
-    ) -> Result<Vec<RxStartupCompensation>, String> {
-        if rx_sample_rate <= 0.0 {
-            return Err("RX sample rate is not available".to_string());
-        }
-
-        let antennas = dev
-            .antennas(Direction::Rx, rx_ch)
-            .map_err(|err| format!("could not list RX antennas: {}", err))?;
-        if !antennas.iter().any(|ant| ant == "LB") {
-            return Err("RF loopback antenna LB is not available".to_string());
-        }
-
-        let original_rx_antenna = dev.antenna(Direction::Rx, rx_ch).unwrap_or_else(|_| "RX".to_string());
-        let original_rx_frequency = dev.frequency(Direction::Rx, rx_ch).ok();
-        let original_tx_frequency = dev.frequency(Direction::Tx, tx_ch).ok();
-        let original_tx_gains = self.apply_loopback_tx_gains(dev, tx_ch);
-        let calibration_frequency = original_tx_frequency.or(original_rx_frequency);
-        let block_len = stream_period_samples(rx_args).unwrap_or(900).max(64);
-        let capture_blocks = self.cfg.rf_loopback_capture_blocks.max(1);
-        let settle_blocks = self.cfg.rf_loopback_settle_blocks.max(1);
-        let tone = quantized_tone_hz(self.cfg.rf_loopback_tone_hz, rx_sample_rate, block_len);
-        let amplitude = self.cfg.rf_loopback_tone_amplitude as RealSample;
-
-        tracing::info!(
-            "SX1255 autocal: startup RF loopback continuous calibration attempts={} tone={:.1} Hz amplitude={:.3} block={} settle={} capture={} rf_center={}",
-            attempts,
-            tone,
-            amplitude,
-            block_len,
-            settle_blocks,
-            capture_blocks,
-            calibration_frequency
-                .map(|freq| format!("{:.0} Hz", freq))
-                .unwrap_or_else(|| "unknown".to_string())
-        );
-
-        let result = (|| {
-            if let Some(freq) = calibration_frequency {
-                dev.set_frequency(Direction::Rx, rx_ch, freq, Args::new())
-                    .map_err(|err| format!("could not tune RX to loopback calibration frequency: {}", err))?;
-                dev.set_frequency(Direction::Tx, tx_ch, freq, Args::new())
-                    .map_err(|err| format!("could not tune TX to loopback calibration frequency: {}", err))?;
-            }
-
-            dev.set_antenna(Direction::Rx, rx_ch, "LB")
-                .map_err(|err| format!("could not select RX LB antenna: {}", err))?;
-
-            let rx_args = args_from_pairs(rx_args);
-            let tx_args = args_from_pairs(tx_args);
-            let mut rx = dev
-                .rx_stream_args::<ComplexSample, _>(&[rx_ch], rx_args)
-                .map_err(|err| format!("could not setup RX calibration stream: {}", err))?;
-            let mut tx = dev
-                .tx_stream_args::<ComplexSample, _>(&[tx_ch], tx_args)
-                .map_err(|err| format!("could not setup TX calibration stream: {}", err))?;
-
-            rx.activate(None)
-                .map_err(|err| format!("could not activate RX calibration stream: {}", err))?;
-            tx.activate(None)
-                .map_err(|err| format!("could not activate TX calibration stream: {}", err))?;
-
-            let tone_pos_block = make_tone_block(block_len, tone, rx_sample_rate as RealSample, amplitude);
-            let tone_neg_block = make_tone_block(block_len, -tone, rx_sample_rate as RealSample, amplitude);
-            let zero_block = vec![ComplexSample { re: 0.0, im: 0.0 }; block_len];
-            let floor_blocks = (capture_blocks.max(4) / 2).max(4);
-            let delay_blocks = ((self.cfg.rf_loopback_retry_delay_secs as f64 * rx_sample_rate) / block_len as f64).round() as usize;
-            let mut measurements = Vec::with_capacity(attempts);
-
-            for attempt in 1..=attempts {
-                if attempt > 1 && delay_blocks > 0 {
-                    tracing::info!(
-                        "SX1255 autocal: streaming zero tone for {}s before loopback calibration attempt {}/{}",
-                        self.cfg.rf_loopback_retry_delay_secs,
-                        attempt,
-                        attempts
-                    );
-                    drain_loopback_blocks(&mut rx, &mut tx, &zero_block, delay_blocks, block_len)
-                        .map_err(|err| format!("inter-attempt zero streaming failed: {}", err))?;
-                }
-
-                tracing::info!("SX1255 autocal: loopback calibration attempt {}/{}", attempt, attempts);
-                match capture_loopback_compensation_from_stream(
-                    &mut rx,
-                    &mut tx,
-                    &zero_block,
-                    &tone_pos_block,
-                    &tone_neg_block,
-                    settle_blocks,
-                    floor_blocks,
-                    capture_blocks,
-                    block_len,
-                    tone,
-                    rx_sample_rate as RealSample,
-                    &self.cfg,
-                ) {
-                    Ok(compensation) => measurements.push(compensation),
-                    Err(err) => tracing::warn!(
-                        "SX1255 autocal: loopback calibration attempt {}/{} skipped: {}",
-                        attempt,
-                        attempts,
-                        err
-                    ),
-                }
-            }
-
-            tx.write_all(&[&zero_block], None, false, 200_000).ok();
-            tx.deactivate(None).ok();
-            rx.deactivate(None).ok();
-
-            Ok(measurements)
-        })();
-
-        if let Err(err) = dev.set_antenna(Direction::Rx, rx_ch, original_rx_antenna.as_str()) {
-            tracing::warn!(
-                "SX1255 autocal: failed to restore RX antenna '{}' after calibration: {}",
-                original_rx_antenna,
-                err
-            );
-        }
-        if let Some(freq) = original_rx_frequency {
-            if let Err(err) = dev.set_frequency(Direction::Rx, rx_ch, freq, Args::new()) {
-                tracing::warn!("SX1255 autocal: failed to restore RX frequency after calibration: {}", err);
-            }
-        }
-        if let Some(freq) = original_tx_frequency {
-            if let Err(err) = dev.set_frequency(Direction::Tx, tx_ch, freq, Args::new()) {
-                tracing::warn!("SX1255 autocal: failed to restore TX frequency after calibration: {}", err);
-            }
-        }
-        self.restore_loopback_tx_gains(dev, tx_ch, original_tx_gains);
-
-        result
-    }
-
     fn apply_loopback_tx_gains(&self, dev: &Device, tx_ch: usize) -> Vec<(String, f64)> {
         if self.cfg.rf_loopback_tx_gains.is_empty() {
             return Vec::new();
@@ -1156,60 +1030,6 @@ fn capture_loopback_blocks(
     }
 
     Ok(captured)
-}
-
-fn capture_loopback_compensation_from_stream(
-    rx: &mut soapysdr::RxStream<ComplexSample>,
-    tx: &mut soapysdr::TxStream<ComplexSample>,
-    zero_block: &[ComplexSample],
-    tone_pos_block: &[ComplexSample],
-    tone_neg_block: &[ComplexSample],
-    settle_blocks: usize,
-    floor_blocks: usize,
-    capture_blocks: usize,
-    block_len: usize,
-    tone_hz: f64,
-    sample_rate: RealSample,
-    cfg: &CfgSx1255Autocal,
-) -> Result<RxStartupCompensation, String> {
-    let floor_before_samples = capture_loopback_blocks(rx, tx, zero_block, settle_blocks, floor_blocks, block_len)
-        .map_err(|err| format!("floor-before capture failed: {}", err))?;
-
-    let tone_pos_samples = capture_loopback_blocks(rx, tx, tone_pos_block, settle_blocks, capture_blocks, block_len)
-        .map_err(|err| format!("positive-tone capture failed: {}", err))?;
-
-    let floor_after_samples = capture_loopback_blocks(rx, tx, zero_block, settle_blocks, floor_blocks, block_len)
-        .map_err(|err| format!("floor-after capture failed: {}", err))?;
-
-    let tone_neg_samples = capture_loopback_blocks(rx, tx, tone_neg_block, settle_blocks, capture_blocks, block_len)
-        .map_err(|err| format!("negative-tone capture failed: {}", err))?;
-
-    compute_loopback_compensation(
-        &tone_pos_samples,
-        &tone_neg_samples,
-        &floor_before_samples,
-        &floor_after_samples,
-        tone_hz,
-        sample_rate,
-        block_len,
-        cfg,
-    )
-}
-
-fn drain_loopback_blocks(
-    rx: &mut soapysdr::RxStream<ComplexSample>,
-    tx: &mut soapysdr::TxStream<ComplexSample>,
-    tx_block: &[ComplexSample],
-    blocks: usize,
-    block_len: usize,
-) -> Result<(), String> {
-    let mut rx_block = vec![ComplexSample { re: 0.0, im: 0.0 }; block_len];
-    for _ in 0..blocks {
-        tx.write_all(&[tx_block], None, false, 200_000)
-            .map_err(|err| format!("TX write failed: {}", err))?;
-        read_full(rx, &mut rx_block, 200_000)?;
-    }
-    Ok(())
 }
 
 fn read_full(rx: &mut soapysdr::RxStream<ComplexSample>, out: &mut [ComplexSample], timeout_us: i64) -> Result<(), String> {
