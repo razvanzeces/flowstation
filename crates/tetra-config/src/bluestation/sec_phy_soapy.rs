@@ -97,7 +97,7 @@ impl Default for CfgSx1255Autocal {
             rf_filter_profile: "TETRA_CLEAN".to_string(),
             rf_loopback_startup_calibration: true,
             rf_loopback_tone_hz: 24_000.0,
-            rf_loopback_tone_amplitude: 0.8,
+            rf_loopback_tone_amplitude: 0.35,
             rf_loopback_settle_blocks: 24,
             rf_loopback_capture_blocks: 32,
             rf_loopback_min_snr_db: 20.0,

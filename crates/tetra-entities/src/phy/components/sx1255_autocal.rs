@@ -12,6 +12,7 @@ const IQ_MIN_IMAGE_IMPROVEMENT_DB: RealSample = 6.0;
 const IQ_MIN_MAIN_RETAINED_RATIO: RealSample = 0.35;
 const IQ_FLOOR_DRIFT_DISABLE_DB: RealSample = 12.0;
 const IQ_CLIP_LEVEL: RealSample = 0.98;
+const LOOPBACK_TX_PREFILL_BLOCKS: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
 pub struct AutocalFrequencies {
@@ -776,6 +777,11 @@ fn capture_loopback_blocks(
 ) -> Result<Vec<ComplexSample>, String> {
     let mut rx_block = vec![ComplexSample { re: 0.0, im: 0.0 }; block_len];
     let mut captured = Vec::with_capacity(capture_blocks * block_len);
+
+    for _ in 0..LOOPBACK_TX_PREFILL_BLOCKS {
+        tx.write_all(&[tx_block], None, false, 200_000)
+            .map_err(|err| format!("TX prefill failed: {}", err))?;
+    }
 
     for block_idx in 0..(settle_blocks + capture_blocks) {
         tx.write_all(&[tx_block], None, false, 200_000)
