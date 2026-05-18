@@ -88,7 +88,14 @@ impl CcBsSubentity {
             None
         };
 
-        Some(SsTpiInform::for_ssi(ctx.current_talker_issi, mnemonic))
+        match (ctx.call_type, mnemonic) {
+            // For group call D-SETUP, the talking/sending party identity is
+            // already encoded as calling_party_address_ssi. SS-TPI only needs
+            // to add the mnemonic name for RX terminal display.
+            (TpiCallType::Group, Some(mnemonic)) => Some(SsTpiInform::mnemonic_only(mnemonic)),
+            (TpiCallType::Group, None) => None,
+            (_, mnemonic) => Some(SsTpiInform::for_ssi(ctx.current_talker_issi, mnemonic)),
+        }
     }
 
     pub(super) fn tpi_for_speaker(&mut self, call_id: u16, talker_issi: u32) -> Option<SsTpiInform> {

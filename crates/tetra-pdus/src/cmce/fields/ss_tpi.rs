@@ -26,6 +26,15 @@ impl SsTpiInform {
         }
     }
 
+    pub fn mnemonic_only(mnemonic_name: String) -> Self {
+        Self {
+            clir_invoked: false,
+            mnemonic_name: Some(mnemonic_name),
+            talking_sending_party_ssi: None,
+            tx_demand_priority: None,
+        }
+    }
+
     pub fn clir() -> Self {
         Self {
             clir_invoked: true,
@@ -207,6 +216,20 @@ mod tests {
 
         let parsed = SsTpiInform::from_bitbuf(&mut buffer).unwrap();
         assert_eq!(parsed, inform);
+    }
+
+    #[test]
+    fn ss_tpi_inform_mnemonic_only_roundtrip() {
+        let inform = SsTpiInform::mnemonic_only("YO3TCO".to_string());
+        let mut buffer = BitBuffer::new_autoexpand(96);
+        inform.to_bitbuf(&mut buffer).unwrap();
+        assert_eq!(buffer.get_pos(), 76);
+        buffer.seek(0);
+
+        let parsed = SsTpiInform::from_bitbuf(&mut buffer).unwrap();
+        assert_eq!(parsed, inform);
+        assert_eq!(parsed.mnemonic_name.as_deref(), Some("YO3TCO"));
+        assert_eq!(parsed.talking_sending_party_ssi, None);
     }
 
     #[test]

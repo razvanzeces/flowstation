@@ -1,10 +1,11 @@
 mod common;
 
-use tetra_config::bluestation::StackMode;
+use tetra_config::bluestation::{CfgManualIdentity, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, TxState, debug};
 use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
 use tetra_pdus::cmce::fields::basic_service_information::BasicServiceInformation;
+use tetra_pdus::cmce::pdus::d_setup::DSetup;
 use tetra_pdus::cmce::pdus::u_setup::USetup;
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::control::call_control::CallControl;
@@ -129,6 +130,23 @@ fn count_umac_circuit_opens(msgs: &[SapMsg]) -> usize {
         .count()
 }
 
+fn parse_group_d_setup(msgs: &[SapMsg], dest_gssi: u32) -> Option<DSetup> {
+    msgs.iter().find_map(|msg| {
+        if msg.dest != TetraEntity::Mle {
+            return None;
+        }
+        let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
+            return None;
+        };
+        if prim.main_address.ssi != dest_gssi || prim.main_address.ssi_type != SsiType::Gssi {
+            return None;
+        }
+        let mut sdu = prim.sdu.clone();
+        sdu.seek(0);
+        DSetup::from_bitbuf(&mut sdu).ok()
+    })
+}
+
 #[test]
 fn test_group_setup_accepts_empty_listener_cache() {
     debug::setup_logging_verbose();
@@ -153,6 +171,39 @@ fn test_group_setup_accepts_empty_listener_cache() {
     assert!(
         count_d_setups(&initial_msgs) > 0,
         "Group U-SETUP must emit downlink call control even if listener cache is empty"
+    );
+}
+
+#[test]
+fn test_group_setup_tpi_uses_mnemonic_without_duplicate_ssi() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.identity.enabled = true;
+    config.identity.manual.push(CfgManualIdentity {
+        ssi: TEST_ISSI,
+        mnemonic: Some("YO3TCO".to_string()),
+        label: None,
+    });
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    test.submit_message(build_u_setup_msg(TEST_ISSI, TEST_GSSI));
+    test.run_stack(Some(1));
+
+    let initial_msgs = test.dump_sinks();
+    let d_setup = parse_group_d_setup(&initial_msgs, TEST_GSSI).expect("expected group D-SETUP");
+    assert_eq!(d_setup.calling_party_address_ssi, Some(TEST_ISSI));
+
+    let facility = d_setup.facility.expect("expected SS-TPI facility");
+    assert_eq!(facility.mnemonic_name.as_deref(), Some("YO3TCO"));
+    assert_eq!(
+        facility.talking_sending_party_ssi, None,
+        "Group D-SETUP already carries calling_party_address_ssi; SS-TPI must only add mnemonic"
     );
 }
 
