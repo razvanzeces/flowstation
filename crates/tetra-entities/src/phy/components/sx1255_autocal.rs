@@ -1274,15 +1274,15 @@ fn compute_loopback_compensation(
     let tone_snr_ok = tone_mag > 1.0e-9 && tone_mag.is_finite() && snr_db.is_finite() && snr_db >= cfg.rf_loopback_min_snr_db as RealSample;
     if !tone_snr_ok {
         tracing::warn!(
-            "SX1255 autocal: IQ correction disabled because calibration tone SNR {:.1} dB is below threshold {:.1} dB; DC correction eligible={}",
+            "SX1255 autocal: live correction disabled because calibration tone SNR {:.1} dB is below threshold {:.1} dB; DC correction eligible={} but capture is not trusted",
             snr_db,
             cfg.rf_loopback_min_snr_db,
             apply_dc
         );
         return Ok(RxStartupCompensation {
-            dc: if apply_dc { floor_dc } else { ComplexSample { re: 0.0, im: 0.0 } },
+            dc: ComplexSample { re: 0.0, im: 0.0 },
             image_coeff: ComplexSample { re: 0.0, im: 0.0 },
-            apply_dc,
+            apply_dc: false,
             apply_iq: false,
         });
     }
@@ -1892,7 +1892,7 @@ mod tests {
     }
 
     #[test]
-    fn loopback_low_snr_disables_iq_but_keeps_dc() {
+    fn loopback_low_snr_disables_live_correction() {
         let cfg = iq_test_cfg();
         let dc = ComplexSample { re: 0.02, im: -0.03 };
         let coeff = ComplexSample { re: 0.08, im: -0.04 };
@@ -1901,11 +1901,10 @@ mod tests {
         let neg = synthetic_tone_capture(false, false, dc, coeff);
 
         let compensation = compute_loopback_compensation(&pos, &neg, &floor, &floor, TEST_TONE_HZ, TEST_SAMPLE_RATE, TEST_BLOCK_LEN, &cfg)
-            .expect("low tone SNR should still produce DC-only calibration");
+            .expect("low tone SNR should not install live correction");
 
-        assert!(compensation.apply_dc);
+        assert!(!compensation.apply_dc);
         assert!(!compensation.apply_iq);
-        assert_complex_close(compensation.dc, dc, 1.0e-5);
     }
 
     #[test]
