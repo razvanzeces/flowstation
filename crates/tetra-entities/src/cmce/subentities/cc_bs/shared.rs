@@ -845,7 +845,7 @@ impl CcBsSubentity {
         sdu.seek(0);
 
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
-        let msg = Self::build_sapmsg_stealing(sdu, dest_addr, ts, None);
+        let msg = Self::build_sapmsg_stealing_ul_dl(sdu, dest_addr, ts, None, UlDlAssignment::Dl);
         queue.push_back(msg);
     }
 
@@ -866,7 +866,7 @@ impl CcBsSubentity {
         sdu.seek(0);
 
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
-        let msg = Self::build_sapmsg_stealing(sdu, dest_addr, ts, None);
+        let msg = Self::build_sapmsg_stealing_ul_dl(sdu, dest_addr, ts, None, UlDlAssignment::Dl);
         queue.push_back(msg);
     }
 
