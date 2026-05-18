@@ -10,8 +10,12 @@ use super::dsp_types::{ComplexSample, RealSample};
 
 const IQ_COEFF_ABS_TOLERANCE: RealSample = 0.05;
 const IQ_COEFF_REL_TOLERANCE: RealSample = 0.35;
+const IQ_REPEAT_ABS_TOLERANCE: RealSample = 0.02;
+const IQ_REPEAT_REL_TOLERANCE: RealSample = 0.25;
 const IQ_MAX_TONE_DELTA_DB: RealSample = 8.0;
 const IQ_MIN_IMAGE_IMPROVEMENT_DB: RealSample = 6.0;
+const IQ_MAX_PRE_CORRECTION_IMAGE_DBC: RealSample = -20.0;
+const IQ_MAX_HARD_COEFF: RealSample = 0.12;
 const IQ_MIN_MAIN_RETAINED_RATIO: RealSample = 0.35;
 const IQ_FLOOR_DRIFT_DISABLE_DB: RealSample = 12.0;
 const IQ_CLIP_LEVEL: RealSample = 0.98;
@@ -265,7 +269,7 @@ impl Sx1255Autocal {
             tracing::warn!("SX1255 autocal: startup loopback calibration produced no usable capture");
             return;
         }
-        let mut compensation = select_repeated_loopback_compensation(&measurements);
+        let mut compensation = select_repeated_loopback_compensation(&measurements, attempts);
 
         if compensation.enabled() {
             compensation = self.install_driver_compensation(dev, rx_ch, compensation);
@@ -380,7 +384,7 @@ impl Sx1255Autocal {
                 }
 
                 tracing::info!(
-                    "SX1255 autocal: startup temperature sample elapsed={}s temp={:.2}{} delta={:+.2} total_delta={:+.2} slope={:+.2}/min stable_checks={}/{}",
+                    "SX1255 autocal: startup temperature sample elapsed={}s temp={:.2} {} delta={:+.2} total_delta={:+.2} slope={:+.2}/min stable_checks={}/{}",
                     elapsed.as_secs(),
                     temp_c,
                     unit_label,
@@ -392,7 +396,7 @@ impl Sx1255Autocal {
                 );
             } else {
                 tracing::info!(
-                    "SX1255 autocal: startup temperature sample elapsed={}s temp={:.2}{} delta=n/a total_delta={:+.2} slope={:+.2}/min stable_checks=0/{}",
+                    "SX1255 autocal: startup temperature sample elapsed={}s temp={:.2} {} delta=n/a total_delta={:+.2} slope={:+.2}/min stable_checks=0/{}",
                     elapsed.as_secs(),
                     temp_c,
                     unit_label,
@@ -406,8 +410,9 @@ impl Sx1255Autocal {
 
             if elapsed >= min_wait && stable_checks >= required_stable_checks {
                 tracing::info!(
-                    "SX1255 autocal: startup temperature stabilized at {:.2}C after {}s",
+                    "SX1255 autocal: startup temperature stabilized at {:.2} {} after {}s",
                     temp_c,
+                    temperature_unit_label(temp_c),
                     elapsed.as_secs()
                 );
                 return;
@@ -415,9 +420,10 @@ impl Sx1255Autocal {
 
             if elapsed >= max_wait {
                 tracing::warn!(
-                    "SX1255 autocal: startup temperature stabilization reached max wait {}s at {:.2}C; continuing startup",
+                    "SX1255 autocal: startup temperature stabilization reached max wait {}s at {:.2} {}; continuing startup",
                     max_wait.as_secs(),
-                    temp_c
+                    temp_c,
+                    temperature_unit_label(temp_c)
                 );
                 return;
             }
@@ -765,7 +771,12 @@ impl Sx1255Autocal {
         match raw {
             Ok(value) => match parse_temperature_c(&value) {
                 Some(temp_c) => {
-                    tracing::debug!("SX1255 autocal: temperature {} = {:.2} C", sensor.label(), temp_c);
+                    tracing::debug!(
+                        "SX1255 autocal: temperature {} = {:.2} {}",
+                        sensor.label(),
+                        temp_c,
+                        temperature_unit_label(temp_c)
+                    );
                     Some(temp_c)
                 }
                 None => {
@@ -1035,8 +1046,8 @@ fn read_full(rx: &mut soapysdr::RxStream<ComplexSample>, out: &mut [ComplexSampl
     Ok(())
 }
 
-fn select_repeated_loopback_compensation(measurements: &[RxStartupCompensation]) -> RxStartupCompensation {
-    if measurements.len() == 1 {
+fn select_repeated_loopback_compensation(measurements: &[RxStartupCompensation], total_attempts: usize) -> RxStartupCompensation {
+    if measurements.len() == 1 && total_attempts <= 1 {
         return measurements[0];
     }
 
@@ -1049,14 +1060,57 @@ fn select_repeated_loopback_compensation(measurements: &[RxStartupCompensation])
         .filter_map(|measurement| measurement.apply_iq.then_some(measurement.image_coeff))
         .collect::<Vec<_>>();
 
-    let dc = stable_complex_value("DC", &dc_candidates, 2, DC_ATTEMPT_ABS_TOLERANCE, DC_ATTEMPT_REL_TOLERANCE);
-    let image_coeff = stable_complex_value("IQ", &iq_candidates, 2, IQ_COEFF_ABS_TOLERANCE, IQ_COEFF_REL_TOLERANCE);
+    let required_dc_inliers = repeated_dc_required_inliers(total_attempts.max(measurements.len()));
+    let dc = stable_complex_value(
+        "DC",
+        &dc_candidates,
+        required_dc_inliers,
+        DC_ATTEMPT_ABS_TOLERANCE,
+        DC_ATTEMPT_REL_TOLERANCE,
+    );
+    let required_iq_inliers = repeated_iq_required_inliers(total_attempts.max(measurements.len()));
+    let image_coeff = stable_complex_value(
+        "IQ",
+        &iq_candidates,
+        required_iq_inliers,
+        IQ_REPEAT_ABS_TOLERANCE,
+        IQ_REPEAT_REL_TOLERANCE,
+    )
+    .filter(|coeff| {
+        let coeff_abs = complex_abs(*coeff);
+        if coeff_abs <= IQ_MAX_HARD_COEFF {
+            true
+        } else {
+            tracing::warn!(
+                "SX1255 autocal: repeated IQ correction disabled; accepted cluster magnitude {:.6} exceeds hard safety limit {:.6}",
+                coeff_abs,
+                IQ_MAX_HARD_COEFF
+            );
+            false
+        }
+    });
 
     RxStartupCompensation {
         dc: dc.unwrap_or(ComplexSample { re: 0.0, im: 0.0 }),
         image_coeff: image_coeff.unwrap_or(ComplexSample { re: 0.0, im: 0.0 }),
         apply_dc: dc.is_some(),
         apply_iq: image_coeff.is_some(),
+    }
+}
+
+fn repeated_iq_required_inliers(total_attempts: usize) -> usize {
+    if total_attempts <= 1 {
+        1
+    } else {
+        total_attempts.saturating_mul(2).div_ceil(3).max(3)
+    }
+}
+
+fn repeated_dc_required_inliers(total_attempts: usize) -> usize {
+    if total_attempts <= 1 {
+        1
+    } else {
+        (total_attempts / 2 + 1).max(2)
     }
 }
 
@@ -1277,6 +1331,8 @@ fn compute_loopback_compensation(
 
         apply_iq = image_coeff_abs.is_finite()
             && image_coeff_abs <= cfg.rf_loopback_max_image_coeff as RealSample
+            && image_coeff_abs <= IQ_MAX_HARD_COEFF
+            && image_dbc <= IQ_MAX_PRE_CORRECTION_IMAGE_DBC
             && coeff_delta <= coeff_delta_limit
             && tone_delta_db <= IQ_MAX_TONE_DELTA_DB
             && same_orientation
@@ -1287,9 +1343,12 @@ fn compute_loopback_compensation(
 
         if !apply_iq {
             tracing::warn!(
-                "SX1255 autocal: IQ correction disabled (coeff_mag={:.6} limit={:.6}, coeff_delta={:.6} limit={:.6}, tone_delta={:.1} dB, orientation=+{} / -{}, floor_drift={:+.1} dB, clipped={} ({:.4}), improvement={:.1} dB, main_retained={:.2})",
+                "SX1255 autocal: IQ correction disabled (coeff_mag={:.6} limit={:.6}/hard {:.6}, image={:.1} dBc max={:.1} dBc, coeff_delta={:.6} limit={:.6}, tone_delta={:.1} dB, orientation=+{} / -{}, floor_drift={:+.1} dB, clipped={} ({:.4}), improvement={:.1} dB, main_retained={:.2})",
                 image_coeff_abs,
                 cfg.rf_loopback_max_image_coeff,
+                IQ_MAX_HARD_COEFF,
+                image_dbc,
+                IQ_MAX_PRE_CORRECTION_IMAGE_DBC,
                 coeff_delta,
                 coeff_delta_limit,
                 tone_delta_db,
@@ -1594,7 +1653,11 @@ fn estimate_tone_frequency_error(
         prev_phase = Some(phase);
     }
 
-    if count == 0 { 0.0 } else { sum_hz / count as RealSample }
+    if count == 0 {
+        0.0
+    } else {
+        sum_hz / count as RealSample
+    }
 }
 
 fn tone_bins_centered_skip_clipped(
@@ -1697,7 +1760,11 @@ fn parse_temperature_c(raw: &str) -> Option<f64> {
             break;
         }
     }
-    if token.is_empty() { None } else { token.parse::<f64>().ok() }
+    if token.is_empty() {
+        None
+    } else {
+        token.parse::<f64>().ok()
+    }
 }
 
 fn is_valid_temperature_c(value: f64) -> bool {
@@ -1705,7 +1772,11 @@ fn is_valid_temperature_c(value: f64) -> bool {
 }
 
 fn temperature_unit_label(value: f64) -> &'static str {
-    if is_valid_temperature_c(value) { "C" } else { "raw-units" }
+    if is_valid_temperature_c(value) {
+        "C"
+    } else {
+        "raw-units"
+    }
 }
 
 fn clamp_frequency_correction(freq_hz: f64, ppm: f64, max_abs_hz: f64) -> f64 {
@@ -1722,7 +1793,11 @@ mod tests {
         assert_eq!(parse_temperature_c("42.5"), Some(42.5));
         assert_eq!(parse_temperature_c("42.5 C"), Some(42.5));
         assert_eq!(parse_temperature_c("temp=-7.25C"), Some(-7.25));
+        assert_eq!(parse_temperature_c("raw=175.103"), Some(175.103));
         assert_eq!(parse_temperature_c("not available"), None);
+        assert_eq!(temperature_unit_label(42.5), "C");
+        assert_eq!(temperature_unit_label(175.103), "raw-units");
+        assert!(!is_valid_temperature_c(175.103));
     }
 
     #[test]
@@ -1761,7 +1836,7 @@ mod tests {
     fn loopback_iq_calibration_accepts_inverted_loopback_orientation() {
         let cfg = iq_test_cfg();
         let dc = ComplexSample { re: -0.01, im: 0.015 };
-        let coeff = ComplexSample { re: 0.32, im: 0.11 };
+        let coeff = ComplexSample { re: 0.07, im: 0.03 };
         let floor = synthetic_floor(dc, 0.0);
         let pos = synthetic_tone_capture(true, true, dc, coeff);
         let neg = synthetic_tone_capture(false, true, dc, coeff);
@@ -1771,6 +1846,22 @@ mod tests {
 
         assert!(compensation.apply_iq);
         assert_complex_close(compensation.image_coeff, coeff, 1.0e-5);
+    }
+
+    #[test]
+    fn loopback_iq_calibration_rejects_large_image_coefficients() {
+        let cfg = iq_test_cfg();
+        let dc = ComplexSample { re: 0.0, im: 0.0 };
+        let coeff = ComplexSample { re: -0.022, im: 0.381 };
+        let floor = synthetic_floor(dc, 0.0);
+        let pos = synthetic_tone_capture(true, false, dc, coeff);
+        let neg = synthetic_tone_capture(false, false, dc, coeff);
+
+        let compensation = compute_loopback_compensation(&pos, &neg, &floor, &floor, TEST_TONE_HZ, TEST_SAMPLE_RATE, TEST_BLOCK_LEN, &cfg)
+            .expect("large IQ coeff should fall back to DC-only");
+
+        assert!(compensation.apply_dc);
+        assert!(!compensation.apply_iq);
     }
 
     #[test]
@@ -1846,12 +1937,65 @@ mod tests {
             },
         ];
 
-        let compensation = select_repeated_loopback_compensation(&measurements);
+        let compensation = select_repeated_loopback_compensation(&measurements, measurements.len());
 
         assert!(compensation.apply_dc);
         assert!(!compensation.apply_iq);
         assert!((compensation.dc.re - 0.10966667).abs() < 1.0e-5);
         assert!((compensation.dc.im - 0.061).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn repeated_loopback_rejects_two_of_six_unstable_iq_candidates() {
+        let measurements = vec![
+            rx_cal(Some((0.01, -0.01)), Some((-0.330, 0.279))),
+            rx_cal(Some((0.012, -0.009)), Some((0.368, -0.152))),
+            rx_cal(Some((0.011, -0.011)), None),
+            rx_cal(Some((0.010, -0.010)), None),
+            rx_cal(Some((0.013, -0.008)), None),
+            rx_cal(Some((0.012, -0.010)), None),
+        ];
+
+        let compensation = select_repeated_loopback_compensation(&measurements, 6);
+
+        assert!(compensation.apply_dc);
+        assert!(!compensation.apply_iq);
+    }
+
+    #[test]
+    fn repeated_loopback_rejects_three_of_six_unstable_dc_candidates() {
+        let measurements = vec![
+            rx_cal(Some((0.190, -0.010)), None),
+            rx_cal(Some((0.195, -0.007)), None),
+            rx_cal(Some((0.199, -0.005)), None),
+            rx_cal(Some((-0.181, 0.094)), None),
+            rx_cal(Some((0.106, -0.164)), None),
+            rx_cal(Some((-0.203, 0.012)), None),
+        ];
+
+        let compensation = select_repeated_loopback_compensation(&measurements, 6);
+
+        assert!(!compensation.apply_dc);
+        assert!(!compensation.apply_iq);
+    }
+
+    #[test]
+    fn repeated_loopback_accepts_four_of_six_stable_iq_candidates() {
+        let measurements = vec![
+            rx_cal(Some((0.01, -0.01)), Some((0.041, -0.019))),
+            rx_cal(Some((0.012, -0.009)), Some((0.039, -0.021))),
+            rx_cal(Some((0.011, -0.011)), Some((0.043, -0.018))),
+            rx_cal(Some((0.010, -0.010)), Some((0.040, -0.020))),
+            rx_cal(Some((0.013, -0.008)), None),
+            rx_cal(Some((0.012, -0.010)), None),
+        ];
+
+        let compensation = select_repeated_loopback_compensation(&measurements, 6);
+
+        assert!(compensation.apply_dc);
+        assert!(compensation.apply_iq);
+        assert!((compensation.image_coeff.re - 0.04075).abs() < 1.0e-5);
+        assert!((compensation.image_coeff.im + 0.0195).abs() < 1.0e-5);
     }
 
     const TEST_SAMPLE_RATE: RealSample = 600_000.0;
@@ -1909,6 +2053,19 @@ mod tests {
                 dc + positive_bin * positive_ref + negative_bin * negative_ref
             })
             .collect()
+    }
+
+    fn rx_cal(dc: Option<(RealSample, RealSample)>, iq: Option<(RealSample, RealSample)>) -> RxStartupCompensation {
+        RxStartupCompensation {
+            dc: dc
+                .map(|(re, im)| ComplexSample { re, im })
+                .unwrap_or(ComplexSample { re: 0.0, im: 0.0 }),
+            image_coeff: iq
+                .map(|(re, im)| ComplexSample { re, im })
+                .unwrap_or(ComplexSample { re: 0.0, im: 0.0 }),
+            apply_dc: dc.is_some(),
+            apply_iq: iq.is_some(),
+        }
     }
 
     fn assert_complex_close(actual: ComplexSample, expected: ComplexSample, tolerance: RealSample) {

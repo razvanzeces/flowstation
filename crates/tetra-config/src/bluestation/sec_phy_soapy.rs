@@ -99,10 +99,10 @@ impl Default for CfgSx1255Autocal {
             allow_periodic_temperature_read: false,
             temperature_sensor: None,
             temperature_sensor_keys: vec![
-                "temperature".to_string(),
-                "temp".to_string(),
                 "sx1255_temperature".to_string(),
                 "sx1255_temp".to_string(),
+                "temperature".to_string(),
+                "temp".to_string(),
             ],
             startup_temperature_stabilize: false,
             startup_temperature_interval_secs: 10,
