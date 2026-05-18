@@ -425,6 +425,7 @@ struct TxSignalMonitor {
     fft: Arc<dyn rustfft::Fft<RealSample>>,
     fft_buffer: Vec<ComplexSample>,
     window: Vec<RealSample>,
+    abs_phase: i8,
     min_block_gap: fcfb::BlockCount,
     next_block: fcfb::BlockCount,
 }
@@ -448,6 +449,7 @@ impl TxSignalMonitor {
             fft,
             fft_buffer: vec![ComplexSample::ZERO; Self::FFT_LEN],
             window,
+            abs_phase: 0,
             min_block_gap: 33,
             next_block: 0,
         }
@@ -485,7 +487,7 @@ impl TxSignalMonitor {
             })
             .collect();
 
-        let constellation_iq = self.differential_constellation(tx_slots);
+        let constellation_iq = self.absolute_constellation(tx_slots);
 
         self.sink.send(TelemetryEvent::TxMonitor {
             sample_rate: self.sample_rate,
@@ -497,17 +499,19 @@ impl TxSignalMonitor {
         });
     }
 
-    fn differential_constellation(&self, tx_slots: &[TxSlotBits]) -> Vec<i16> {
+    fn absolute_constellation(&mut self, tx_slots: &[TxSlotBits]) -> Vec<i16> {
         let mut points = Vec::with_capacity(Self::CONSTELLATION_POINTS * 2);
         for slot in tx_slots {
             let Some(bits) = slot.slot else { continue };
             for pair in bits.chunks_exact(2).take(Self::CONSTELLATION_POINTS - points.len() / 2) {
-                let phase = match (pair[0] != 0, pair[1] != 0) {
-                    (true, true) => -3.0 * std::f32::consts::FRAC_PI_4,
-                    (true, false) => -std::f32::consts::FRAC_PI_4,
-                    (false, false) => std::f32::consts::FRAC_PI_4,
-                    (false, true) => 3.0 * std::f32::consts::FRAC_PI_4,
+                let phase_inc = match (pair[0] != 0, pair[1] != 0) {
+                    (true, true) => -3,
+                    (true, false) => -1,
+                    (false, false) => 1,
+                    (false, true) => 3,
                 };
+                self.abs_phase = (self.abs_phase + phase_inc) & 7;
+                let phase = self.abs_phase as RealSample * std::f32::consts::FRAC_PI_4;
                 points.push((phase.cos() * 32767.0).round() as i16);
                 points.push((phase.sin() * 32767.0).round() as i16);
                 if points.len() >= Self::CONSTELLATION_POINTS * 2 {

@@ -854,11 +854,11 @@ td code{
           <canvas id="rf-spectrum" class="rf-canvas" width="900" height="260"></canvas>
         </div>
         <div class="rf-panel">
-          <div class="rf-panel-title"><span>TX TETRA Constellation</span><span>π/4 DQPSK</span></div>
+          <div class="rf-panel-title"><span>TX Symbol Constellation</span><span id="rf-vector">π/4 DQPSK</span></div>
           <canvas id="rf-constellation" class="rf-canvas small" width="420" height="260"></canvas>
         </div>
         <div class="rf-panel" style="grid-column:1/-1">
-          <div class="rf-panel-title"><span>TX Waterfall</span><span>WebSocket live</span></div>
+          <div class="rf-panel-title"><span>TX Spectrum Waterfall</span><span>live / avg / max</span></div>
           <canvas id="rf-waterfall" class="rf-canvas" width="1100" height="260"></canvas>
         </div>
       </div>
@@ -1395,7 +1395,7 @@ function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocks();}
 
 // ── RF Monitor ───────────────────────────────────────────────────────────
-const rfState={waterfall:[],lastTs:0,frames:0,rateTs:0};
+const rfState={waterfall:[],avg:null,maxHold:null,lastTs:0,frames:0,rateTs:0};
 function fmtMHz(v){return v?`${(v/1e6).toFixed(6)} MHz`:'—';}
 function rfResizeCanvas(id){
   const c=document.getElementById(id);if(!c)return null;
@@ -1413,6 +1413,7 @@ function updateRfMonitor(msg){
   document.getElementById('rf-rms').textContent=`${msg.rms_dbfs.toFixed(1)} dBFS`;
   document.getElementById('rf-peak').textContent=`${msg.peak_dbfs.toFixed(1)} dBFS`;
   const spectrum=(msg.spectrum_db_tenths||[]).map(v=>v/10);
+  updateRfTraces(spectrum);
   drawRfSpectrum(spectrum,msg.sample_rate||600000);
   drawRfConstellation(msg.constellation_iq||[]);
   rfState.waterfall.push(spectrum);
@@ -1432,34 +1433,86 @@ function drawRfGrid(ctx,w,h,yMin,yMax,fs){
     const db=yMax-i*(yMax-yMin)/5;ctx.fillText(db.toFixed(0),6,y+4);
   }
 }
+function updateRfTraces(spec){
+  if(!spec.length)return;
+  if(!rfState.avg||rfState.avg.length!==spec.length){
+    rfState.avg=spec.slice();
+    rfState.maxHold=spec.slice();
+    return;
+  }
+  for(let i=0;i<spec.length;i++){
+    rfState.avg[i]=rfState.avg[i]*0.86+spec[i]*0.14;
+    rfState.maxHold[i]=Math.max(rfState.maxHold[i]-0.08,spec[i]);
+  }
+}
+function rfY(v,h,yMin,yMax){
+  return 10+(yMax-Math.max(yMin,Math.min(yMax,v)))*(h-34)/(yMax-yMin);
+}
+function drawRfTrace(ctx,trace,w,h,yMin,yMax,color,width,alpha){
+  if(!trace||!trace.length)return;
+  ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();
+  for(let i=0;i<trace.length;i++){
+    const x=40+i*(w-50)/(trace.length-1),y=rfY(trace[i],h,yMin,yMax);
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  }
+  ctx.stroke();ctx.restore();
+}
 function drawRfSpectrum(spec,fs){
   const c=rfResizeCanvas('rf-spectrum');if(!c||!spec.length)return;
   const ctx=c.getContext('2d'),w=c.width,h=c.height,yMin=-120,yMax=0;
   drawRfGrid(ctx,w,h,yMin,yMax,fs);
-  ctx.strokeStyle='#4dd8ff';ctx.lineWidth=2;ctx.beginPath();
-  for(let i=0;i<spec.length;i++){
-    const x=40+i*(w-50)/(spec.length-1);
-    const y=10+(yMax-Math.max(yMin,Math.min(yMax,spec[i])))*(h-34)/(yMax-yMin);
-    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  if(rfState.avg&&rfState.avg.length===spec.length){
+    const base=rfY(yMin,h,yMin,yMax);
+    ctx.fillStyle='rgba(255,215,64,0.13)';ctx.beginPath();
+    for(let i=0;i<rfState.avg.length;i++){
+      const x=40+i*(w-50)/(rfState.avg.length-1),y=rfY(rfState.avg[i],h,yMin,yMax);
+      if(i===0)ctx.moveTo(x,base);
+      ctx.lineTo(x,y);
+    }
+    ctx.lineTo(w-10,base);ctx.closePath();ctx.fill();
   }
-  ctx.stroke();
+  drawRfTrace(ctx,rfState.maxHold,w,h,yMin,yMax,'#ff3b30',1.5,0.95);
+  drawRfTrace(ctx,rfState.avg,w,h,yMin,yMax,'#ffd84a',2,0.9);
+  drawRfTrace(ctx,spec,w,h,yMin,yMax,'#f2f7ff',2,1);
+  ctx.fillStyle='rgba(255,255,255,0.78)';ctx.font='12px monospace';
+  ctx.fillText('LIVE',w-150,20);ctx.fillStyle='#ffd84a';ctx.fillText('AVG',w-108,20);ctx.fillStyle='#ff3b30';ctx.fillText('MAX',w-70,20);
 }
 function drawRfConstellation(iq){
   const c=rfResizeCanvas('rf-constellation');if(!c)return;
   const ctx=c.getContext('2d'),w=c.width,h=c.height,cx=w/2,cy=h/2,s=Math.min(w,h)*0.43;
   ctx.fillStyle='#050607';ctx.fillRect(0,0,w,h);
-  ctx.strokeStyle='rgba(255,255,255,0.16)';ctx.beginPath();ctx.moveTo(cx,8);ctx.lineTo(cx,h-8);ctx.moveTo(8,cy);ctx.lineTo(w-8,cy);ctx.stroke();
-  ctx.strokeStyle='rgba(0,212,168,0.25)';ctx.beginPath();ctx.arc(cx,cy,s,0,Math.PI*2);ctx.stroke();
-  ctx.fillStyle='#24a2ff';
-  for(let i=0;i+1<iq.length;i+=2){
-    const x=cx+(iq[i]/32767)*s,y=cy-(iq[i+1]/32767)*s;
-    ctx.fillRect(x-1,y-1,2,2);
+  ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.beginPath();ctx.moveTo(cx,8);ctx.lineTo(cx,h-8);ctx.moveTo(8,cy);ctx.lineTo(w-8,cy);ctx.stroke();
+  ctx.strokeStyle='rgba(255,255,255,0.08)';
+  for(const r of [0.5,1.0]){ctx.beginPath();ctx.arc(cx,cy,s*r,0,Math.PI*2);ctx.stroke();}
+  const ideals=[];
+  for(let k=0;k<8;k++){
+    const a=k*Math.PI/4,x=cx+Math.cos(a)*s,y=cy-Math.sin(a)*s;
+    ideals.push([Math.cos(a),Math.sin(a)]);
+    ctx.strokeStyle='rgba(0,212,168,0.65)';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='rgba(0,212,168,0.32)';ctx.fillRect(x-1.5,y-1.5,3,3);
   }
+  ctx.fillStyle='rgba(76,216,255,0.82)';
+  let err2=0,peak=0,count=0;
+  for(let i=0;i+1<iq.length;i+=2){
+    const ix=iq[i]/32767,iy=iq[i+1]/32767,x=cx+ix*s,y=cy-iy*s;
+    let best=10;
+    for(const p of ideals){
+      const e=Math.hypot(ix-p[0],iy-p[1]);
+      if(e<best)best=e;
+    }
+    err2+=best*best;peak=Math.max(peak,best);count++;
+    ctx.fillRect(x-1.3,y-1.3,2.6,2.6);
+  }
+  const rms=count?Math.sqrt(err2/count)*100:0,pk=peak*100;
+  const label=document.getElementById('rf-vector');
+  if(label)label.textContent=count?`RMS ${rms.toFixed(1)}%  PK ${pk.toFixed(1)}%`:'π/4 DQPSK';
 }
 function wfColor(v){
-  const t=Math.max(0,Math.min(1,(v+105)/65));
-  const r=Math.floor(20+235*t),g=Math.floor(60+180*Math.sqrt(t)),b=Math.floor(210*(1-t));
-  return `rgb(${r},${g},${b})`;
+  const t=Math.max(0,Math.min(1,(v+110)/72));
+  const stops=[[5,8,28],[30,42,130],[0,160,220],[35,210,90],[245,220,55],[245,80,25],[255,245,210]];
+  const p=t*(stops.length-1),i=Math.min(stops.length-2,Math.floor(p)),f=p-i,a=stops[i],b=stops[i+1];
+  const r=Math.round(a[0]+(b[0]-a[0])*f),g=Math.round(a[1]+(b[1]-a[1])*f),bb=Math.round(a[2]+(b[2]-a[2])*f);
+  return `rgb(${r},${g},${bb})`;
 }
 function drawRfWaterfall(){
   const c=rfResizeCanvas('rf-waterfall');if(!c)return;
