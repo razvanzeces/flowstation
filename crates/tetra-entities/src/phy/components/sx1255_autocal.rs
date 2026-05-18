@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::net_telemetry::{TelemetryEvent, TelemetrySink};
 use soapysdr::{Args, Device, Direction};
 use tetra_config::bluestation::CfgSx1255Autocal;
 
@@ -221,6 +222,7 @@ impl Sx1255Autocal {
         rx_sample_rate: f64,
         rx_args: &[(String, String)],
         tx_args: &[(String, String)],
+        telemetry: Option<&TelemetrySink>,
     ) {
         if !self.cfg.enabled || !self.cfg.startup || !self.cfg.rf_loopback_startup_calibration {
             return;
@@ -251,7 +253,7 @@ impl Sx1255Autocal {
             }
 
             tracing::info!("SX1255 autocal: loopback calibration attempt {}/{}", attempt, attempts);
-            match self.measure_loopback_calibration(dev, rx_ch, tx_ch, rx_sample_rate, rx_args, tx_args) {
+            match self.measure_loopback_calibration(dev, rx_ch, tx_ch, rx_sample_rate, rx_args, tx_args, telemetry) {
                 Ok(compensation) => {
                     measurements.push(compensation);
                 }
@@ -602,6 +604,7 @@ impl Sx1255Autocal {
         rx_sample_rate: f64,
         rx_args: &[(String, String)],
         tx_args: &[(String, String)],
+        telemetry: Option<&TelemetrySink>,
     ) -> Result<RxStartupCompensation, String> {
         if rx_sample_rate <= 0.0 {
             return Err("RX sample rate is not available".to_string());
@@ -685,6 +688,16 @@ impl Sx1255Autocal {
                             let tone_pos_samples =
                                 capture_loopback_blocks(&mut rx, &mut tx, &tone_pos_block, settle_blocks, capture_blocks, block_len)
                                     .map_err(|err| format!("positive-tone capture failed: {}", err))?;
+                            if let Some(sink) = telemetry {
+                                send_rf_loopback_monitor(
+                                    sink,
+                                    &tone_pos_samples,
+                                    rx_sample_rate as RealSample,
+                                    calibration_frequency.unwrap_or(0.0),
+                                    *tone as RealSample,
+                                    *amplitude,
+                                );
+                            }
 
                             let floor_after_samples =
                                 capture_loopback_blocks(&mut rx, &mut tx, &zero_block, settle_blocks, floor_blocks, block_len)
@@ -1103,6 +1116,88 @@ fn make_tone_block(block_len: usize, tone_hz: f64, sample_rate: RealSample, ampl
                 re: amplitude * phase.cos(),
                 im: amplitude * phase.sin(),
             }
+        })
+        .collect()
+}
+
+fn send_rf_loopback_monitor(
+    sink: &TelemetrySink,
+    samples: &[ComplexSample],
+    sample_rate: RealSample,
+    center_freq_hz: f64,
+    tone_hz: RealSample,
+    amplitude: RealSample,
+) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let mut peak2: RealSample = 0.0;
+    let mut sum2: RealSample = 0.0;
+    for sample in samples {
+        let p = sample.norm_sqr();
+        peak2 = peak2.max(p);
+        sum2 += p;
+    }
+    let rms = (sum2 / samples.len() as RealSample).sqrt();
+    let rms_dbfs = 20.0 * rms.max(1.0e-12).log10();
+    let peak_dbfs = 20.0 * peak2.sqrt().max(1.0e-12).log10();
+
+    sink.send(TelemetryEvent::RfLoopbackMonitor {
+        sample_rate,
+        center_freq_hz,
+        tone_hz,
+        amplitude,
+        rms_dbfs,
+        peak_dbfs,
+        spectrum_db_tenths: monitor_spectrum(samples),
+        constellation_iq: monitor_iq_points(samples),
+    });
+}
+
+fn monitor_iq_points(samples: &[ComplexSample]) -> Vec<i16> {
+    const POINTS: usize = 192;
+    let stride = (samples.len() / POINTS).max(1);
+    samples
+        .iter()
+        .step_by(stride)
+        .take(POINTS)
+        .flat_map(|sample| {
+            [
+                (sample.re.clamp(-1.0, 1.0) * 32767.0).round() as i16,
+                (sample.im.clamp(-1.0, 1.0) * 32767.0).round() as i16,
+            ]
+        })
+        .collect()
+}
+
+fn monitor_spectrum(samples: &[ComplexSample]) -> Vec<i16> {
+    const FFT_LEN: usize = 256;
+    if samples.is_empty() {
+        return Vec::new();
+    }
+
+    let start = samples.len().saturating_sub(FFT_LEN) / 2;
+    (0..FFT_LEN)
+        .map(|out_i| {
+            let bin = (out_i + FFT_LEN / 2) % FFT_LEN;
+            let mut acc = ComplexSample { re: 0.0, im: 0.0 };
+            for n in 0..FFT_LEN {
+                let sample = samples.get(start + n).copied().unwrap_or(ComplexSample { re: 0.0, im: 0.0 });
+                let window_phase = std::f32::consts::TAU * n as RealSample / (FFT_LEN - 1) as RealSample;
+                let window = 0.5 - 0.5 * window_phase.cos();
+                let phase = -std::f32::consts::TAU * bin as RealSample * n as RealSample / FFT_LEN as RealSample;
+                acc += sample
+                    * window
+                    * ComplexSample {
+                        re: phase.cos(),
+                        im: phase.sin(),
+                    };
+            }
+            let mag = acc.norm() / FFT_LEN as RealSample;
+            (20.0 * mag.max(1.0e-12).log10() * 10.0)
+                .round()
+                .clamp(i16::MIN as RealSample, i16::MAX as RealSample) as i16
         })
         .collect()
 }

@@ -1,3 +1,4 @@
+use crate::net_telemetry::TelemetrySink;
 use soapysdr;
 use tetra_config::bluestation::{SharedConfig, StackMode, sec_phy_soapy::CfgSoapySdr};
 
@@ -63,7 +64,7 @@ macro_rules! soapycheck {
 }
 
 impl SoapyIo {
-    pub fn new(cfg: &SharedConfig) -> Result<Self, soapysdr::Error> {
+    pub fn new(cfg: &SharedConfig, telemetry: Option<TelemetrySink>) -> Result<Self, soapysdr::Error> {
         let binding = cfg.config();
         let soapy_cfg = binding
             .phy_io
@@ -165,7 +166,7 @@ impl SoapyIo {
         }
 
         sx1255_autocal.startup(&dev, rx_ch, tx_ch);
-        sx1255_autocal.startup_loopback_calibration(&dev, rx_ch, tx_ch, rx_fs, &sdr_settings.rx_args, &sdr_settings.tx_args);
+        sx1255_autocal.startup_loopback_calibration(&dev, rx_ch, tx_ch, rx_fs, &sdr_settings.rx_args, &sdr_settings.tx_args, telemetry.as_ref());
 
         let mut rx_args = soapysdr::Args::new();
         for (key, value) in sdr_settings.rx_args {

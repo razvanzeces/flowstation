@@ -387,7 +387,7 @@ impl DashboardServer {
                 TelemetryEvent::TsVoiceActivity { .. } => {
                     // Handled below with rate limiting — no state update needed
                 }
-                TelemetryEvent::TxMonitor { .. } => {
+                TelemetryEvent::TxMonitor { .. } | TelemetryEvent::RfLoopbackMonitor { .. } => {
                     // Stateless live RF monitor payload.
                 }
             }
@@ -485,6 +485,26 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             "type":"tx_monitor",
             "sample_rate":sample_rate,
             "center_freq_hz":center_freq_hz,
+            "rms_dbfs":rms_dbfs,
+            "peak_dbfs":peak_dbfs,
+            "spectrum_db_tenths":spectrum_db_tenths,
+            "constellation_iq":constellation_iq,
+        }),
+        TelemetryEvent::RfLoopbackMonitor {
+            sample_rate,
+            center_freq_hz,
+            tone_hz,
+            amplitude,
+            rms_dbfs,
+            peak_dbfs,
+            spectrum_db_tenths,
+            constellation_iq,
+        } => serde_json::json!({
+            "type":"rf_loopback_monitor",
+            "sample_rate":sample_rate,
+            "center_freq_hz":center_freq_hz,
+            "tone_hz":tone_hz,
+            "amplitude":amplitude,
             "rms_dbfs":rms_dbfs,
             "peak_dbfs":peak_dbfs,
             "spectrum_db_tenths":spectrum_db_tenths,

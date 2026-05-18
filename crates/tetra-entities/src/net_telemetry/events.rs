@@ -58,4 +58,15 @@ pub enum TelemetryEvent {
         spectrum_db_tenths: Vec<i16>,
         constellation_iq: Vec<i16>,
     },
+    /// RF loopback IQ monitor frame captured from the SXceiver RX LB path during autocal.
+    RfLoopbackMonitor {
+        sample_rate: f32,
+        center_freq_hz: f64,
+        tone_hz: f32,
+        amplitude: f32,
+        rms_dbfs: f32,
+        peak_dbfs: f32,
+        spectrum_db_tenths: Vec<i16>,
+        constellation_iq: Vec<i16>,
+    },
 }

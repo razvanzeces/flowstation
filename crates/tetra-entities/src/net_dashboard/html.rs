@@ -1348,6 +1348,8 @@ function handleMsg(msg){
       tsVoice(msg.ts);break;
     case 'tx_monitor':
       updateRfMonitor(msg);break;
+    case 'rf_loopback_monitor':
+      updateRfMonitor(msg);break;
     case 'speaker_changed':
       if(state.calls[msg.call_id])state.calls[msg.call_id].active_speaker=msg.speaker_issi;
       if(msg.last_heard){pushLastHeard(msg.last_heard);renderLastHeard();}
@@ -1409,13 +1411,16 @@ function updateRfMonitor(msg){
   if(!rfState.rateTs)rfState.rateTs=rfState.lastTs;
   const dt=(rfState.lastTs-rfState.rateTs)/1000;
   if(dt>=1){document.getElementById('rf-rate').textContent=`${(rfState.frames/dt).toFixed(1)} fps`;rfState.frames=0;rfState.rateTs=rfState.lastTs;}
+  const isLoopback=msg.type==='rf_loopback_monitor';
   document.getElementById('rf-center').textContent=fmtMHz(msg.center_freq_hz);
   document.getElementById('rf-rms').textContent=`${msg.rms_dbfs.toFixed(1)} dBFS`;
   document.getElementById('rf-peak').textContent=`${msg.peak_dbfs.toFixed(1)} dBFS`;
+  const age=document.getElementById('rf-age');
+  if(age)age.textContent=isLoopback?`RF LB ${Number(msg.tone_hz||0).toFixed(0)} Hz @ ${Number(msg.amplitude||0).toFixed(2)}`:'TX DSP live';
   const spectrum=(msg.spectrum_db_tenths||[]).map(v=>v/10);
   updateRfTraces(spectrum);
   drawRfSpectrum(spectrum,msg.sample_rate||600000);
-  drawRfConstellation(msg.constellation_iq||[]);
+  drawRfConstellation(msg.constellation_iq||[],isLoopback);
   rfState.waterfall.push(spectrum);
   if(rfState.waterfall.length>180)rfState.waterfall.shift();
   drawRfWaterfall();
@@ -1477,7 +1482,7 @@ function drawRfSpectrum(spec,fs){
   ctx.fillStyle='rgba(255,255,255,0.78)';ctx.font='12px monospace';
   ctx.fillText('LIVE',w-150,20);ctx.fillStyle='#ffd84a';ctx.fillText('AVG',w-108,20);ctx.fillStyle='#ff3b30';ctx.fillText('MAX',w-70,20);
 }
-function drawRfConstellation(iq){
+function drawRfConstellation(iq,isLoopback=false){
   const c=rfResizeCanvas('rf-constellation');if(!c)return;
   const ctx=c.getContext('2d'),w=c.width,h=c.height,cx=w/2,cy=h/2,s=Math.min(w,h)*0.43;
   ctx.fillStyle='#050607';ctx.fillRect(0,0,w,h);
@@ -1485,27 +1490,32 @@ function drawRfConstellation(iq){
   ctx.strokeStyle='rgba(255,255,255,0.08)';
   for(const r of [0.5,1.0]){ctx.beginPath();ctx.arc(cx,cy,s*r,0,Math.PI*2);ctx.stroke();}
   const ideals=[];
-  for(let k=0;k<8;k++){
-    const a=k*Math.PI/4,x=cx+Math.cos(a)*s,y=cy-Math.sin(a)*s;
-    ideals.push([Math.cos(a),Math.sin(a)]);
-    ctx.strokeStyle='rgba(0,212,168,0.65)';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.stroke();
-    ctx.fillStyle='rgba(0,212,168,0.32)';ctx.fillRect(x-1.5,y-1.5,3,3);
+  if(!isLoopback){
+    for(let k=0;k<8;k++){
+      const a=k*Math.PI/4,x=cx+Math.cos(a)*s,y=cy-Math.sin(a)*s;
+      ideals.push([Math.cos(a),Math.sin(a)]);
+      ctx.strokeStyle='rgba(0,212,168,0.65)';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.stroke();
+      ctx.fillStyle='rgba(0,212,168,0.32)';ctx.fillRect(x-1.5,y-1.5,3,3);
+    }
   }
   ctx.fillStyle='rgba(76,216,255,0.82)';
   let err2=0,peak=0,count=0;
   for(let i=0;i+1<iq.length;i+=2){
     const ix=iq[i]/32767,iy=iq[i+1]/32767,x=cx+ix*s,y=cy-iy*s;
-    let best=10;
-    for(const p of ideals){
-      const e=Math.hypot(ix-p[0],iy-p[1]);
-      if(e<best)best=e;
+    let best=Math.hypot(ix,iy);
+    if(ideals.length){
+      best=10;
+      for(const p of ideals){
+        const e=Math.hypot(ix-p[0],iy-p[1]);
+        if(e<best)best=e;
+      }
     }
     err2+=best*best;peak=Math.max(peak,best);count++;
     ctx.fillRect(x-1.3,y-1.3,2.6,2.6);
   }
   const rms=count?Math.sqrt(err2/count)*100:0,pk=peak*100;
   const label=document.getElementById('rf-vector');
-  if(label)label.textContent=count?`RMS ${rms.toFixed(1)}%  PK ${pk.toFixed(1)}%`:'π/4 DQPSK';
+  if(label)label.textContent=count?(isLoopback?`RF LB RMS ${rms.toFixed(1)}% PK ${pk.toFixed(1)}%`:`RMS ${rms.toFixed(1)}%  PK ${pk.toFixed(1)}%`):(isLoopback?'RF LB':'full-scale IQ');
 }
 function wfColor(v){
   const t=Math.max(0,Math.min(1,(v+110)/72));
@@ -1528,7 +1538,7 @@ function drawRfWaterfall(){
     }
   }
 }
-setInterval(()=>{if(rfState.lastTs){document.getElementById('rf-age').textContent=`${((Date.now()-rfState.lastTs)/1000).toFixed(1)}s`;};},250);
+setInterval(()=>{if(rfState.lastTs){const el=document.getElementById('rf-age');if(el&&!el.textContent.startsWith('RF LB'))el.textContent=`${((Date.now()-rfState.lastTs)/1000).toFixed(1)}s`;};},250);
 
 // ── TS Visualizer ─────────────────────────────────────────────────────────
 // ts_state[ts-1]: {call_id, call_type, label, sub, voice_ts} (voice_ts = Date.now() of last frame)

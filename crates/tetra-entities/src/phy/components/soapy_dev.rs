@@ -80,7 +80,7 @@ impl RxTxDevSoapySdr {
             ..Default::default()
         };
 
-        let mut sdr = soapyio::SoapyIo::new(cfg).unwrap();
+        let mut sdr = soapyio::SoapyIo::new(cfg, telemetry.clone()).unwrap();
 
         Self {
             rx_dsp: if sdr.rx_enabled() {
@@ -425,7 +425,6 @@ struct TxSignalMonitor {
     fft: Arc<dyn rustfft::Fft<RealSample>>,
     fft_buffer: Vec<ComplexSample>,
     window: Vec<RealSample>,
-    constellation_phase: RealSample,
     constellation_history: Vec<ComplexSample>,
     min_block_gap: fcfb::BlockCount,
     next_block: fcfb::BlockCount,
@@ -450,7 +449,6 @@ impl TxSignalMonitor {
             fft,
             fft_buffer: vec![ComplexSample::ZERO; Self::FFT_LEN],
             window,
-            constellation_phase: 0.0,
             constellation_history: Vec::with_capacity(Self::CONSTELLATION_POINTS),
             min_block_gap: 33,
             next_block: 0,
@@ -508,19 +506,30 @@ impl TxSignalMonitor {
             return Vec::new();
         }
 
-        let mut sample_at = self.constellation_phase;
+        let phase = symbol_timing_phase(samples, samples_per_symbol);
+        let mut frame_points = Vec::new();
+        let mut sample_at = phase;
         while sample_at < samples.len() as RealSample {
             let idx = sample_at.round() as usize;
             if let Some(sample) = samples.get(idx) {
-                self.constellation_history.push(*sample);
-                if self.constellation_history.len() > Self::CONSTELLATION_POINTS {
-                    let excess = self.constellation_history.len() - Self::CONSTELLATION_POINTS;
-                    self.constellation_history.drain(0..excess);
-                }
+                frame_points.push(*sample);
             }
             sample_at += samples_per_symbol;
         }
-        self.constellation_phase = sample_at - samples.len() as RealSample;
+
+        let rotation = constellation_rotation(&frame_points).unwrap_or(0.0);
+        let (sin_rot, cos_rot) = rotation.sin_cos();
+        for sample in frame_points {
+            let derotated = ComplexSample {
+                re: sample.re * cos_rot + sample.im * sin_rot,
+                im: sample.im * cos_rot - sample.re * sin_rot,
+            };
+            self.constellation_history.push(derotated);
+            if self.constellation_history.len() > Self::CONSTELLATION_POINTS {
+                let excess = self.constellation_history.len() - Self::CONSTELLATION_POINTS;
+                self.constellation_history.drain(0..excess);
+            }
+        }
 
         let mut points = Vec::with_capacity(self.constellation_history.len() * 2);
         for sample in &self.constellation_history {
@@ -528,6 +537,66 @@ impl TxSignalMonitor {
             points.push((sample.im.clamp(-1.0, 1.0) * 32767.0).round() as i16);
         }
         points
+    }
+}
+
+fn symbol_timing_phase(samples: &[ComplexSample], samples_per_symbol: RealSample) -> RealSample {
+    const STEPS: usize = 64;
+    let mut best_phase = 0.0;
+    let mut best_score = -1.0;
+
+    for step in 0..STEPS {
+        let phase = samples_per_symbol * step as RealSample / STEPS as RealSample;
+        let mut sample_at = phase;
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        while sample_at < samples.len() as RealSample {
+            let idx = sample_at.round() as usize;
+            if let Some(sample) = samples.get(idx) {
+                sum += sample.norm_sqr();
+                count += 1;
+            }
+            sample_at += samples_per_symbol;
+        }
+        if count == 0 {
+            continue;
+        }
+        let score = sum / count as RealSample;
+        if score > best_score {
+            best_score = score;
+            best_phase = phase;
+        }
+    }
+
+    best_phase
+}
+
+fn constellation_rotation(points: &[ComplexSample]) -> Option<RealSample> {
+    let max_radius = points.iter().map(|point| point.norm()).fold(0.0, RealSample::max);
+    if max_radius <= 1.0e-6 {
+        return None;
+    }
+
+    let min_radius = max_radius * 0.35;
+    let mut sum_re = 0.0;
+    let mut sum_im = 0.0;
+    let mut weight_sum = 0.0;
+    for point in points {
+        let radius = point.norm();
+        if radius < min_radius {
+            continue;
+        }
+        let phase = point.im.atan2(point.re) * 8.0;
+        let weight = radius * radius;
+        sum_re += phase.cos() * weight;
+        sum_im += phase.sin() * weight;
+        weight_sum += weight;
+    }
+
+    if weight_sum <= 1.0e-9 {
+        None
+    } else {
+        Some(sum_im.atan2(sum_re) / 8.0)
     }
 }
 
