@@ -113,19 +113,7 @@ fn start_control_worker(cfg: SharedConfig, command_dispatchers: HashMap<TetraEnt
 fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySource>, HashMap<TetraEntity, CommandDispatcher>) {
     let mut router = MessageRouter::new(cfg.clone());
 
-    // Add suitable Phy component based on PhyIo type
-    match cfg.config().phy_io.backend {
-        PhyBackend::SoapySdr => {
-            let rxdev = RxTxDevSoapySdr::new(cfg);
-            let phy = PhyBs::new(cfg.clone(), rxdev);
-            router.register_entity(Box::new(phy));
-        }
-        _ => {
-            panic!("Unsupported PhyIo type: {:?}", cfg.config().phy_io.backend);
-        }
-    }
-
-    // Build telemetry sink/source — always create if either telemetry or dashboard is enabled
+    // Build telemetry sink/source before PHY so the TX monitor can stream through dashboard WebSocket.
     let needs_telemetry = cfg.config().telemetry.is_some() || cfg.config().dashboard.is_some();
     let (tsink, tsource) = if needs_telemetry {
         let (a, b) = telemetry_channel();
@@ -133,6 +121,18 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
     } else {
         (None, None)
     };
+
+    // Add suitable Phy component based on PhyIo type
+    match cfg.config().phy_io.backend {
+        PhyBackend::SoapySdr => {
+            let rxdev = RxTxDevSoapySdr::new(cfg, tsink.clone());
+            let phy = PhyBs::new(cfg.clone(), rxdev);
+            router.register_entity(Box::new(phy));
+        }
+        _ => {
+            panic!("Unsupported PhyIo type: {:?}", cfg.config().phy_io.backend);
+        }
+    }
 
     // Always build control links — dashboard needs them even without external control server
     let (mut c_d, mut c_e) = build_all_control_links();
@@ -247,41 +247,54 @@ fn main() {
             // Forward log entries to dashboard
             if let Some(log_rx) = dashboard_log_rx {
                 let dash_log = std::sync::Arc::clone(&dashboard);
-                thread::Builder::new().name("dashboard-log".into()).spawn(move || {
-                    while let Ok((level, msg)) = log_rx.recv() {
-                        // Filter out debug/trace noise from dashboard log tab
-                        if level == "DEBUG" || level == "TRACE" { continue; }
-                        // Filter out TDMA tick noise — thousands per second
-                        if msg.contains("tick dl") || msg.contains("tick ul") || msg.starts_with("--- tick") { continue; }
-                        dash_log.push_log(&level, msg);
-                    }
-                }).expect("failed to spawn dashboard-log thread");
+                thread::Builder::new()
+                    .name("dashboard-log".into())
+                    .spawn(move || {
+                        while let Ok((level, msg)) = log_rx.recv() {
+                            // Filter out debug/trace noise from dashboard log tab
+                            if level == "DEBUG" || level == "TRACE" {
+                                continue;
+                            }
+                            // Filter out TDMA tick noise — thousands per second
+                            if msg.contains("tick dl") || msg.contains("tick ul") || msg.starts_with("--- tick") {
+                                continue;
+                            }
+                            dash_log.push_log(&level, msg);
+                        }
+                    })
+                    .expect("failed to spawn dashboard-log thread");
             }
 
             if has_telemetry_server {
                 let cfg2 = cfg.clone();
                 let (tee_sink, tee_source) = telemetry_channel();
-                thread::Builder::new().name("telemetry-tee".into()).spawn(move || {
-                    loop {
-                        match telemetry_source.recv() {
-                            Some(event) => {
-                                dash_clone.handle_telemetry(event.clone());
-                                let _ = tee_sink.send(event);
+                thread::Builder::new()
+                    .name("telemetry-tee".into())
+                    .spawn(move || {
+                        loop {
+                            match telemetry_source.recv() {
+                                Some(event) => {
+                                    dash_clone.handle_telemetry(event.clone());
+                                    let _ = tee_sink.send(event);
+                                }
+                                None => break,
                             }
-                            None => break,
                         }
-                    }
-                }).expect("failed to spawn telemetry-tee thread");
+                    })
+                    .expect("failed to spawn telemetry-tee thread");
                 start_telemetry_worker(cfg2, tee_source);
             } else {
-                thread::Builder::new().name("telemetry-dash".into()).spawn(move || {
-                    loop {
-                        match telemetry_source.recv() {
-                            Some(event) => dash_clone.handle_telemetry(event),
-                            None => break,
+                thread::Builder::new()
+                    .name("telemetry-dash".into())
+                    .spawn(move || {
+                        loop {
+                            match telemetry_source.recv() {
+                                Some(event) => dash_clone.handle_telemetry(event),
+                                None => break,
+                            }
                         }
-                    }
-                }).expect("failed to spawn telemetry-dash thread");
+                    })
+                    .expect("failed to spawn telemetry-dash thread");
             }
         } else if has_telemetry_server {
             start_telemetry_worker(cfg.clone(), telemetry_source);

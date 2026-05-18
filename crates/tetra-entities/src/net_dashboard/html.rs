@@ -536,6 +536,59 @@ td code{
 }
 .ts-block.active .ts-activity-bar{transform:scaleX(1);}
 @keyframes ts-pulse{0%{opacity:1;}50%{opacity:0.4;}100%{opacity:1;}}
+.rf-grid{
+  display:grid;
+  grid-template-columns:minmax(360px,2fr) minmax(280px,1fr);
+  gap:16px;
+}
+.rf-panel{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:12px;
+}
+.rf-panel-title{
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--text2);
+  margin-bottom:8px;
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+}
+.rf-canvas{
+  width:100%;
+  height:260px;
+  display:block;
+  background:#050607;
+  border:1px solid rgba(255,255,255,0.08);
+}
+.rf-canvas.small{height:260px;}
+.rf-metrics{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:10px;
+  margin-bottom:16px;
+}
+.rf-metric{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:12px;
+}
+.rf-metric-label{
+  font-family:var(--mono);
+  font-size:10px;
+  color:var(--text3);
+  text-transform:uppercase;
+}
+.rf-metric-value{
+  font-family:var(--mono);
+  font-size:20px;
+  color:var(--accent);
+  margin-top:6px;
+}
+@media(max-width:900px){.rf-grid{grid-template-columns:1fr}.rf-canvas{height:220px}}
 </style>
 </head>
 <body>
@@ -568,6 +621,10 @@ td code{
     <div class="nav-item" onclick="showPage('lastheard',this)" id="nav-lastheard">
       <span class="nav-icon">🎙</span>
       <span class="nav-label" data-i18n="lastheard">LAST HEARD</span>
+    </div>
+    <div class="nav-item" onclick="showPage('rf',this)" id="nav-rf">
+      <span class="nav-icon">◫</span>
+      <span class="nav-label" data-i18n="rf">RF MONITOR</span>
     </div>
     <div class="nav-item" onclick="showPage('log',this)" id="nav-log">
       <span class="nav-icon">📋</span>
@@ -771,6 +828,42 @@ td code{
       </div>
     </div>
 
+    <!-- ── RF MONITOR ── -->
+    <div class="page" id="page-rf">
+      <div class="rf-metrics">
+        <div class="rf-metric">
+          <div class="rf-metric-label">Center</div>
+          <div class="rf-metric-value" id="rf-center">—</div>
+        </div>
+        <div class="rf-metric">
+          <div class="rf-metric-label">RMS</div>
+          <div class="rf-metric-value" id="rf-rms">—</div>
+        </div>
+        <div class="rf-metric">
+          <div class="rf-metric-label">Peak</div>
+          <div class="rf-metric-value" id="rf-peak">—</div>
+        </div>
+        <div class="rf-metric">
+          <div class="rf-metric-label">Rate</div>
+          <div class="rf-metric-value" id="rf-rate">—</div>
+        </div>
+      </div>
+      <div class="rf-grid">
+        <div class="rf-panel">
+          <div class="rf-panel-title"><span>TX Spectrum</span><span id="rf-age">waiting</span></div>
+          <canvas id="rf-spectrum" class="rf-canvas" width="900" height="260"></canvas>
+        </div>
+        <div class="rf-panel">
+          <div class="rf-panel-title"><span>TX Constellation</span><span>IQ</span></div>
+          <canvas id="rf-constellation" class="rf-canvas small" width="420" height="260"></canvas>
+        </div>
+        <div class="rf-panel" style="grid-column:1/-1">
+          <div class="rf-panel-title"><span>TX Waterfall</span><span>WebSocket live</span></div>
+          <canvas id="rf-waterfall" class="rf-canvas" width="1100" height="260"></canvas>
+        </div>
+      </div>
+    </div>
+
     <!-- ── LOG ── -->
     <div class="page" id="page-log">
       <div class="card">
@@ -905,7 +998,7 @@ const LANGS={
   en:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'Radios',calls:'Calls',lastheard:'Last Heard',log:'Log',config:'Config',
+    stations:'Radios',calls:'Calls',lastheard:'Last Heard',rf:'RF Monitor',log:'Log',config:'Config',
     terminals:'Radios',registered:'registered',
     active_calls:'Active Calls',circuits:'circuits in use',
     registered_terminals:'Registered Radios',
@@ -1057,7 +1150,7 @@ const LANGS={
   hu:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'Rádiók',calls:'Hívások',lastheard:'Utoljára Hallott',log:'Napló',config:'Konfig',
+    stations:'Rádiók',calls:'Hívások',lastheard:'Utoljára Hallott',rf:'RF Monitor',log:'Napló',config:'Konfig',
     terminals:'Rádiók',registered:'regisztrált',
     active_calls:'Aktív hívások',circuits:'aktív áramkör',
     registered_terminals:'Regisztrált rádiók',
@@ -1100,7 +1193,7 @@ function applyLang(){
   document.querySelectorAll('[data-i18n]').forEach(el=>el.textContent=t(el.getAttribute('data-i18n')));
   document.querySelectorAll('[data-i18n-tab]').forEach(el=>el.textContent=t(el.getAttribute('data-i18n-tab')));
   // Update nav labels
-  ['stations','calls','lastheard','log','config','system'].forEach(p=>{
+  ['stations','calls','lastheard','rf','log','config','system'].forEach(p=>{
     const el=document.querySelector(`#nav-${p} .nav-label`);
     if(el)el.textContent=t(p);
   });
@@ -1140,7 +1233,7 @@ function closeMobileSidebar(){
 }
 
 // ── Page navigation ───────────────────────────────────────────────────────
-const PAGE_TITLES={stations:'stations',calls:'calls',lastheard:'lastheard',log:'log',config:'config',system:'system'};
+const PAGE_TITLES={stations:'stations',calls:'calls',lastheard:'lastheard',rf:'rf',log:'log',config:'config',system:'system'};
 function showPage(name,el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
@@ -1253,6 +1346,8 @@ function handleMsg(msg){
       delete state.calls[msg.call_id];renderCalls();break;
     case 'ts_voice':
       tsVoice(msg.ts);break;
+    case 'tx_monitor':
+      updateRfMonitor(msg);break;
     case 'speaker_changed':
       if(state.calls[msg.call_id])state.calls[msg.call_id].active_speaker=msg.speaker_issi;
       if(msg.last_heard){pushLastHeard(msg.last_heard);renderLastHeard();}
@@ -1298,6 +1393,89 @@ function rssiColor(v){if(v==null)return'var(--text3)';if(v>-20)return'var(--acce
 function rssiPct(v){if(v==null)return 0;return Math.max(0,Math.min(100,(v+60)/50*100));}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocks();}
+
+// ── RF Monitor ───────────────────────────────────────────────────────────
+const rfState={waterfall:[],lastTs:0,frames:0,rateTs:0};
+function fmtMHz(v){return v?`${(v/1e6).toFixed(6)} MHz`:'—';}
+function rfResizeCanvas(id){
+  const c=document.getElementById(id);if(!c)return null;
+  const r=c.getBoundingClientRect(),d=window.devicePixelRatio||1;
+  const w=Math.max(1,Math.floor(r.width*d)),h=Math.max(1,Math.floor(r.height*d));
+  if(c.width!==w||c.height!==h){c.width=w;c.height=h;}
+  return c;
+}
+function updateRfMonitor(msg){
+  rfState.lastTs=Date.now();rfState.frames++;
+  if(!rfState.rateTs)rfState.rateTs=rfState.lastTs;
+  const dt=(rfState.lastTs-rfState.rateTs)/1000;
+  if(dt>=1){document.getElementById('rf-rate').textContent=`${(rfState.frames/dt).toFixed(1)} fps`;rfState.frames=0;rfState.rateTs=rfState.lastTs;}
+  document.getElementById('rf-center').textContent=fmtMHz(msg.center_freq_hz);
+  document.getElementById('rf-rms').textContent=`${msg.rms_dbfs.toFixed(1)} dBFS`;
+  document.getElementById('rf-peak').textContent=`${msg.peak_dbfs.toFixed(1)} dBFS`;
+  const spectrum=(msg.spectrum_db_tenths||[]).map(v=>v/10);
+  drawRfSpectrum(spectrum,msg.sample_rate||600000);
+  drawRfConstellation(msg.constellation_iq||[]);
+  rfState.waterfall.push(spectrum);
+  if(rfState.waterfall.length>180)rfState.waterfall.shift();
+  drawRfWaterfall();
+}
+function drawRfGrid(ctx,w,h,yMin,yMax,fs){
+  ctx.fillStyle='#050607';ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle='rgba(255,255,255,0.14)';ctx.lineWidth=1;
+  ctx.fillStyle='rgba(255,255,255,0.75)';ctx.font='12px monospace';
+  for(let i=0;i<=6;i++){
+    const x=40+i*(w-50)/6;ctx.beginPath();ctx.moveTo(x,10);ctx.lineTo(x,h-24);ctx.stroke();
+    const off=(-fs/2+i*fs/6)/1000;ctx.fillText(`${off>=0?'+':''}${off.toFixed(0)}k`,x-22,h-7);
+  }
+  for(let i=0;i<=5;i++){
+    const y=10+i*(h-34)/5;ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(w-10,y);ctx.stroke();
+    const db=yMax-i*(yMax-yMin)/5;ctx.fillText(db.toFixed(0),6,y+4);
+  }
+}
+function drawRfSpectrum(spec,fs){
+  const c=rfResizeCanvas('rf-spectrum');if(!c||!spec.length)return;
+  const ctx=c.getContext('2d'),w=c.width,h=c.height,yMin=-120,yMax=0;
+  drawRfGrid(ctx,w,h,yMin,yMax,fs);
+  ctx.strokeStyle='#4dd8ff';ctx.lineWidth=2;ctx.beginPath();
+  for(let i=0;i<spec.length;i++){
+    const x=40+i*(w-50)/(spec.length-1);
+    const y=10+(yMax-Math.max(yMin,Math.min(yMax,spec[i])))*(h-34)/(yMax-yMin);
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+}
+function drawRfConstellation(iq){
+  const c=rfResizeCanvas('rf-constellation');if(!c)return;
+  const ctx=c.getContext('2d'),w=c.width,h=c.height,cx=w/2,cy=h/2,s=Math.min(w,h)*0.43;
+  ctx.fillStyle='#050607';ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle='rgba(255,255,255,0.16)';ctx.beginPath();ctx.moveTo(cx,8);ctx.lineTo(cx,h-8);ctx.moveTo(8,cy);ctx.lineTo(w-8,cy);ctx.stroke();
+  ctx.strokeStyle='rgba(0,212,168,0.25)';ctx.beginPath();ctx.arc(cx,cy,s,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='#24a2ff';
+  for(let i=0;i+1<iq.length;i+=2){
+    const x=cx+(iq[i]/32767)*s,y=cy-(iq[i+1]/32767)*s;
+    ctx.fillRect(x-1,y-1,2,2);
+  }
+}
+function wfColor(v){
+  const t=Math.max(0,Math.min(1,(v+105)/65));
+  const r=Math.floor(20+235*t),g=Math.floor(60+180*Math.sqrt(t)),b=Math.floor(210*(1-t));
+  return `rgb(${r},${g},${b})`;
+}
+function drawRfWaterfall(){
+  const c=rfResizeCanvas('rf-waterfall');if(!c)return;
+  const ctx=c.getContext('2d'),w=c.width,h=c.height,rows=rfState.waterfall.length;
+  ctx.fillStyle='#050607';ctx.fillRect(0,0,w,h);
+  if(!rows)return;
+  const rowH=Math.max(1,h/180),specLen=rfState.waterfall[0].length,colW=w/specLen;
+  for(let r=0;r<rows;r++){
+    const spec=rfState.waterfall[rows-1-r],y=h-(r+1)*rowH;
+    for(let i=0;i<spec.length;i++){
+      ctx.fillStyle=wfColor(spec[i]);
+      ctx.fillRect(i*colW,y,Math.ceil(colW),Math.ceil(rowH));
+    }
+  }
+}
+setInterval(()=>{if(rfState.lastTs){document.getElementById('rf-age').textContent=`${((Date.now()-rfState.lastTs)/1000).toFixed(1)}s`;};},250);
 
 // ── TS Visualizer ─────────────────────────────────────────────────────────
 // ts_state[ts-1]: {call_id, call_type, label, sub, voice_ts} (voice_ts = Date.now() of last frame)

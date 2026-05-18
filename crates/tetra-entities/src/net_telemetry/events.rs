@@ -32,7 +32,13 @@ pub enum TelemetryEvent {
     /// Speaker changed on active group call
     GroupCallSpeakerChanged { call_id: u16, gssi: u32, speaker_issi: u32 },
     /// Individual (P2P) call started
-    IndividualCallStarted { call_id: u16, calling_issi: u32, called_issi: u32, simplex: bool, ts: u8 },
+    IndividualCallStarted {
+        call_id: u16,
+        calling_issi: u32,
+        called_issi: u32,
+        simplex: bool,
+        ts: u8,
+    },
     /// Individual call ended
     IndividualCallEnded { call_id: u16 },
     /// Energy saving mode updated for MS (0=StayAlive, 1=Eg1..7=Eg7)
@@ -43,4 +49,13 @@ pub enum TelemetryEvent {
     SdsActivity { source_issi: u32, dest_issi: u32 },
     /// Voice frame activity on a traffic timeslot (UL or DL)
     TsVoiceActivity { ts: u8 },
+    /// Downlink TX IQ monitor frame computed from the samples sent to SDR.
+    TxMonitor {
+        sample_rate: f32,
+        center_freq_hz: f64,
+        rms_dbfs: f32,
+        peak_dbfs: f32,
+        spectrum_db_tenths: Vec<i16>,
+        constellation_iq: Vec<i16>,
+    },
 }

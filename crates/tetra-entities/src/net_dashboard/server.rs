@@ -3,12 +3,15 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
-use tungstenite::{accept_hdr, handshake::server::{Request, Response}, Message};
+use tungstenite::{
+    Message, accept_hdr,
+    handshake::server::{Request, Response},
+};
 
-use crate::net_dashboard::html::DASHBOARD_HTML;
-use crate::net_dashboard::state::{DashboardState, DashboardStateInner, MsEntry, CallEntry};
-use crate::net_telemetry::TelemetryEvent;
 use crate::net_control::commands::ControlCommand;
+use crate::net_dashboard::html::DASHBOARD_HTML;
+use crate::net_dashboard::state::{CallEntry, DashboardState, DashboardStateInner, MsEntry};
+use crate::net_telemetry::TelemetryEvent;
 
 type CmdSender = crossbeam_channel::Sender<ControlCommand>;
 
@@ -34,10 +37,23 @@ struct UpdateState {
 }
 
 impl UpdateState {
-    fn new() -> Self { UpdateState { phase: UpdatePhase::Idle, log: String::new() } }
-    fn append(&mut self, line: &str) { self.log.push_str(line); self.log.push('\n'); }
-    fn start(&mut self) { self.phase = UpdatePhase::Running; self.log.clear(); }
-    fn finish(&mut self, success: bool) { self.phase = UpdatePhase::Done { success }; }
+    fn new() -> Self {
+        UpdateState {
+            phase: UpdatePhase::Idle,
+            log: String::new(),
+        }
+    }
+    fn append(&mut self, line: &str) {
+        self.log.push_str(line);
+        self.log.push('\n');
+    }
+    fn start(&mut self) {
+        self.phase = UpdatePhase::Running;
+        self.log.clear();
+    }
+    fn finish(&mut self, success: bool) {
+        self.phase = UpdatePhase::Done { success };
+    }
 }
 
 type SharedUpdateState = Arc<Mutex<UpdateState>>;
@@ -57,7 +73,12 @@ fn run_update(update: SharedUpdateState, config_path: String) {
     // so src_root = binary_path.parent().parent().parent()
     let src_dir = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.to_path_buf()))
+        .and_then(|p| {
+            p.parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf())
+        })
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     macro_rules! log {
@@ -69,12 +90,7 @@ fn run_update(update: SharedUpdateState, config_path: String) {
     }
 
     /// Run a command, stream stdout+stderr into the log, return Ok(stdout) or Err.
-    fn run_cmd_output(
-        update: &SharedUpdateState,
-        program: &str,
-        args: &[&str],
-        dir: &std::path::Path,
-    ) -> Option<String> {
+    fn run_cmd_output(update: &SharedUpdateState, program: &str, args: &[&str], dir: &std::path::Path) -> Option<String> {
         let line = format!("$ {} {}", program, args.join(" "));
         tracing::info!("UPDATE: {}", line);
         update.lock().unwrap().append(&line);
@@ -83,8 +99,12 @@ fn run_update(update: SharedUpdateState, config_path: String) {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                for l in stdout.lines() { update.lock().unwrap().append(l); }
-                for l in stderr.lines() { update.lock().unwrap().append(l); }
+                for l in stdout.lines() {
+                    update.lock().unwrap().append(l);
+                }
+                for l in stderr.lines() {
+                    update.lock().unwrap().append(l);
+                }
                 if out.status.success() {
                     Some(stdout)
                 } else {
@@ -116,12 +136,16 @@ fn run_update(update: SharedUpdateState, config_path: String) {
     let local_commit = run_cmd_output(&update, "git", &["-C", src_str, "rev-parse", "HEAD"], &src_dir)
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    if local_commit.is_empty() { return; }
+    if local_commit.is_empty() {
+        return;
+    }
 
     let remote_commit = run_cmd_output(&update, "git", &["-C", src_str, "rev-parse", "origin/main"], &src_dir)
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    if remote_commit.is_empty() { return; }
+    if remote_commit.is_empty() {
+        return;
+    }
 
     log!(update, "Local  commit: {}", &local_commit[..local_commit.len().min(12)]);
     log!(update, "Remote commit: {}", &remote_commit[..remote_commit.len().min(12)]);
@@ -133,13 +157,17 @@ fn run_update(update: SharedUpdateState, config_path: String) {
     }
 
     // Step 3: show what changed
-    let _ = run_cmd_output(&update, "git", &["-C", src_str, "log", "--oneline",
-        &format!("HEAD..origin/main")], &src_dir);
+    let _ = run_cmd_output(
+        &update,
+        "git",
+        &["-C", src_str, "log", "--oneline", &format!("HEAD..origin/main")],
+        &src_dir,
+    );
 
     // Step 4: backup config before touching anything
     let backup_path = format!("{}.bak", config_path);
     match std::fs::copy(&config_path, &backup_path) {
-        Ok(_)  => log!(update, "Config backed up → {}", backup_path),
+        Ok(_) => log!(update, "Config backed up → {}", backup_path),
         Err(e) => log!(update, "WARNING: config backup failed: {} (continuing)", e),
     }
 
@@ -197,16 +225,21 @@ impl DashboardServer {
         let state = Arc::clone(&self.state);
         let clients = Arc::clone(&self.clients);
         let config_path = self.config_path.clone();
-        let cmd_tx: Arc<Mutex<Option<CmdSender>>> =
-            Arc::new(Mutex::new(self.cmd_tx.take()));
+        let cmd_tx: Arc<Mutex<Option<CmdSender>>> = Arc::new(Mutex::new(self.cmd_tx.take()));
         let update_state = Arc::clone(&self.update_state);
 
         std::thread::Builder::new()
             .name("dashboard-server".into())
             .spawn(move || {
                 let listener = match TcpListener::bind(&addr) {
-                    Ok(l) => { tracing::info!("Dashboard listening on http://{}", addr); l }
-                    Err(e) => { tracing::error!("Dashboard failed to bind {}: {}", addr, e); return; }
+                    Ok(l) => {
+                        tracing::info!("Dashboard listening on http://{}", addr);
+                        l
+                    }
+                    Err(e) => {
+                        tracing::error!("Dashboard failed to bind {}: {}", addr, e);
+                        return;
+                    }
                 };
                 for stream in listener.incoming() {
                     let Ok(stream) = stream else { continue };
@@ -230,11 +263,17 @@ impl DashboardServer {
             let mut s = self.state.write().unwrap();
             match &event {
                 TelemetryEvent::MsRegistration { issi } => {
-                    s.ms_map.insert(*issi, MsEntry {
-                        issi: *issi, groups: Vec::new(),
-                        rssi_dbfs: None, registered_at: Instant::now(), last_seen: Instant::now(),
-                        energy_saving_mode: 0,
-                    });
+                    s.ms_map.insert(
+                        *issi,
+                        MsEntry {
+                            issi: *issi,
+                            groups: Vec::new(),
+                            rssi_dbfs: None,
+                            registered_at: Instant::now(),
+                            last_seen: Instant::now(),
+                            energy_saving_mode: 0,
+                        },
+                    );
                     s.push_log("INFO", format!("MS {} registered", issi));
                 }
                 TelemetryEvent::MsDeregistration { issi } => {
@@ -243,7 +282,11 @@ impl DashboardServer {
                 }
                 TelemetryEvent::MsGroupAttach { issi, gssis } => {
                     if let Some(e) = s.ms_map.get_mut(issi) {
-                        for g in gssis { if !e.groups.contains(g) { e.groups.push(*g); } }
+                        for g in gssis {
+                            if !e.groups.contains(g) {
+                                e.groups.push(*g);
+                            }
+                        }
                     }
                 }
                 TelemetryEvent::MsGroupsSnapshot { issi, gssis } => {
@@ -267,12 +310,26 @@ impl DashboardServer {
                         e.energy_saving_mode = *mode;
                     }
                 }
-                TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi, ts } => {
-                    s.calls.insert(*call_id, CallEntry {
-                        call_id: *call_id, is_group: true, gssi: *gssi,
-                        caller_issi: *caller_issi, called_issi: 0,
-                        speaker_issi: Some(*caller_issi), started_at: Instant::now(), simplex: false, ts: *ts,
-                    });
+                TelemetryEvent::GroupCallStarted {
+                    call_id,
+                    gssi,
+                    caller_issi,
+                    ts,
+                } => {
+                    s.calls.insert(
+                        *call_id,
+                        CallEntry {
+                            call_id: *call_id,
+                            is_group: true,
+                            gssi: *gssi,
+                            caller_issi: *caller_issi,
+                            called_issi: 0,
+                            speaker_issi: Some(*caller_issi),
+                            started_at: Instant::now(),
+                            simplex: false,
+                            ts: *ts,
+                        },
+                    );
                     s.push_last_heard(*caller_issi, "call_group", *gssi);
                     s.push_log("INFO", format!("Group call {} started: {} -> GSSI {}", call_id, caller_issi, gssi));
                 }
@@ -280,16 +337,37 @@ impl DashboardServer {
                     s.calls.remove(call_id);
                     s.push_log("INFO", format!("Group call {} ended", call_id));
                 }
-                TelemetryEvent::GroupCallSpeakerChanged { call_id, gssi, speaker_issi } => {
-                    if let Some(c) = s.calls.get_mut(call_id) { c.speaker_issi = Some(*speaker_issi); }
+                TelemetryEvent::GroupCallSpeakerChanged {
+                    call_id,
+                    gssi,
+                    speaker_issi,
+                } => {
+                    if let Some(c) = s.calls.get_mut(call_id) {
+                        c.speaker_issi = Some(*speaker_issi);
+                    }
                     s.push_last_heard(*speaker_issi, "call_group", *gssi);
                 }
-                TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex, ts } => {
-                    s.calls.insert(*call_id, CallEntry {
-                        call_id: *call_id, is_group: false, gssi: 0,
-                        caller_issi: *calling_issi, called_issi: *called_issi,
-                        speaker_issi: None, started_at: Instant::now(), simplex: *simplex, ts: *ts,
-                    });
+                TelemetryEvent::IndividualCallStarted {
+                    call_id,
+                    calling_issi,
+                    called_issi,
+                    simplex,
+                    ts,
+                } => {
+                    s.calls.insert(
+                        *call_id,
+                        CallEntry {
+                            call_id: *call_id,
+                            is_group: false,
+                            gssi: 0,
+                            caller_issi: *calling_issi,
+                            called_issi: *called_issi,
+                            speaker_issi: None,
+                            started_at: Instant::now(),
+                            simplex: *simplex,
+                            ts: *ts,
+                        },
+                    );
                     s.push_last_heard(*calling_issi, "call_individual", *called_issi);
                     s.push_log("INFO", format!("P2P call {} started: {} -> {}", call_id, calling_issi, called_issi));
                 }
@@ -299,13 +377,18 @@ impl DashboardServer {
                 }
                 TelemetryEvent::BrewConnected { connected, server_version } => {
                     s.brew_online = *connected;
-                    if *connected { s.brew_version = *server_version; }
+                    if *connected {
+                        s.brew_version = *server_version;
+                    }
                 }
                 TelemetryEvent::SdsActivity { source_issi, dest_issi } => {
                     s.push_last_heard(*source_issi, "sds", *dest_issi);
                 }
                 TelemetryEvent::TsVoiceActivity { .. } => {
                     // Handled below with rate limiting — no state update needed
+                }
+                TelemetryEvent::TxMonitor { .. } => {
+                    // Stateless live RF monitor payload.
                 }
             }
         }
@@ -351,36 +434,62 @@ impl DashboardServer {
 
 fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
     let v = match event {
-        TelemetryEvent::MsRegistration { issi } =>
-            serde_json::json!({"type":"ms_registered","issi":issi}),
-        TelemetryEvent::MsDeregistration { issi } =>
-            serde_json::json!({"type":"ms_deregistered","issi":issi}),
-        TelemetryEvent::MsGroupAttach { issi, gssis } =>
-            serde_json::json!({"type":"ms_groups","issi":issi,"groups":gssis}),
-        TelemetryEvent::MsGroupDetach { issi, gssis } =>
-            serde_json::json!({"type":"ms_groups_detach","issi":issi,"groups":gssis}),
-        TelemetryEvent::MsGroupsSnapshot { issi, gssis } =>
-            serde_json::json!({"type":"ms_groups_all","issi":issi,"groups":gssis}),
-        TelemetryEvent::MsRssi { issi, rssi_dbfs } =>
-            serde_json::json!({"type":"ms_rssi","issi":issi,"rssi_dbfs":rssi_dbfs}),
-        TelemetryEvent::MsEnergySaving { issi, mode } =>
-            serde_json::json!({"type":"ms_energy_saving","issi":issi,"mode":mode}),
-        TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi, ts } =>
-            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"group","gssi":gssi,"caller_issi":caller_issi,"ts":ts,"last_heard":{"issi":caller_issi,"activity":"call_group","dest":gssi}}),
-        TelemetryEvent::GroupCallEnded { call_id, gssi: _ } =>
-            serde_json::json!({"type":"call_ended","call_id":call_id}),
-        TelemetryEvent::GroupCallSpeakerChanged { call_id, gssi, speaker_issi } =>
-            serde_json::json!({"type":"speaker_changed","call_id":call_id,"speaker_issi":speaker_issi,"last_heard":{"issi":speaker_issi,"activity":"call_group","dest":gssi}}),
-        TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex, ts } =>
-            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"individual","caller_issi":calling_issi,"called_issi":called_issi,"simplex":simplex,"ts":ts,"last_heard":{"issi":calling_issi,"activity":"call_individual","dest":called_issi}}),
-        TelemetryEvent::IndividualCallEnded { call_id } =>
-            serde_json::json!({"type":"call_ended","call_id":call_id}),
-        TelemetryEvent::BrewConnected { connected, server_version } =>
-            serde_json::json!({"type":"brew_status","connected":connected,"brew_version":server_version}),
-        TelemetryEvent::SdsActivity { source_issi, dest_issi } =>
-            serde_json::json!({"type":"last_heard","issi":source_issi,"activity":"sds","dest":dest_issi}),
-        TelemetryEvent::TsVoiceActivity { ts } =>
-            serde_json::json!({"type":"ts_voice","ts":ts}),
+        TelemetryEvent::MsRegistration { issi } => serde_json::json!({"type":"ms_registered","issi":issi}),
+        TelemetryEvent::MsDeregistration { issi } => serde_json::json!({"type":"ms_deregistered","issi":issi}),
+        TelemetryEvent::MsGroupAttach { issi, gssis } => serde_json::json!({"type":"ms_groups","issi":issi,"groups":gssis}),
+        TelemetryEvent::MsGroupDetach { issi, gssis } => serde_json::json!({"type":"ms_groups_detach","issi":issi,"groups":gssis}),
+        TelemetryEvent::MsGroupsSnapshot { issi, gssis } => serde_json::json!({"type":"ms_groups_all","issi":issi,"groups":gssis}),
+        TelemetryEvent::MsRssi { issi, rssi_dbfs } => serde_json::json!({"type":"ms_rssi","issi":issi,"rssi_dbfs":rssi_dbfs}),
+        TelemetryEvent::MsEnergySaving { issi, mode } => serde_json::json!({"type":"ms_energy_saving","issi":issi,"mode":mode}),
+        TelemetryEvent::GroupCallStarted {
+            call_id,
+            gssi,
+            caller_issi,
+            ts,
+        } => {
+            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"group","gssi":gssi,"caller_issi":caller_issi,"ts":ts,"last_heard":{"issi":caller_issi,"activity":"call_group","dest":gssi}})
+        }
+        TelemetryEvent::GroupCallEnded { call_id, gssi: _ } => serde_json::json!({"type":"call_ended","call_id":call_id}),
+        TelemetryEvent::GroupCallSpeakerChanged {
+            call_id,
+            gssi,
+            speaker_issi,
+        } => {
+            serde_json::json!({"type":"speaker_changed","call_id":call_id,"speaker_issi":speaker_issi,"last_heard":{"issi":speaker_issi,"activity":"call_group","dest":gssi}})
+        }
+        TelemetryEvent::IndividualCallStarted {
+            call_id,
+            calling_issi,
+            called_issi,
+            simplex,
+            ts,
+        } => {
+            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"individual","caller_issi":calling_issi,"called_issi":called_issi,"simplex":simplex,"ts":ts,"last_heard":{"issi":calling_issi,"activity":"call_individual","dest":called_issi}})
+        }
+        TelemetryEvent::IndividualCallEnded { call_id } => serde_json::json!({"type":"call_ended","call_id":call_id}),
+        TelemetryEvent::BrewConnected { connected, server_version } => {
+            serde_json::json!({"type":"brew_status","connected":connected,"brew_version":server_version})
+        }
+        TelemetryEvent::SdsActivity { source_issi, dest_issi } => {
+            serde_json::json!({"type":"last_heard","issi":source_issi,"activity":"sds","dest":dest_issi})
+        }
+        TelemetryEvent::TsVoiceActivity { ts } => serde_json::json!({"type":"ts_voice","ts":ts}),
+        TelemetryEvent::TxMonitor {
+            sample_rate,
+            center_freq_hz,
+            rms_dbfs,
+            peak_dbfs,
+            spectrum_db_tenths,
+            constellation_iq,
+        } => serde_json::json!({
+            "type":"tx_monitor",
+            "sample_rate":sample_rate,
+            "center_freq_hz":center_freq_hz,
+            "rms_dbfs":rms_dbfs,
+            "peak_dbfs":peak_dbfs,
+            "spectrum_db_tenths":spectrum_db_tenths,
+            "constellation_iq":constellation_iq,
+        }),
     };
     serde_json::to_string(&v).ok()
 }
@@ -396,7 +505,10 @@ fn handle_connection(
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
 
     let mut peek_buf = [0u8; 256];
-    let n = match stream.peek(&mut peek_buf) { Ok(n) => n, Err(_) => return };
+    let n = match stream.peek(&mut peek_buf) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
     let peek_str = String::from_utf8_lossy(&peek_buf[..n]);
     let req_line = peek_str.lines().next().unwrap_or("").to_string();
 
@@ -407,7 +519,9 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
         }
         serve_system_info(buf.into_inner(), &config_path);
     } else if req_line.contains("POST /api/configs/activate") {
@@ -416,11 +530,18 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
             let lower = line.to_lowercase();
             if lower.starts_with("content-length:") {
-                content_length = lower.trim_start_matches("content-length:").trim()
-                    .trim_end_matches("\r\n").trim_end_matches('\n').parse().unwrap_or(0);
+                content_length = lower
+                    .trim_start_matches("content-length:")
+                    .trim()
+                    .trim_end_matches("\r\n")
+                    .trim_end_matches('\n')
+                    .parse()
+                    .unwrap_or(0);
             }
         }
         let mut body = vec![0u8; content_length];
@@ -438,7 +559,9 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
         }
         serve_config_list(buf.into_inner(), &config_path);
     } else if req_line.contains("GET /api/update/status") {
@@ -446,7 +569,9 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
         }
         serve_update_status(buf.into_inner(), &update_state);
     } else if req_line.contains("POST /api/update") {
@@ -454,7 +579,9 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
         }
         {
             let mut u = update_state.lock().unwrap();
@@ -477,7 +604,9 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
         }
         let backup_path = format!("{}.bak", config_path);
         serve_config_get(buf.into_inner(), &backup_path);
@@ -486,7 +615,9 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
         }
         let backup_path = format!("{}.bak", config_path);
         match std::fs::copy(&backup_path, &config_path) {
@@ -502,12 +633,18 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
             let lower = line.to_lowercase();
             if lower.starts_with("content-length:") {
-                content_length = lower.trim_start_matches("content-length:")
-                    .trim().trim_end_matches("\r\n").trim_end_matches('\n')
-                    .parse().unwrap_or(0);
+                content_length = lower
+                    .trim_start_matches("content-length:")
+                    .trim()
+                    .trim_end_matches("\r\n")
+                    .trim_end_matches('\n')
+                    .parse()
+                    .unwrap_or(0);
             }
         }
         let mut body = vec![0u8; content_length];
@@ -527,7 +664,9 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
         }
         serve_config_get(buf.into_inner(), &config_path);
     } else {
@@ -535,20 +674,30 @@ fn handle_connection(
         loop {
             let mut line = String::new();
             let _ = buf.read_line(&mut line);
-            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            if line == "\r\n" || line.is_empty() || line == "\n" {
+                break;
+            }
         }
         serve_html(buf.into_inner());
     }
 }
 
-fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
-             cmd_tx: Arc<Mutex<Option<CmdSender>>>, update_state: SharedUpdateState) {
+fn handle_ws(
+    stream: TcpStream,
+    state: DashboardState,
+    clients: WsClients,
+    cmd_tx: Arc<Mutex<Option<CmdSender>>>,
+    update_state: SharedUpdateState,
+) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(50)));
 
     let callback = |_req: &Request, res: Response| Ok(res);
     let mut ws = match accept_hdr(stream, callback) {
         Ok(w) => w,
-        Err(e) => { tracing::debug!("WS handshake failed: {}", e); return; }
+        Err(e) => {
+            tracing::debug!("WS handshake failed: {}", e);
+            return;
+        }
     };
 
     // Register this connection for broadcasts
@@ -581,7 +730,9 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
     loop {
         // Drain outbound broadcast messages first
         while let Ok(msg) = broadcast_rx.try_recv() {
-            if ws.send(Message::Text(msg)).is_err() { return; }
+            if ws.send(Message::Text(msg)).is_err() {
+                return;
+            }
         }
 
         // Then check for inbound messages from browser
@@ -590,18 +741,21 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
                 handle_ws_command(&text, &state, &cmd_tx, &update_state);
             }
             Ok(Message::Close(_)) => break,
-            Ok(Message::Ping(data)) => { let _ = ws.send(Message::Pong(data)); }
+            Ok(Message::Ping(data)) => {
+                let _ = ws.send(Message::Pong(data));
+            }
             Ok(_) => {}
             Err(tungstenite::Error::Io(ref e))
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+                if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(_) => break,
         }
     }
 }
 
 fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Option<CmdSender>>>, update_state: &SharedUpdateState) {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return;
+    };
 
     let send_cmd = |cmd: ControlCommand| -> bool {
         if let Ok(guard) = cmd_tx.lock() {
@@ -615,7 +769,9 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
     match v.get("type").and_then(|t| t.as_str()) {
         Some("kick") => {
             let issi = v.get("issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
-            if issi == 0 { return; }
+            if issi == 0 {
+                return;
+            }
             tracing::info!("Dashboard: kick ISSI {}", issi);
             if !send_cmd(ControlCommand::KickMs { issi }) {
                 tracing::warn!("Dashboard: no control dispatcher for kick");
@@ -650,13 +806,15 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
         Some("sds") => {
             let dest = v.get("dest_issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             let msg_text = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
-            if dest == 0 || msg_text.is_empty() { return; }
+            if dest == 0 || msg_text.is_empty() {
+                return;
+            }
             tracing::info!("Dashboard: SDS to {} = {}", dest, msg_text);
             let payload = msg_text.as_bytes().to_vec();
             let len_bits = (payload.len() * 8) as u16;
             send_cmd(ControlCommand::SendSds {
                 handle: 0,
-                source_ssi: 9999,  // BS dispatcher ISSI
+                source_ssi: 9999, // BS dispatcher ISSI
                 dest_ssi: dest,
                 dest_is_group: false,
                 len_bits,
@@ -697,22 +855,30 @@ fn serve_update_status(mut stream: TcpStream, update_state: &SharedUpdateState) 
 
 fn serve_system_info(mut stream: TcpStream, config_path: &str) {
     let hostname = std::process::Command::new("hostname")
-        .output().ok()
+        .output()
+        .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let uptime_secs: u64 = std::fs::read_to_string("/proc/uptime").ok()
+    let uptime_secs: u64 = std::fs::read_to_string("/proc/uptime")
+        .ok()
         .and_then(|s| s.split_whitespace().next().map(|n| n.parse::<f64>().ok()))
-        .flatten().map(|f| f as u64).unwrap_or(0);
+        .flatten()
+        .map(|f| f as u64)
+        .unwrap_or(0);
 
-    let os_info = std::fs::read_to_string("/etc/os-release").ok()
-        .and_then(|s| s.lines()
-            .find(|l| l.starts_with("PRETTY_NAME="))
-            .map(|l| l.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string()))
+    let os_info = std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("PRETTY_NAME="))
+                .map(|l| l.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string())
+        })
         .unwrap_or_else(|| "Linux".to_string());
 
     let config_dir = std::path::Path::new(config_path)
-        .parent().map(|p| p.to_string_lossy().to_string())
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| ".".to_string());
 
     let body = format!(
@@ -734,10 +900,10 @@ fn serve_system_info(mut stream: TcpStream, config_path: &str) {
 
 fn serve_config_list(mut stream: TcpStream, config_path: &str) {
     let active_name = std::path::Path::new(config_path)
-        .file_name().map(|n| n.to_string_lossy().to_string())
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let config_dir = std::path::Path::new(config_path)
-        .parent().unwrap_or(std::path::Path::new("."));
+    let config_dir = std::path::Path::new(config_path).parent().unwrap_or(std::path::Path::new("."));
 
     let mut profiles: Vec<serde_json::Value> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(config_dir) {
@@ -746,7 +912,11 @@ fn serve_config_list(mut stream: TcpStream, config_path: &str) {
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
                 // Include .toml files, exclude backups (.bak)
-                if name.ends_with(".toml") && !name.ends_with(".bak") { Some(name) } else { None }
+                if name.ends_with(".toml") && !name.ends_with(".bak") {
+                    Some(name)
+                } else {
+                    None
+                }
             })
             .collect();
         names.sort();
@@ -777,8 +947,7 @@ fn activate_config_profile(config_path: &str, profile_name: &str) -> Result<(), 
         return Err("profile must be a .toml file".to_string());
     }
 
-    let config_dir = std::path::Path::new(config_path)
-        .parent().unwrap_or(std::path::Path::new("."));
+    let config_dir = std::path::Path::new(config_path).parent().unwrap_or(std::path::Path::new("."));
     let profile_path = config_dir.join(profile_name);
 
     if !profile_path.exists() {
@@ -826,7 +995,10 @@ fn http_response(mut stream: TcpStream, code: u16, body: &str) {
     let status = if code == 200 { "OK" } else { "Error" };
     let resp = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        code, status, body.len(), body
+        code,
+        status,
+        body.len(),
+        body
     );
     let _ = stream.write_all(resp.as_bytes());
 }

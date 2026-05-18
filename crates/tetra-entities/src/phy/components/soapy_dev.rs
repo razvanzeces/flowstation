@@ -1,7 +1,9 @@
 //! Resampling, buffering and timestamp handling
 //! between SDR device and modulator/demodulator code.
 
+use crate::net_telemetry::{TelemetryEvent, TelemetrySink};
 use rustfft;
+use std::sync::Arc;
 use tetra_config::bluestation::SharedConfig;
 
 use tetra_pdus::phy::traits::rxtx_dev::RxSlotBits;
@@ -46,7 +48,7 @@ pub struct RxTxDevSoapySdr {
 type FftPlanner = rustfft::FftPlanner<RealSample>;
 
 impl RxTxDevSoapySdr {
-    pub fn new(cfg: &SharedConfig) -> Self {
+    pub fn new(cfg: &SharedConfig, telemetry: Option<TelemetrySink>) -> Self {
         let mut fft_planner = rustfft::FftPlanner::new();
 
         // TODO FIXME currently no MS and MON support in the below statement; need to fix
@@ -88,7 +90,7 @@ impl RxTxDevSoapySdr {
             },
 
             tx_dsp: if sdr.tx_enabled() {
-                Some(TxDsp::new(&mut fft_planner, &mut sdr, &phy_config))
+                Some(TxDsp::new(&mut fft_planner, &mut sdr, &phy_config, telemetry))
             } else {
                 None
             },
@@ -312,14 +314,16 @@ struct TxDsp {
     modulators: Vec<ModulatorChannel>,
     headroom: TxHeadroomLimiter,
     tx_output: Vec<ComplexSample>,
+    monitor: Option<TxSignalMonitor>,
 }
 
 impl TxDsp {
-    fn new(fft_planner: &mut FftPlanner, sdr: &mut soapyio::SoapyIo, phy_config: &PhyConfig) -> Self {
+    fn new(fft_planner: &mut FftPlanner, sdr: &mut soapyio::SoapyIo, phy_config: &PhyConfig, telemetry: Option<TelemetrySink>) -> Self {
         let sdr_sample_rate = sdr.tx_sample_rate();
+        let center_frequency = sdr.tx_center_frequency().unwrap();
         let fcfb_params = fcfb::SynthesisOutputParameters {
             ifft_size: (sdr_sample_rate / 500.0).round() as usize,
-            center_frequency: sdr.tx_center_frequency().unwrap(),
+            center_frequency,
             sample_rate: sdr_sample_rate,
             overlap: fcfb::Overlap::O1_4,
         };
@@ -338,6 +342,7 @@ impl TxDsp {
             modulators,
             headroom: TxHeadroomLimiter::new(0.85),
             tx_output: Vec::new(),
+            monitor: telemetry.map(|sink| TxSignalMonitor::new(fft_planner, sink, sdr_sample_rate as RealSample, center_frequency)),
         }
     }
 
@@ -391,6 +396,9 @@ impl TxDsp {
 
         let tx_signal = self.fcfb.process();
         self.headroom.apply(tx_signal, &mut self.tx_output);
+        if let Some(monitor) = &mut self.monitor {
+            monitor.observe(&self.tx_output, self.block_count);
+        }
 
         // TODO: compensate for delay of SDR
         let sdr_sample_count = self.tx_output.len() as SampleCount * self.block_count;
@@ -407,6 +415,91 @@ impl TxDsp {
         // );
 
         Ok(true)
+    }
+}
+
+struct TxSignalMonitor {
+    sink: TelemetrySink,
+    sample_rate: RealSample,
+    center_frequency: f64,
+    fft: Arc<dyn rustfft::Fft<RealSample>>,
+    fft_buffer: Vec<ComplexSample>,
+    window: Vec<RealSample>,
+    min_block_gap: fcfb::BlockCount,
+    next_block: fcfb::BlockCount,
+}
+
+impl TxSignalMonitor {
+    const FFT_LEN: usize = 512;
+    const CONSTELLATION_POINTS: usize = 192;
+
+    fn new(fft_planner: &mut FftPlanner, sink: TelemetrySink, sample_rate: RealSample, center_frequency: f64) -> Self {
+        let fft = fft_planner.plan_fft_forward(Self::FFT_LEN);
+        let window = (0..Self::FFT_LEN)
+            .map(|i| {
+                let phase = 2.0 * std::f32::consts::PI * i as RealSample / (Self::FFT_LEN - 1) as RealSample;
+                0.5 - 0.5 * phase.cos()
+            })
+            .collect();
+        Self {
+            sink,
+            sample_rate,
+            center_frequency,
+            fft,
+            fft_buffer: vec![ComplexSample::ZERO; Self::FFT_LEN],
+            window,
+            min_block_gap: 33,
+            next_block: 0,
+        }
+    }
+
+    fn observe(&mut self, samples: &[ComplexSample], block_count: fcfb::BlockCount) {
+        if block_count < self.next_block || samples.len() < Self::FFT_LEN {
+            return;
+        }
+        self.next_block = block_count + self.min_block_gap;
+
+        let mut peak2: RealSample = 0.0;
+        let mut sum2: RealSample = 0.0;
+        for sample in samples {
+            let p = sample.norm_sqr();
+            peak2 = peak2.max(p);
+            sum2 += p;
+        }
+        let rms = (sum2 / samples.len() as RealSample).sqrt();
+        let rms_dbfs = 20.0 * rms.max(1.0e-12).log10();
+        let peak_dbfs = 20.0 * peak2.sqrt().max(1.0e-12).log10();
+
+        let start = (samples.len() - Self::FFT_LEN) / 2;
+        for i in 0..Self::FFT_LEN {
+            self.fft_buffer[i] = samples[start + i] * self.window[i];
+        }
+        self.fft.process(&mut self.fft_buffer);
+        let spectrum_db_tenths = (0..Self::FFT_LEN)
+            .map(|i| {
+                let idx = (i + Self::FFT_LEN / 2) % Self::FFT_LEN;
+                let mag = self.fft_buffer[idx].norm() / Self::FFT_LEN as RealSample;
+                (20.0 * mag.max(1.0e-12).log10() * 10.0)
+                    .round()
+                    .clamp(i16::MIN as RealSample, i16::MAX as RealSample) as i16
+            })
+            .collect();
+
+        let step = (samples.len() / Self::CONSTELLATION_POINTS).max(1);
+        let mut constellation_iq = Vec::with_capacity(Self::CONSTELLATION_POINTS * 2);
+        for sample in samples.iter().step_by(step).take(Self::CONSTELLATION_POINTS) {
+            constellation_iq.push((sample.re.clamp(-1.0, 1.0) * 32767.0).round() as i16);
+            constellation_iq.push((sample.im.clamp(-1.0, 1.0) * 32767.0).round() as i16);
+        }
+
+        self.sink.send(TelemetryEvent::TxMonitor {
+            sample_rate: self.sample_rate,
+            center_freq_hz: self.center_frequency,
+            rms_dbfs,
+            peak_dbfs,
+            spectrum_db_tenths,
+            constellation_iq,
+        });
     }
 }
 
