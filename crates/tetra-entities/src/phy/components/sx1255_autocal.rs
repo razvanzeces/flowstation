@@ -19,6 +19,7 @@ const IQ_MIN_MAIN_RETAINED_RATIO: RealSample = 0.35;
 const IQ_FLOOR_DRIFT_DISABLE_DB: RealSample = 12.0;
 const IQ_CLIP_LEVEL: RealSample = 0.98;
 const IQ_MAX_CLIPPED_FRACTION: RealSample = 0.001;
+const IQ_MAX_COMPONENT_ABS: RealSample = 0.85;
 const DC_ATTEMPT_ABS_TOLERANCE: RealSample = 0.06;
 const DC_ATTEMPT_REL_TOLERANCE: RealSample = 0.50;
 const TEMPERATURE_VALID_MIN_C: f64 = -40.0;
@@ -602,13 +603,13 @@ impl Sx1255Autocal {
         let block_len = stream_period_samples(rx_args).unwrap_or(900).max(64);
         let capture_blocks = self.cfg.rf_loopback_capture_blocks.max(1);
         let settle_blocks = self.cfg.rf_loopback_settle_blocks.max(1);
-        let tone = quantized_tone_hz(self.cfg.rf_loopback_tone_hz, rx_sample_rate, block_len);
-        let amplitude = self.cfg.rf_loopback_tone_amplitude as RealSample;
+        let tones = loopback_sweep_tones(&self.cfg, rx_sample_rate, block_len);
+        let amplitudes = loopback_sweep_amplitudes(&self.cfg);
 
         tracing::info!(
-            "SX1255 autocal: startup RF loopback calibration tone={:.1} Hz amplitude={:.3} block={} settle={} capture={} rf_center={}",
-            tone,
-            amplitude,
+            "SX1255 autocal: startup RF loopback calibration tones={} amplitudes={} block={} settle={} capture={} rf_center={}",
+            format_f64_list(&tones, 1),
+            format_f32_list(&amplitudes, 3),
             block_len,
             settle_blocks,
             capture_blocks,
@@ -642,34 +643,67 @@ impl Sx1255Autocal {
             tx.activate(None)
                 .map_err(|err| format!("could not activate TX calibration stream: {}", err))?;
 
-            let tone_pos_block = make_tone_block(block_len, tone, rx_sample_rate as RealSample, amplitude);
-            let tone_neg_block = make_tone_block(block_len, -tone, rx_sample_rate as RealSample, amplitude);
             let zero_block = vec![ComplexSample { re: 0.0, im: 0.0 }; block_len];
             let floor_blocks = (capture_blocks.max(4) / 2).max(4);
 
             let capture_result = (|| {
-                let floor_before_samples = capture_loopback_blocks(&mut rx, &mut tx, &zero_block, settle_blocks, floor_blocks, block_len)
-                    .map_err(|err| format!("floor-before capture failed: {}", err))?;
+                let mut sweep_measurements = Vec::new();
+                for tone in &tones {
+                    for amplitude in &amplitudes {
+                        tracing::info!(
+                            "SX1255 autocal: loopback sweep point tone={:.1} Hz amplitude={:.3}",
+                            tone,
+                            amplitude
+                        );
+                        let tone_pos_block = make_tone_block(block_len, *tone, rx_sample_rate as RealSample, *amplitude);
+                        let tone_neg_block = make_tone_block(block_len, -*tone, rx_sample_rate as RealSample, *amplitude);
 
-                let tone_pos_samples = capture_loopback_blocks(&mut rx, &mut tx, &tone_pos_block, settle_blocks, capture_blocks, block_len)
-                    .map_err(|err| format!("positive-tone capture failed: {}", err))?;
+                        let point_result = (|| {
+                            let floor_before_samples =
+                                capture_loopback_blocks(&mut rx, &mut tx, &zero_block, settle_blocks, floor_blocks, block_len)
+                                    .map_err(|err| format!("floor-before capture failed: {}", err))?;
 
-                let floor_after_samples = capture_loopback_blocks(&mut rx, &mut tx, &zero_block, settle_blocks, floor_blocks, block_len)
-                    .map_err(|err| format!("floor-after capture failed: {}", err))?;
+                            let tone_pos_samples =
+                                capture_loopback_blocks(&mut rx, &mut tx, &tone_pos_block, settle_blocks, capture_blocks, block_len)
+                                    .map_err(|err| format!("positive-tone capture failed: {}", err))?;
 
-                let tone_neg_samples = capture_loopback_blocks(&mut rx, &mut tx, &tone_neg_block, settle_blocks, capture_blocks, block_len)
-                    .map_err(|err| format!("negative-tone capture failed: {}", err))?;
+                            let floor_after_samples =
+                                capture_loopback_blocks(&mut rx, &mut tx, &zero_block, settle_blocks, floor_blocks, block_len)
+                                    .map_err(|err| format!("floor-after capture failed: {}", err))?;
 
-                compute_loopback_compensation(
-                    &tone_pos_samples,
-                    &tone_neg_samples,
-                    &floor_before_samples,
-                    &floor_after_samples,
-                    tone,
-                    rx_sample_rate as RealSample,
-                    block_len,
-                    &self.cfg,
-                )
+                            let tone_neg_samples =
+                                capture_loopback_blocks(&mut rx, &mut tx, &tone_neg_block, settle_blocks, capture_blocks, block_len)
+                                    .map_err(|err| format!("negative-tone capture failed: {}", err))?;
+
+                            compute_loopback_compensation(
+                                &tone_pos_samples,
+                                &tone_neg_samples,
+                                &floor_before_samples,
+                                &floor_after_samples,
+                                *tone,
+                                rx_sample_rate as RealSample,
+                                block_len,
+                                &self.cfg,
+                            )
+                        })();
+
+                        match point_result {
+                            Ok(compensation) => sweep_measurements.push(compensation),
+                            Err(err) => tracing::warn!(
+                                "SX1255 autocal: loopback sweep point tone={:.1} Hz amplitude={:.3} skipped: {}",
+                                tone,
+                                amplitude,
+                                err
+                            ),
+                        }
+                    }
+                }
+
+                if sweep_measurements.is_empty() {
+                    Err("all loopback sweep points failed".to_string())
+                } else {
+                    Ok(select_sweep_loopback_compensation(&sweep_measurements))
+                }
             })();
 
             tx.write_all(&[&zero_block], None, false, 200_000).ok();
@@ -990,6 +1024,57 @@ fn quantized_tone_hz(requested_hz: f64, sample_rate: f64, block_len: usize) -> f
     bin * bin_hz
 }
 
+fn loopback_sweep_tones(cfg: &CfgSx1255Autocal, sample_rate: f64, block_len: usize) -> Vec<f64> {
+    let mut tones = Vec::new();
+    push_unique_tone(&mut tones, quantized_tone_hz(cfg.rf_loopback_tone_hz, sample_rate, block_len));
+    for tone in &cfg.rf_loopback_sweep_tones_hz {
+        if tone.is_finite() && *tone > 0.0 {
+            push_unique_tone(&mut tones, quantized_tone_hz(*tone, sample_rate, block_len));
+        }
+    }
+    if tones.is_empty() {
+        tones.push(quantized_tone_hz(24_000.0, sample_rate, block_len));
+    }
+    tones
+}
+
+fn push_unique_tone(tones: &mut Vec<f64>, tone: f64) {
+    if !tones.iter().any(|existing| (*existing - tone).abs() < 1.0) {
+        tones.push(tone);
+    }
+}
+
+fn loopback_sweep_amplitudes(cfg: &CfgSx1255Autocal) -> Vec<RealSample> {
+    let mut amplitudes = Vec::new();
+    push_unique_amplitude(&mut amplitudes, cfg.rf_loopback_tone_amplitude as RealSample);
+    for amplitude in &cfg.rf_loopback_sweep_amplitudes {
+        push_unique_amplitude(&mut amplitudes, *amplitude as RealSample);
+    }
+    amplitudes.retain(|amplitude| amplitude.is_finite() && *amplitude > 0.0);
+    if amplitudes.is_empty() {
+        amplitudes.push(0.20);
+    }
+    amplitudes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    amplitudes
+}
+
+fn push_unique_amplitude(amplitudes: &mut Vec<RealSample>, amplitude: RealSample) {
+    let amplitude = amplitude.clamp(0.0, 0.95);
+    if !amplitudes.iter().any(|existing| (*existing - amplitude).abs() < 0.001) {
+        amplitudes.push(amplitude);
+    }
+}
+
+fn format_f64_list(values: &[f64], precision: usize) -> String {
+    let values = values.iter().map(|value| format!("{:.*}", precision, value)).collect::<Vec<_>>();
+    format!("[{}]", values.join(","))
+}
+
+fn format_f32_list(values: &[RealSample], precision: usize) -> String {
+    let values = values.iter().map(|value| format!("{:.*}", precision, value)).collect::<Vec<_>>();
+    format!("[{}]", values.join(","))
+}
+
 fn make_tone_block(block_len: usize, tone_hz: f64, sample_rate: RealSample, amplitude: RealSample) -> Vec<ComplexSample> {
     let phase_step = std::f32::consts::TAU * tone_hz as RealSample / sample_rate;
     (0..block_len)
@@ -1085,6 +1170,44 @@ fn select_repeated_loopback_compensation(measurements: &[RxStartupCompensation],
             );
         }
     }
+
+    RxStartupCompensation {
+        dc: dc.unwrap_or(ComplexSample { re: 0.0, im: 0.0 }),
+        image_coeff: image_coeff.unwrap_or(ComplexSample { re: 0.0, im: 0.0 }),
+        apply_dc: dc.is_some(),
+        apply_iq: image_coeff.is_some(),
+    }
+}
+
+fn select_sweep_loopback_compensation(measurements: &[RxStartupCompensation]) -> RxStartupCompensation {
+    if measurements.len() == 1 {
+        return measurements[0];
+    }
+
+    let dc_candidates = measurements
+        .iter()
+        .filter_map(|measurement| measurement.apply_dc.then_some(measurement.dc))
+        .collect::<Vec<_>>();
+    let iq_candidates = measurements
+        .iter()
+        .filter_map(|measurement| measurement.apply_iq.then_some(measurement.image_coeff))
+        .collect::<Vec<_>>();
+
+    let dc = stable_complex_value(
+        "sweep DC",
+        &dc_candidates,
+        dc_candidates.len().min(2).max(1),
+        DC_ATTEMPT_ABS_TOLERANCE,
+        DC_ATTEMPT_REL_TOLERANCE,
+    );
+    let required_iq_inliers = if iq_candidates.len() >= 3 { 3 } else { 2 };
+    let image_coeff = stable_complex_value(
+        "sweep IQ",
+        &iq_candidates,
+        required_iq_inliers,
+        IQ_REPEAT_ABS_TOLERANCE,
+        IQ_REPEAT_REL_TOLERANCE,
+    );
 
     RxStartupCompensation {
         dc: dc.unwrap_or(ComplexSample { re: 0.0, im: 0.0 }),
@@ -1304,10 +1427,11 @@ fn compute_loopback_compensation(
             (pos_corrected_main / pos_measurement.main_mag.max(1.0e-9)).min(neg_corrected_main / neg_measurement.main_mag.max(1.0e-9));
         let same_orientation = pos_measurement.orientation == neg_measurement.orientation;
         let clipped = clipped_fraction > IQ_MAX_CLIPPED_FRACTION;
+        let input_too_hot = max_component_abs > IQ_MAX_COMPONENT_ABS;
         let floor_unstable = floor_drift_db.abs() > IQ_FLOOR_DRIFT_DISABLE_DB;
 
         tracing::info!(
-            "SX1255 autocal: IQ candidate coeff=({:+.6},{:+.6}) mag={:.6} delta={:.6}/{:.6} corrected_image={:.1} dBc improvement={:.1} dB main_retained={:.2}",
+            "SX1255 autocal: IQ candidate coeff=({:+.6},{:+.6}) mag={:.6} delta={:.6}/{:.6} corrected_image={:.1} dBc improvement={:.1} dB main_retained={:.2} max_level={:.3}/{:.3}",
             image_coeff.re,
             image_coeff.im,
             image_coeff_abs,
@@ -1315,7 +1439,9 @@ fn compute_loopback_compensation(
             coeff_delta_limit,
             corrected_image_dbc,
             image_improvement_db,
-            main_retained_ratio
+            main_retained_ratio,
+            max_component_abs,
+            IQ_MAX_COMPONENT_ABS
         );
         tracing::debug!(
             "SX1255 autocal: IQ candidate corrected detail +main={:.6} +image={:.6} -main={:.6} -image={:.6}",
@@ -1331,13 +1457,14 @@ fn compute_loopback_compensation(
             && tone_delta_db <= IQ_MAX_TONE_DELTA_DB
             && same_orientation
             && !clipped
+            && !input_too_hot
             && !floor_unstable
             && image_improvement_db >= IQ_MIN_IMAGE_IMPROVEMENT_DB
             && main_retained_ratio >= IQ_MIN_MAIN_RETAINED_RATIO;
 
         if !apply_iq {
             tracing::warn!(
-                "SX1255 autocal: IQ correction disabled (coeff_mag={:.6} limit={:.6} normal_warn={:.6}, image={:.1} dBc, coeff_delta={:.6} limit={:.6}, tone_delta={:.1} dB, orientation=+{} / -{}, floor_drift={:+.1} dB, clipped={} ({:.4}), improvement={:.1} dB, main_retained={:.2})",
+                "SX1255 autocal: IQ correction disabled (coeff_mag={:.6} limit={:.6} normal_warn={:.6}, image={:.1} dBc, coeff_delta={:.6} limit={:.6}, tone_delta={:.1} dB, orientation=+{} / -{}, floor_drift={:+.1} dB, clipped={} ({:.4}), input_too_hot={} ({:.3}/{:.3}), improvement={:.1} dB, main_retained={:.2})",
                 image_coeff_abs,
                 cfg.rf_loopback_max_image_coeff,
                 IQ_WARN_LARGE_COEFF,
@@ -1350,6 +1477,9 @@ fn compute_loopback_compensation(
                 floor_drift_db,
                 clipped,
                 clipped_fraction,
+                input_too_hot,
+                max_component_abs,
+                IQ_MAX_COMPONENT_ABS,
                 image_improvement_db,
                 main_retained_ratio
             );

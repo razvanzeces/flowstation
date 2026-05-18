@@ -66,6 +66,10 @@ pub struct CfgSx1255Autocal {
     pub rf_loopback_tone_hz: f64,
     /// Calibration tone complex baseband amplitude.
     pub rf_loopback_tone_amplitude: f64,
+    /// Additional calibration tone offsets tried at startup.
+    pub rf_loopback_sweep_tones_hz: Vec<f64>,
+    /// Additional calibration tone amplitudes tried at startup.
+    pub rf_loopback_sweep_amplitudes: Vec<f64>,
     /// Number of RX/TX blocks discarded before measurements.
     pub rf_loopback_settle_blocks: usize,
     /// Number of RX/TX blocks captured for tone and floor measurements.
@@ -122,6 +126,8 @@ impl Default for CfgSx1255Autocal {
             rf_loopback_startup_calibration: true,
             rf_loopback_tone_hz: 24_000.0,
             rf_loopback_tone_amplitude: 0.35,
+            rf_loopback_sweep_tones_hz: vec![10_000.0, 18_000.0, 24_000.0, 36_000.0],
+            rf_loopback_sweep_amplitudes: vec![0.10, 0.15, 0.20, 0.25],
             rf_loopback_settle_blocks: 24,
             rf_loopback_capture_blocks: 32,
             rf_loopback_calibration_attempts: 1,
@@ -164,6 +170,8 @@ pub struct CfgSx1255AutocalDto {
     pub rf_loopback_startup_calibration: Option<bool>,
     pub rf_loopback_tone_hz: Option<f64>,
     pub rf_loopback_tone_amplitude: Option<f64>,
+    pub rf_loopback_sweep_tones_hz: Option<Vec<f64>>,
+    pub rf_loopback_sweep_amplitudes: Option<Vec<f64>>,
     pub rf_loopback_settle_blocks: Option<usize>,
     pub rf_loopback_capture_blocks: Option<usize>,
     pub rf_loopback_calibration_attempts: Option<usize>,
@@ -259,6 +267,16 @@ pub fn apply_sx1255_autocal_patch(src: Option<CfgSx1255AutocalDto>) -> CfgSx1255
         }
         if let Some(v) = src.rf_loopback_tone_amplitude {
             cfg.rf_loopback_tone_amplitude = v.clamp(0.0, 0.95);
+        }
+        if let Some(v) = src.rf_loopback_sweep_tones_hz {
+            cfg.rf_loopback_sweep_tones_hz = v.into_iter().filter(|tone| tone.is_finite() && *tone > 0.0).collect();
+        }
+        if let Some(v) = src.rf_loopback_sweep_amplitudes {
+            cfg.rf_loopback_sweep_amplitudes = v
+                .into_iter()
+                .filter(|amplitude| amplitude.is_finite())
+                .map(|amplitude| amplitude.clamp(0.0, 0.95))
+                .collect();
         }
         if let Some(v) = src.rf_loopback_settle_blocks {
             cfg.rf_loopback_settle_blocks = v.max(1);
