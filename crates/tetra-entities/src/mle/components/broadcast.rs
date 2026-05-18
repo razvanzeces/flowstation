@@ -2,10 +2,8 @@ use tetra_config::bluestation::SharedConfig;
 use tetra_config::bluestation::sec_cell::CfgBsServiceDetails;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity};
 use tetra_pdus::mle::{
-    enums::mle_protocol_discriminator::MleProtocolDiscriminator,
-    fields::bs_service_details::BsServiceDetails,
-    fields::neighbour_cell_information_for_ca::NeighbourCellInformationForCa,
-    pdus::d_nwrk_broadcast::DNwrkBroadcast,
+    enums::mle_protocol_discriminator::MleProtocolDiscriminator, fields::bs_service_details::BsServiceDetails,
+    fields::neighbour_cell_information_for_ca::NeighbourCellInformationForCa, pdus::d_nwrk_broadcast::DNwrkBroadcast,
 };
 use tetra_saps::{SapMsg, SapMsgInner, tla::TlaTlUnitdataReqBl};
 
@@ -88,22 +86,18 @@ impl MleBroadcast {
                 minimum_rx_access_level: c.minimum_rx_access_level,
                 subscriber_class: c.subscriber_class,
                 bs_service_details: c.bs_service_details.as_ref().map(cfg_to_bs_service_details),
-                timeshare_cell_information_or_security_parameters: c
-                    .timeshare_cell_information_or_security_parameters,
+                timeshare_cell_information_or_security_parameters: c.timeshare_cell_information_or_security_parameters,
                 tdma_frame_offset: c.tdma_frame_offset,
             })
             .collect();
 
         let neighbour_count = neighbour_cells.len() as u8;
 
-        // Per ETSI EN 300 392-2 clause 18.4.1.4.1 note 2:
-        // number_of_ca_neighbour_cells shall be ABSENT (None) when there are no neighbour cells.
-        // Some(0) has different semantics — it means "explicitly zero", not "no info".
-        let number_of_ca_neighbour_cells = if neighbour_count > 0 {
-            Some(neighbour_count)
-        } else {
-            None
-        };
+        // Keep the zero-neighbour wire shape used by Bluestation 0.5.9:
+        // emit the Type-2 count field with value 0. Major terminals tolerate
+        // this explicit count reliably, and it keeps the broadcast TL-SDU at
+        // the legacy 78-bit length for a time-only D-NWRK-BROADCAST.
+        let number_of_ca_neighbour_cells = if neighbour_count > 0 { Some(neighbour_count) } else { Some(0) };
 
         let pdu = DNwrkBroadcast {
             cell_re_select_parameters: 0,
@@ -156,7 +150,9 @@ impl MleBroadcast {
         queue.push_back(sapmsg);
         tracing::info!(
             "D-NWRK-BROADCAST sent (tz={}, time=0x{:012X}, neighbours={})",
-            tz, time_value, neighbour_count
+            tz,
+            time_value,
+            neighbour_count
         );
     }
 }
