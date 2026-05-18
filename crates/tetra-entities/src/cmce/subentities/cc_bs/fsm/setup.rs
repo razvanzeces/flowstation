@@ -19,11 +19,10 @@ impl CcBsSubentity {
 
         if !self.has_listener(dest_gssi) {
             tracing::info!(
-                "CMCE: rejecting U-SETUP from issi={} to gssi={} (no listeners)",
+                "CMCE: accepting U-SETUP from issi={} to gssi={} without listener cache entry",
                 calling_party.ssi,
                 dest_gssi
             );
-            return;
         }
 
         // Allocate circuit (DL+UL for group call)

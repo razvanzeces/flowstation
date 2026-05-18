@@ -7,6 +7,7 @@ use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
 use tetra_pdus::cmce::fields::basic_service_information::BasicServiceInformation;
 use tetra_pdus::cmce::pdus::u_setup::USetup;
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
+use tetra_saps::control::call_control::CallControl;
 use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 use tetra_saps::control::enums::communication_type::CommunicationType;
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
@@ -120,6 +121,39 @@ fn count_d_setups(msgs: &[SapMsg]) -> usize {
                     if prim.chan_alloc.as_ref().is_some_and(|ca| ca.usage.is_some()))
         })
         .count()
+}
+
+fn count_umac_circuit_opens(msgs: &[SapMsg]) -> usize {
+    msgs.iter()
+        .filter(|msg| msg.dest == TetraEntity::Umac && matches!(&msg.msg, SapMsgInner::CmceCallControl(CallControl::Open(_))))
+        .count()
+}
+
+#[test]
+fn test_group_setup_accepts_empty_listener_cache() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    let u_setup_msg = build_u_setup_msg(TEST_ISSI, TEST_GSSI);
+    test.submit_message(u_setup_msg);
+    test.run_stack(Some(1));
+
+    let initial_msgs = test.dump_sinks();
+    assert_eq!(
+        count_umac_circuit_opens(&initial_msgs),
+        1,
+        "Group U-SETUP must open a traffic circuit even if listener cache is empty"
+    );
+    assert!(
+        count_d_setups(&initial_msgs) > 0,
+        "Group U-SETUP must emit downlink call control even if listener cache is empty"
+    );
 }
 
 /// Test that late-entry D-SETUP re-sends are throttled when the previous
