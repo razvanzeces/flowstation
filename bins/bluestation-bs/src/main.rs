@@ -122,20 +122,20 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
         (None, None)
     };
 
+    // Always build control links — dashboard needs them even without external control server.
+    let (mut c_d, mut c_e) = build_all_control_links();
+
     // Add suitable Phy component based on PhyIo type
     match cfg.config().phy_io.backend {
         PhyBackend::SoapySdr => {
             let rxdev = RxTxDevSoapySdr::new(cfg, tsink.clone());
-            let phy = PhyBs::new(cfg.clone(), rxdev);
+            let phy = PhyBs::new(cfg.clone(), rxdev, c_e.remove(&TetraEntity::Phy));
             router.register_entity(Box::new(phy));
         }
         _ => {
             panic!("Unsupported PhyIo type: {:?}", cfg.config().phy_io.backend);
         }
     }
-
-    // Always build control links — dashboard needs them even without external control server
-    let (mut c_d, mut c_e) = build_all_control_links();
 
     // Add remaining components
     let lmac = LmacBs::new(cfg.clone());
@@ -235,6 +235,9 @@ fn main() {
 
             if let Some(tx) = dash_cmd_tx {
                 dashboard.set_cmd_sender(tx);
+            }
+            if let Some(tx) = cdispatchers.get(&TetraEntity::Phy).map(|d| d.clone_sender()) {
+                dashboard.set_phy_cmd_sender(tx);
             }
 
             // start() must be called before Arc::new() because it takes &mut self

@@ -43,4 +43,8 @@ pub struct TxSlotBits<'a> {
 /// Trait for RX/TX devices that work with full slots.
 pub trait RxTxDev {
     fn rxtx_timeslot(&mut self, tx_slot: &[TxSlotBits]) -> Result<Vec<Option<RxSlotBits<'_>>>, RxTxDevError>;
+
+    fn set_rf_gain(&mut self, _direction: &str, _name: &str, _value: f64) -> Result<f64, String> {
+        Err("runtime RF gain control is not supported by this RX/TX device".to_string())
+    }
 }

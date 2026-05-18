@@ -8,7 +8,9 @@ use tungstenite::{
     handshake::server::{Request, Response},
 };
 
-use crate::net_control::commands::ControlCommand;
+use tetra_config::bluestation::parsing;
+
+use crate::net_control::commands::{ControlCommand, RfGainDirection};
 use crate::net_dashboard::html::DASHBOARD_HTML;
 use crate::net_dashboard::state::{CallEntry, DashboardState, DashboardStateInner, MsEntry, RfLoopbackFrame};
 use crate::net_telemetry::TelemetryEvent;
@@ -198,6 +200,7 @@ pub struct DashboardServer {
     clients: WsClients,
     config_path: String,
     cmd_tx: Option<CmdSender>,
+    phy_cmd_tx: Option<CmdSender>,
     update_state: SharedUpdateState,
     /// Last time a ts_voice WS message was broadcast per TS (indexed 0..3 for TS1..TS4)
     ts_last_broadcast: std::sync::Mutex<[std::time::Instant; 4]>,
@@ -211,6 +214,7 @@ impl DashboardServer {
             clients: Arc::new(Mutex::new(Vec::new())),
             config_path,
             cmd_tx: None,
+            phy_cmd_tx: None,
             update_state: Arc::new(Mutex::new(UpdateState::new())),
             ts_last_broadcast: std::sync::Mutex::new([now; 4]),
         }
@@ -220,12 +224,17 @@ impl DashboardServer {
         self.cmd_tx = Some(tx);
     }
 
+    pub fn set_phy_cmd_sender(&mut self, tx: CmdSender) {
+        self.phy_cmd_tx = Some(tx);
+    }
+
     pub fn start(&mut self, bind: &str, port: u16) {
         let addr = format!("{}:{}", bind, port);
         let state = Arc::clone(&self.state);
         let clients = Arc::clone(&self.clients);
         let config_path = self.config_path.clone();
         let cmd_tx: Arc<Mutex<Option<CmdSender>>> = Arc::new(Mutex::new(self.cmd_tx.take()));
+        let phy_cmd_tx: Arc<Mutex<Option<CmdSender>>> = Arc::new(Mutex::new(self.phy_cmd_tx.take()));
         let update_state = Arc::clone(&self.update_state);
 
         std::thread::Builder::new()
@@ -247,10 +256,11 @@ impl DashboardServer {
                     let clients = Arc::clone(&clients);
                     let config_path = config_path.clone();
                     let cmd_tx = Arc::clone(&cmd_tx);
+                    let phy_cmd_tx = Arc::clone(&phy_cmd_tx);
                     let update_state = Arc::clone(&update_state);
                     std::thread::Builder::new()
                         .name("dashboard-conn".into())
-                        .spawn(move || handle_connection(stream, state, clients, config_path, cmd_tx, update_state))
+                        .spawn(move || handle_connection(stream, state, clients, config_path, cmd_tx, phy_cmd_tx, update_state))
                         .ok();
                 }
             })
@@ -541,6 +551,7 @@ fn handle_connection(
     clients: WsClients,
     config_path: String,
     cmd_tx: Arc<Mutex<Option<CmdSender>>>,
+    phy_cmd_tx: Arc<Mutex<Option<CmdSender>>>,
     update_state: SharedUpdateState,
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
@@ -554,7 +565,7 @@ fn handle_connection(
     let req_line = peek_str.lines().next().unwrap_or("").to_string();
 
     if req_line.contains("/ws") {
-        handle_ws(stream, state, clients, cmd_tx, update_state);
+        handle_ws(stream, state, clients, cmd_tx, phy_cmd_tx, update_state);
     } else if req_line.contains("GET /api/system") {
         let mut buf = BufReader::new(stream);
         loop {
@@ -728,6 +739,7 @@ fn handle_ws(
     state: DashboardState,
     clients: WsClients,
     cmd_tx: Arc<Mutex<Option<CmdSender>>>,
+    phy_cmd_tx: Arc<Mutex<Option<CmdSender>>>,
     update_state: SharedUpdateState,
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(50)));
@@ -756,13 +768,15 @@ fn handle_ws(
         let logs: Vec<_> = s.log_ring.iter().cloned().collect();
         let last_heard: Vec<_> = s.last_heard.iter().cloned().collect();
         let last_rf_loopback = s.last_rf_loopback.clone();
+        let config_path = s.config_path.clone();
         drop(s);
         let brew_online = state.read().unwrap().brew_online;
         let brew_version = state.read().unwrap().brew_version;
+        let rf_gains = rf_gain_snapshot(&config_path);
         if let Ok(json) = serde_json::to_string(&serde_json::json!({
             "type": "snapshot", "ms": ms, "calls": calls, "log": logs,
             "brew_online": brew_online, "brew_version": brew_version, "last_heard": last_heard,
-            "last_rf_loopback": last_rf_loopback
+            "last_rf_loopback": last_rf_loopback, "rf_gains": rf_gains
         })) {
             let _ = ws.send(Message::Text(json));
         }
@@ -781,7 +795,7 @@ fn handle_ws(
         // Then check for inbound messages from browser
         match ws.read() {
             Ok(Message::Text(text)) => {
-                handle_ws_command(&text, &state, &cmd_tx, &update_state);
+                handle_ws_command(&text, &state, &cmd_tx, &phy_cmd_tx, &update_state);
             }
             Ok(Message::Close(_)) => break,
             Ok(Message::Ping(data)) => {
@@ -795,7 +809,30 @@ fn handle_ws(
     }
 }
 
-fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Option<CmdSender>>>, update_state: &SharedUpdateState) {
+fn rf_gain_snapshot(config_path: &str) -> Vec<serde_json::Value> {
+    let Ok(config) = parsing::from_file(config_path) else {
+        return Vec::new();
+    };
+    let Some(soapy) = config.phy_io.soapysdr.as_ref() else {
+        return Vec::new();
+    };
+    let mut gains = Vec::new();
+    for (name, value) in &soapy.rx_gains {
+        gains.push(serde_json::json!({"direction":"rx","name":name.to_ascii_uppercase(),"value":value}));
+    }
+    for (name, value) in &soapy.tx_gains {
+        gains.push(serde_json::json!({"direction":"tx","name":name.to_ascii_uppercase(),"value":value}));
+    }
+    gains
+}
+
+fn handle_ws_command(
+    text: &str,
+    state: &DashboardState,
+    cmd_tx: &Arc<Mutex<Option<CmdSender>>>,
+    phy_cmd_tx: &Arc<Mutex<Option<CmdSender>>>,
+    update_state: &SharedUpdateState,
+) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
         return;
     };
@@ -808,8 +845,45 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
         }
         false
     };
+    let send_phy_cmd = |cmd: ControlCommand| -> bool {
+        if let Ok(guard) = phy_cmd_tx.lock() {
+            if let Some(ref tx) = *guard {
+                return tx.send(cmd).is_ok();
+            }
+        }
+        false
+    };
 
     match v.get("type").and_then(|t| t.as_str()) {
+        Some("set_rf_gain") => {
+            let Some(direction) = v.get("direction").and_then(|d| d.as_str()) else {
+                return;
+            };
+            let direction = match direction {
+                "rx" | "RX" => RfGainDirection::Rx,
+                "tx" | "TX" => RfGainDirection::Tx,
+                _ => return,
+            };
+            let Some(name) = v.get("name").and_then(|n| n.as_str()).filter(|n| !n.is_empty()) else {
+                return;
+            };
+            let Some(value) = v.get("value").and_then(|g| g.as_f64()).filter(|g| g.is_finite()) else {
+                return;
+            };
+            if !send_phy_cmd(ControlCommand::SetRfGain {
+                direction,
+                name: name.to_string(),
+                value,
+            }) {
+                tracing::warn!("Dashboard: no PHY control dispatcher for RF gain");
+            }
+            let mut s = state.write().unwrap();
+            let dir = match direction {
+                RfGainDirection::Rx => "RX",
+                RfGainDirection::Tx => "TX",
+            };
+            s.push_log("INFO", format!("RF gain set requested: {} {} {:.1}", dir, name, value));
+        }
         Some("kick") => {
             let issi = v.get("issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             if issi == 0 {

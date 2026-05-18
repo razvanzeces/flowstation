@@ -8,6 +8,7 @@ use tetra_pdus::phy::traits::rxtx_dev::{RxTxDev, TxSlotBits};
 use tetra_saps::tp::TpUnitdataInd;
 use tetra_saps::{SapMsg, SapMsgInner};
 
+use crate::net_control::{ControlCommand, ControlEndpoint, ControlResponse, RfGainDirection};
 use crate::phy::components::phy_io_file::{FileWriteMsg, PhyIoFileMode};
 use crate::phy::components::{burst_consts::*, slotter, train_consts::*};
 use crate::umac::subcomp::bs_sched::MACSCHED_TX_AHEAD;
@@ -31,12 +32,13 @@ pub struct PhyBs<D: RxTxDev> {
 
     /// RX/TX device
     rxtxdev: D,
+    control: Option<ControlEndpoint>,
 
     tick: u64,
 }
 
 impl<D: RxTxDev> PhyBs<D> {
-    pub fn new(config: SharedConfig, rxtxdev: D) -> Self {
+    pub fn new(config: SharedConfig, rxtxdev: D, control: Option<ControlEndpoint>) -> Self {
         let c = &config.config().phy_io;
 
         // Create async writers for file logging of generated DL and received UL signals
@@ -69,7 +71,53 @@ impl<D: RxTxDev> PhyBs<D> {
             dl_input_file,
             ul_input_file,
             rxtxdev,
+            control,
             tick: 0,
+        }
+    }
+
+    fn drain_control(&mut self) {
+        while let Some(cmd) = self.control.as_ref().and_then(|endpoint| endpoint.try_recv()) {
+            self.handle_control(cmd);
+        }
+    }
+
+    fn handle_control(&mut self, cmd: ControlCommand) {
+        match cmd {
+            ControlCommand::SetRfGain { direction, name, value } => {
+                let dir_name = match direction {
+                    RfGainDirection::Rx => "rx",
+                    RfGainDirection::Tx => "tx",
+                };
+                let result = self.rxtxdev.set_rf_gain(dir_name, &name, value);
+                match &result {
+                    Ok(applied) => tracing::info!(
+                        "PHY: runtime {} gain {} requested {:.2}, applied {:.2}",
+                        dir_name.to_uppercase(),
+                        name,
+                        value,
+                        applied
+                    ),
+                    Err(err) => tracing::warn!(
+                        "PHY: runtime {} gain {} requested {:.2} failed: {}",
+                        dir_name.to_uppercase(),
+                        name,
+                        value,
+                        err
+                    ),
+                }
+                if let Some(endpoint) = &self.control {
+                    endpoint.respond(ControlResponse::RfGainResponse {
+                        direction,
+                        name,
+                        requested: value,
+                        applied: result.as_ref().ok().copied(),
+                        success: result.is_ok(),
+                        error: result.err(),
+                    });
+                }
+            }
+            other => tracing::warn!("PHY: ignoring unsupported control command {:?}", other),
         }
     }
 
@@ -280,6 +328,7 @@ impl<D: RxTxDev + Send + 'static> TetraEntityTrait for PhyBs<D> {
     }
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
+        self.drain_control();
         tracing::debug!("rx_prim: {:?}", message);
         // tracing::debug!(ts=%message.dltime, "rx_prim: {:?}", message);
 
@@ -298,5 +347,6 @@ impl<D: RxTxDev + Send + 'static> TetraEntityTrait for PhyBs<D> {
 
     fn tick_start(&mut self, _queue: &mut MessageQueue, ts: TdmaTime) {
         self.dltime = ts;
+        self.drain_control();
     }
 }

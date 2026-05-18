@@ -13,7 +13,7 @@ pub mod worker;
 use std::time::Duration;
 
 pub use self::channel::{CommandDispatcher, ControlEndpoint, make_control_link};
-pub use self::commands::{ControlCommand, ControlResponse};
+pub use self::commands::{ControlCommand, ControlResponse, RfGainDirection};
 pub use self::worker::ControlWorker;
 
 /// Sent as subprotocol in WebSocket handshake

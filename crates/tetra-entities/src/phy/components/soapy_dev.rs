@@ -128,6 +128,15 @@ impl RxTxDevSoapySdr {
 }
 
 impl RxTxDev for RxTxDevSoapySdr {
+    fn set_rf_gain(&mut self, direction: &str, name: &str, value: f64) -> Result<f64, String> {
+        let dir = match direction {
+            "rx" | "RX" => soapysdr::Direction::Rx,
+            "tx" | "TX" => soapysdr::Direction::Tx,
+            other => return Err(format!("unsupported RF gain direction '{}'", other)),
+        };
+        self.sdr.set_rf_gain(dir, name, value)
+    }
+
     fn rxtx_timeslot<'a>(
         &'a mut self,
         tx_slot: &[TxSlotBits],
@@ -433,6 +442,7 @@ struct TxSignalMonitor {
 impl TxSignalMonitor {
     const FFT_LEN: usize = 512;
     const CONSTELLATION_POINTS: usize = 192;
+    const CONSTELLATION_ENCODE_SCALE: RealSample = 32767.0 / 1.5;
 
     fn new(fft_planner: &mut FftPlanner, sink: TelemetrySink, sample_rate: RealSample, center_frequency: f64) -> Self {
         let fft = fft_planner.plan_fft_forward(Self::FFT_LEN);
@@ -506,69 +516,122 @@ impl TxSignalMonitor {
             return Vec::new();
         }
 
-        let phase = symbol_timing_phase(samples, samples_per_symbol);
-        let mut frame_points = Vec::new();
+        let Some((phase, rotation, gain)) = constellation_timing_rotation_gain(samples, samples_per_symbol) else {
+            return Vec::new();
+        };
+
+        let (sin_rot, cos_rot) = rotation.sin_cos();
         let mut sample_at = phase;
         while sample_at < samples.len() as RealSample {
             let idx = sample_at.round() as usize;
             if let Some(sample) = samples.get(idx) {
-                frame_points.push(*sample);
+                let derotated = ComplexSample {
+                    re: (sample.re * cos_rot + sample.im * sin_rot) / gain,
+                    im: (sample.im * cos_rot - sample.re * sin_rot) / gain,
+                };
+                if derotated.norm() > 0.05 {
+                    self.constellation_history.push(derotated);
+                }
             }
             sample_at += samples_per_symbol;
         }
 
-        let rotation = constellation_rotation(&frame_points).unwrap_or(0.0);
-        let (sin_rot, cos_rot) = rotation.sin_cos();
-        for sample in frame_points {
-            let derotated = ComplexSample {
-                re: sample.re * cos_rot + sample.im * sin_rot,
-                im: sample.im * cos_rot - sample.re * sin_rot,
-            };
-            self.constellation_history.push(derotated);
-            if self.constellation_history.len() > Self::CONSTELLATION_POINTS {
-                let excess = self.constellation_history.len() - Self::CONSTELLATION_POINTS;
-                self.constellation_history.drain(0..excess);
-            }
+        if self.constellation_history.len() > Self::CONSTELLATION_POINTS {
+            let excess = self.constellation_history.len() - Self::CONSTELLATION_POINTS;
+            self.constellation_history.drain(0..excess);
         }
 
         let mut points = Vec::with_capacity(self.constellation_history.len() * 2);
         for sample in &self.constellation_history {
-            points.push((sample.re.clamp(-1.0, 1.0) * 32767.0).round() as i16);
-            points.push((sample.im.clamp(-1.0, 1.0) * 32767.0).round() as i16);
+            points.push(
+                (sample.re.clamp(-1.5, 1.5) * Self::CONSTELLATION_ENCODE_SCALE)
+                    .round()
+                    .clamp(i16::MIN as RealSample, i16::MAX as RealSample) as i16,
+            );
+            points.push(
+                (sample.im.clamp(-1.5, 1.5) * Self::CONSTELLATION_ENCODE_SCALE)
+                    .round()
+                    .clamp(i16::MIN as RealSample, i16::MAX as RealSample) as i16,
+            );
         }
         points
     }
 }
 
-fn symbol_timing_phase(samples: &[ComplexSample], samples_per_symbol: RealSample) -> RealSample {
+fn constellation_timing_rotation_gain(samples: &[ComplexSample], samples_per_symbol: RealSample) -> Option<(RealSample, RealSample, RealSample)> {
     const STEPS: usize = 64;
-    let mut best_phase = 0.0;
-    let mut best_score = -1.0;
+    let mut best: Option<(RealSample, RealSample, RealSample, RealSample)> = None;
 
     for step in 0..STEPS {
         let phase = samples_per_symbol * step as RealSample / STEPS as RealSample;
-        let mut sample_at = phase;
-        let mut sum = 0.0;
-        let mut count = 0usize;
-        while sample_at < samples.len() as RealSample {
-            let idx = sample_at.round() as usize;
-            if let Some(sample) = samples.get(idx) {
-                sum += sample.norm_sqr();
-                count += 1;
-            }
-            sample_at += samples_per_symbol;
-        }
-        if count == 0 {
+        let points = constellation_points_for_phase(samples, samples_per_symbol, phase);
+        if points.len() < 8 {
             continue;
         }
-        let score = sum / count as RealSample;
-        if score > best_score {
-            best_score = score;
-            best_phase = phase;
+        let rotation = constellation_rotation(&points)?;
+        let (sin_rot, cos_rot) = rotation.sin_cos();
+        let mut radius_sum = 0.0;
+        let mut radius_count = 0usize;
+        for point in &points {
+            let derotated = ComplexSample {
+                re: point.re * cos_rot + point.im * sin_rot,
+                im: point.im * cos_rot - point.re * sin_rot,
+            };
+            let radius = derotated.norm();
+            if radius > 1.0e-5 {
+                radius_sum += radius;
+                radius_count += 1;
+            }
+        }
+        if radius_count < 8 {
+            continue;
+        }
+        let gain = radius_sum / radius_count as RealSample;
+        let mut err_sum = 0.0;
+        let mut err_count = 0usize;
+        for point in &points {
+            let derotated = ComplexSample {
+                re: (point.re * cos_rot + point.im * sin_rot) / gain,
+                im: (point.im * cos_rot - point.re * sin_rot) / gain,
+            };
+            let radius = derotated.norm();
+            if radius < 0.05 {
+                continue;
+            }
+            let angle = derotated.im.atan2(derotated.re).rem_euclid(std::f32::consts::TAU);
+            let ideal = (angle / (std::f32::consts::FRAC_PI_4)).round() * std::f32::consts::FRAC_PI_4;
+            let ideal_point = ComplexSample {
+                re: ideal.cos(),
+                im: ideal.sin(),
+            };
+            let err = derotated - ideal_point;
+            err_sum += err.norm_sqr();
+            err_count += 1;
+        }
+        if err_count < 8 {
+            continue;
+        }
+        let score = err_sum / err_count as RealSample;
+        match best {
+            Some((best_score, _, _, _)) if score >= best_score => {}
+            _ => best = Some((score, phase, rotation, gain.max(1.0e-5))),
         }
     }
 
-    best_phase
+    best.map(|(_, phase, rotation, gain)| (phase, rotation, gain))
+}
+
+fn constellation_points_for_phase(samples: &[ComplexSample], samples_per_symbol: RealSample, phase: RealSample) -> Vec<ComplexSample> {
+    let mut points = Vec::new();
+    let mut sample_at = phase;
+    while sample_at < samples.len() as RealSample {
+        let idx = sample_at.round() as usize;
+        if let Some(sample) = samples.get(idx) {
+            points.push(*sample);
+        }
+        sample_at += samples_per_symbol;
+    }
+    points
 }
 
 fn constellation_rotation(points: &[ComplexSample]) -> Option<RealSample> {
@@ -577,7 +640,7 @@ fn constellation_rotation(points: &[ComplexSample]) -> Option<RealSample> {
         return None;
     }
 
-    let min_radius = max_radius * 0.35;
+    let min_radius = max_radius * 0.25;
     let mut sum_re = 0.0;
     let mut sum_im = 0.0;
     let mut weight_sum = 0.0;

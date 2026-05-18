@@ -352,6 +352,26 @@ impl SoapyIo {
     pub fn tx_enabled(&self) -> bool {
         self.tx.is_some()
     }
+
+    pub fn set_rf_gain(&mut self, direction: soapysdr::Direction, name: &str, value: f64) -> Result<f64, String> {
+        let ch = match direction {
+            soapysdr::Direction::Rx => self.rx_ch,
+            soapysdr::Direction::Tx => self.tx_ch,
+        };
+        self.dev
+            .set_gain_element(direction, ch, name, value)
+            .map_err(|e| format!("set {} gain {}={:.2} failed: {}", rf_direction_name(direction), name, value, e))?;
+        self.dev
+            .gain_element(direction, ch, name)
+            .map_err(|e| format!("read {} gain {} failed after set: {}", rf_direction_name(direction), name, e))
+    }
+}
+
+fn rf_direction_name(direction: soapysdr::Direction) -> &'static str {
+    match direction {
+        soapysdr::Direction::Rx => "RX",
+        soapysdr::Direction::Tx => "TX",
+    }
 }
 
 // Messy logic related to opening a device follows...

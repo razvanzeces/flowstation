@@ -563,7 +563,7 @@ td code{
   background:#050607;
   border:1px solid rgba(255,255,255,0.08);
 }
-.rf-canvas.small{height:260px;}
+.rf-canvas.small{height:320px;}
 .rf-metrics{
   display:grid;
   grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
@@ -588,6 +588,30 @@ td code{
   color:var(--accent);
   margin-top:6px;
 }
+.rf-controls{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:10px;
+  margin-bottom:16px;
+}
+.rf-control{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:10px 12px;
+}
+.rf-control-head{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  align-items:center;
+  margin-bottom:8px;
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--text2);
+}
+.rf-control-value{color:var(--accent);font-weight:700;}
+.rf-control input[type="range"]{width:100%;}
 @media(max-width:900px){.rf-grid{grid-template-columns:1fr}.rf-canvas{height:220px}}
 </style>
 </head>
@@ -624,7 +648,7 @@ td code{
     </div>
     <div class="nav-item" onclick="showPage('rf',this)" id="nav-rf">
       <span class="nav-icon">◫</span>
-      <span class="nav-label" data-i18n="rf">RF MONITOR</span>
+      <span class="nav-label" data-i18n="rf">RF MONITOR/SET</span>
     </div>
     <div class="nav-item" onclick="showPage('log',this)" id="nav-log">
       <span class="nav-icon">📋</span>
@@ -830,6 +854,24 @@ td code{
 
     <!-- ── RF MONITOR ── -->
     <div class="page" id="page-rf">
+      <div class="rf-controls">
+        <div class="rf-control">
+          <div class="rf-control-head"><span>RX LNA</span><span class="rf-control-value" id="rf-gain-rx-LNA">30.0</span></div>
+          <input type="range" min="0" max="42" step="1" value="30" data-rf-dir="rx" data-rf-name="LNA">
+        </div>
+        <div class="rf-control">
+          <div class="rf-control-head"><span>RX PGA</span><span class="rf-control-value" id="rf-gain-rx-PGA">8.0</span></div>
+          <input type="range" min="0" max="16" step="1" value="8" data-rf-dir="rx" data-rf-name="PGA">
+        </div>
+        <div class="rf-control">
+          <div class="rf-control-head"><span>TX DAC</span><span class="rf-control-value" id="rf-gain-tx-DAC">6.0</span></div>
+          <input type="range" min="0" max="9" step="1" value="6" data-rf-dir="tx" data-rf-name="DAC">
+        </div>
+        <div class="rf-control">
+          <div class="rf-control-head"><span>TX MIXER</span><span class="rf-control-value" id="rf-gain-tx-MIXER">30.0</span></div>
+          <input type="range" min="0" max="30" step="1" value="30" data-rf-dir="tx" data-rf-name="MIXER">
+        </div>
+      </div>
       <div class="rf-metrics">
         <div class="rf-metric">
           <div class="rf-metric-label">Center</div>
@@ -850,11 +892,11 @@ td code{
       </div>
       <div class="rf-grid">
         <div class="rf-panel">
-          <div class="rf-panel-title"><span>TX Spectrum</span><span id="rf-age">waiting</span></div>
+          <div class="rf-panel-title"><span id="rf-spectrum-title">TX DSP Spectrum (pre-PA)</span><span id="rf-age">waiting</span></div>
           <canvas id="rf-spectrum" class="rf-canvas" width="900" height="260"></canvas>
         </div>
         <div class="rf-panel">
-          <div class="rf-panel-title"><span>TX Measured Constellation</span><span id="rf-vector">full-scale IQ</span></div>
+          <div class="rf-panel-title"><span id="rf-constellation-title">TX DSP Measured Constellation</span><span id="rf-vector">full-scale IQ</span></div>
           <canvas id="rf-constellation" class="rf-canvas small" width="420" height="260"></canvas>
         </div>
         <div class="rf-panel" style="grid-column:1/-1">
@@ -998,7 +1040,7 @@ const LANGS={
   en:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'Radios',calls:'Calls',lastheard:'Last Heard',rf:'RF Monitor',log:'Log',config:'Config',
+    stations:'Radios',calls:'Calls',lastheard:'Last Heard',rf:'RF Monitor/Set',log:'Log',config:'Config',
     terminals:'Radios',registered:'registered',
     active_calls:'Active Calls',circuits:'circuits in use',
     registered_terminals:'Registered Radios',
@@ -1150,7 +1192,7 @@ const LANGS={
   hu:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'Rádiók',calls:'Hívások',lastheard:'Utoljára Hallott',rf:'RF Monitor',log:'Napló',config:'Konfig',
+    stations:'Rádiók',calls:'Hívások',lastheard:'Utoljára Hallott',rf:'RF Monitor/Set',log:'Napló',config:'Konfig',
     terminals:'Rádiók',registered:'regisztrált',
     active_calls:'Aktív hívások',circuits:'aktív áramkör',
     registered_terminals:'Regisztrált rádiók',
@@ -1311,6 +1353,7 @@ function handleMsg(msg){
       });
       if(msg.log&&msg.log.length){document.getElementById('log-container').innerHTML='';msg.log.forEach(e=>appendLog(e));}
       setBrewStatus(!!msg.brew_online,msg.brew_version||0);
+      if(msg.rf_gains)applyRfGainSnapshot(msg.rf_gains);
       if(msg.last_rf_loopback)updateRfMonitor({...msg.last_rf_loopback,type:'rf_loopback_monitor'});
       renderAll();break;
     case 'brew_status':
@@ -1398,8 +1441,40 @@ function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocks();}
 
 // ── RF Monitor ───────────────────────────────────────────────────────────
-const rfState={waterfall:[],avg:null,maxHold:null,lastTs:0,frames:0,rateTs:0,accumSource:null,accum:[],accumLimit:4096};
+const rfState={waterfall:[],avg:null,maxHold:null,lastTs:0,frames:0,rateTs:0,accumSource:null,accum:[],accumLimit:50000};
+const rfGainTimers={};
 function fmtMHz(v){return v?`${(v/1e6).toFixed(6)} MHz`:'—';}
+function rfGainLabelId(dir,name){return `rf-gain-${dir}-${name}`;}
+function sendRfGain(dir,name,value){
+  if(!ws||ws.readyState!==WebSocket.OPEN)return;
+  ws.send(JSON.stringify({type:'set_rf_gain',direction:dir,name,value}));
+}
+function applyRfGainSnapshot(gains){
+  for(const g of gains||[]){
+    const dir=String(g.direction||'').toLowerCase(),name=String(g.name||'').toUpperCase(),value=Number(g.value);
+    if(!dir||!name||!Number.isFinite(value))continue;
+    const input=document.querySelector(`input[data-rf-dir="${dir}"][data-rf-name="${name}"]`);
+    const label=document.getElementById(rfGainLabelId(dir,name));
+    if(input)input.value=String(value);
+    if(label)label.textContent=value.toFixed(1);
+  }
+}
+function queueRfGain(dir,name,value){
+  const id=rfGainLabelId(dir,name),label=document.getElementById(id);
+  if(label)label.textContent=Number(value).toFixed(1);
+  const key=`${dir}:${name}`;
+  clearTimeout(rfGainTimers[key]);
+  rfGainTimers[key]=setTimeout(()=>sendRfGain(dir,name,Number(value)),140);
+}
+function initRfGainControls(){
+  document.querySelectorAll('input[data-rf-dir][data-rf-name]').forEach(input=>{
+    const dir=input.dataset.rfDir,name=input.dataset.rfName;
+    const label=document.getElementById(rfGainLabelId(dir,name));
+    if(label)label.textContent=Number(input.value).toFixed(1);
+    input.addEventListener('input',()=>queueRfGain(dir,name,input.value));
+    input.addEventListener('change',()=>sendRfGain(dir,name,Number(input.value)));
+  });
+}
 function rfResizeCanvas(id){
   const c=document.getElementById(id);if(!c)return null;
   const r=c.getBoundingClientRect(),d=window.devicePixelRatio||1;
@@ -1414,11 +1489,15 @@ function updateRfMonitor(msg){
   if(dt>=1){document.getElementById('rf-rate').textContent=`${(rfState.frames/dt).toFixed(1)} fps`;rfState.frames=0;rfState.rateTs=rfState.lastTs;}
   const isLoopback=msg.type==='rf_loopback_monitor';
   if(rfState.accumSource!==msg.type){rfState.accumSource=msg.type;rfState.accum=[];}
+  const spectrumTitle=document.getElementById('rf-spectrum-title');
+  const constellationTitle=document.getElementById('rf-constellation-title');
+  if(spectrumTitle)spectrumTitle.textContent=isLoopback?'RF Loopback Spectrum':'TX DSP Spectrum (pre-PA)';
+  if(constellationTitle)constellationTitle.textContent=isLoopback?'RF Loopback IQ':'TX DSP Measured Constellation';
   document.getElementById('rf-center').textContent=fmtMHz(msg.center_freq_hz);
   document.getElementById('rf-rms').textContent=`${msg.rms_dbfs.toFixed(1)} dBFS`;
   document.getElementById('rf-peak').textContent=`${msg.peak_dbfs.toFixed(1)} dBFS`;
   const age=document.getElementById('rf-age');
-  if(age)age.textContent=isLoopback?`RF LB ${Number(msg.tone_hz||0).toFixed(0)} Hz @ ${Number(msg.amplitude||0).toFixed(2)}`:'TX DSP live';
+  if(age)age.textContent=isLoopback?`RF LB ${Number(msg.tone_hz||0).toFixed(0)} Hz @ ${Number(msg.amplitude||0).toFixed(2)}`:'pre-PA live';
   const spectrum=(msg.spectrum_db_tenths||[]).map(v=>v/10);
   updateRfTraces(spectrum);
   drawRfSpectrum(spectrum,msg.sample_rate||600000);
@@ -1487,7 +1566,7 @@ function drawRfSpectrum(spec,fs){
 }
 function drawRfConstellation(iq,isLoopback=false){
   const c=rfResizeCanvas('rf-constellation');if(!c)return;
-  const ctx=c.getContext('2d'),w=c.width,h=c.height,cx=w/2,cy=h/2,s=Math.min(w,h)*0.43;
+  const ctx=c.getContext('2d'),w=c.width,h=c.height,cx=w/2,cy=h/2,s=Math.min(w,h)*0.34;
   ctx.fillStyle='#050607';ctx.fillRect(0,0,w,h);
   ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.beginPath();ctx.moveTo(cx,8);ctx.lineTo(cx,h-8);ctx.moveTo(8,cy);ctx.lineTo(w-8,cy);ctx.stroke();
   ctx.strokeStyle='rgba(255,255,255,0.08)';
@@ -1506,39 +1585,40 @@ function drawRfConstellation(iq,isLoopback=false){
 }
 function drawTetraSymbolConstellation(ctx,cx,cy,s,iq){
   const ideals=[];
-  let radiusSum=0,radiusCount=0;
-  for(let i=0;i+1<iq.length;i+=2){
-    const r=Math.hypot(iq[i]/32767,iq[i+1]/32767);
-    if(r>0.02){radiusSum+=r;radiusCount++;}
-  }
-  const gain=radiusCount?radiusSum/radiusCount:1;
-  const cloudScale=Math.min(4.5,Math.max(1.0,0.72/Math.max(0.08,gain)));
+  const iqScale=32767/1.5;
   for(let k=0;k<8;k++){
-    const a=k*Math.PI/4,x=cx+Math.cos(a)*s,y=cy-Math.sin(a)*s;
+    const a=k*Math.PI/4;
     ideals.push([Math.cos(a),Math.sin(a)]);
-    ctx.strokeStyle='rgba(0,212,168,0.62)';ctx.beginPath();ctx.arc(x,y,Math.max(10,s*0.13),0,Math.PI*2);ctx.stroke();
-    ctx.fillStyle='rgba(0,212,168,0.25)';ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();
   }
   ctx.fillStyle='rgba(76,216,255,0.82)';
   for(let i=0;i+1<iq.length;i+=2){
-    const ix=iq[i]/32767,iy=iq[i+1]/32767,r=Math.hypot(ix,iy);
+    const ix=iq[i]/iqScale,iy=iq[i+1]/iqScale,r=Math.hypot(ix,iy);
     if(r<0.01)continue;
     const k=(Math.round(((Math.atan2(iy,ix)+Math.PI*2)%(Math.PI*2))/(Math.PI/4)))&7;
     const p=ideals[k],ux=p[0],uy=p[1];
-    const ex=ix/gain-ux,ey=iy/gain-uy;
-    rfState.accum.push({k,ex,ey});
+    rfState.accum.push({x:ix,y:iy,err:Math.hypot(ix-ux,iy-uy)});
   }
   if(rfState.accum.length>rfState.accumLimit)rfState.accum.splice(0,rfState.accum.length-rfState.accumLimit);
   let err2=0,peak=0,count=0;
   for(const pt of rfState.accum){
-    const p=ideals[pt.k],ux=p[0],uy=p[1],ex=pt.ex,ey=pt.ey;
-    const x=cx+(ux+ex*cloudScale)*s,y=cy-(uy+ey*cloudScale)*s;
-    const best=Math.hypot(ex,ey);
+    const x=cx+pt.x*s,y=cy-pt.y*s;
+    const best=pt.err||0;
     err2+=best*best;peak=Math.max(peak,best);count++;
     if(x>4&&x<ctx.canvas.width-4&&y>4&&y<ctx.canvas.height-4){
       ctx.fillRect(x-1.3,y-1.3,2.6,2.6);
     }
   }
+  ctx.save();
+  ctx.strokeStyle='rgba(0,212,168,0.72)';
+  ctx.fillStyle='rgba(0,212,168,0.45)';
+  ctx.lineWidth=Math.max(1,Math.floor((window.devicePixelRatio||1)));
+  for(const p of ideals){
+    const x=cx+p[0]*s,y=cy-p[1]*s,r=Math.max(4,s*0.025);
+    ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x-r*1.6,y);ctx.lineTo(x+r*1.6,y);ctx.moveTo(x,y-r*1.6);ctx.lineTo(x,y+r*1.6);ctx.stroke();
+    ctx.beginPath();ctx.arc(x,y,2,0,Math.PI*2);ctx.fill();
+  }
+  ctx.restore();
   const rms=count?Math.sqrt(err2/count)*100:0,pk=peak*100;
   const label=document.getElementById('rf-vector');
   if(label)label.textContent=count?`ACCUM ${count}  RMS ${rms.toFixed(1)}%  PK ${pk.toFixed(1)}%`:'ACCUM reset';
@@ -1565,7 +1645,7 @@ function drawRfWaterfall(){
   }
 }
 setInterval(()=>{if(rfState.lastTs){const el=document.getElementById('rf-age');if(el&&!el.textContent.startsWith('RF LB'))el.textContent=`${((Date.now()-rfState.lastTs)/1000).toFixed(1)}s`;};},250);
-setTimeout(()=>{const c=document.getElementById('rf-constellation');if(c)c.addEventListener('click',rfResetAccum);},0);
+setTimeout(()=>{const c=document.getElementById('rf-constellation');if(c)c.addEventListener('click',rfResetAccum);initRfGainControls();},0);
 
 // ── TS Visualizer ─────────────────────────────────────────────────────────
 // ts_state[ts-1]: {call_id, call_type, label, sub, voice_ts} (voice_ts = Date.now() of last frame)
