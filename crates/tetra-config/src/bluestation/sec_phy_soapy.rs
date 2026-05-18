@@ -101,7 +101,7 @@ impl Default for CfgSx1255Autocal {
             rf_loopback_settle_blocks: 24,
             rf_loopback_capture_blocks: 32,
             rf_loopback_min_snr_db: 20.0,
-            rf_loopback_max_image_coeff: 0.5,
+            rf_loopback_max_image_coeff: 0.95,
             rf_loopback_max_dc: 0.5,
             rf_loopback_apply_dc: true,
             rf_loopback_apply_iq: true,
