@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "bluestation-bs"
-version = "0.1.4-mod"
+version = "0.1.5-mod"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-config"
-version = "0.1.4-mod"
+version = "0.1.5-mod"
 dependencies = [
  "chrono-tz",
  "serde",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-core"
-version = "0.1.4-mod"
+version = "0.1.5-mod"
 dependencies = [
  "bitcode",
  "chrono",
@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-entities"
-version = "0.1.4-mod"
+version = "0.1.5-mod"
 dependencies = [
  "as-any",
  "base64",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-pdus"
-version = "0.1.4-mod"
+version = "0.1.5-mod"
 dependencies = [
  "tetra-config",
  "tetra-core",
@@ -1779,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "tetra-saps"
-version = "0.1.4-mod"
+version = "0.1.5-mod"
 dependencies = [
  "tetra-core",
  "tracing",

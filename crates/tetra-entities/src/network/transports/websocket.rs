@@ -457,17 +457,12 @@ impl NetworkTransport for WebSocketTransport {
             None
         };
 
-        let (ws, response) = tungstenite::client_tls_with_config(request, tcp, None, connector)
+        let (ws, _response) = tungstenite::client_tls_with_config(request, tcp, None, connector)
             .map_err(|e| NetworkError::ConnectionFailed(format!("WebSocket connect failed: {}", e)))?;
 
-        // Read Brew server version from response headers (Brew v1 advertises X-Brew-Version: 1)
-        self.server_brew_version = response
-            .headers()
-            .get("X-Brew-Version")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<u8>().ok())
-            .unwrap_or(0);
-        tracing::info!("WebSocketTransport: connected, server Brew version={}", self.server_brew_version);
+        // Start at v0 — actual version is detected from message length (mnemonic presence).
+        self.server_brew_version = 0;
+        tracing::info!("WebSocketTransport: connected, Brew version TBD (detected from message length)");
 
         tracing::debug!("WebSocketTransport: WebSocket connected");
 

@@ -232,7 +232,7 @@ impl CcBsSubentity {
 
         for call_id in expired_group_calls {
             tracing::info!("Call timeout expired for group call_id={}, releasing", call_id);
-            self.release_group_call(queue, call_id, DisconnectCause::ExpiryOfTimer);
+            self.release_group_call(queue, call_id, DisconnectCause::UserRequestedDisconnection);
         }
 
         let expired_individual_calls: Vec<u16> = self
@@ -329,7 +329,7 @@ impl CcBsSubentity {
 
         for call_id in expired {
             tracing::info!("Hangtime expired for call_id={}, releasing", call_id);
-            self.release_group_call(queue, call_id, DisconnectCause::ExpiryOfTimer);
+            self.release_group_call(queue, call_id, DisconnectCause::UserRequestedDisconnection);
         }
     }
 

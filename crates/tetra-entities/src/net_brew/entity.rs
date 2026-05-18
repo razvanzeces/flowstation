@@ -199,6 +199,10 @@ impl BrewEntity {
                     self.connected = true;
                     self.resync_subscribers();
                     self.set_network_connected(true, server_version);
+                }
+                BrewEvent::VersionDetected { version } => {
+                    tracing::info!("BrewEntity: server Brew version detected from message length: v{}", version);
+                    self.set_network_connected(true, version);
                     // Notify MM that Brew reconnected so it can send D-LOCATION-UPDATE-COMMAND
                     // to all locally registered MS. Without this, MS units that were registered
                     // before the disconnect believe they are still affiliated and do not

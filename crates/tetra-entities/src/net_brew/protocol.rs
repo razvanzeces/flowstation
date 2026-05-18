@@ -309,7 +309,8 @@ fn parse_call_control(call_state: u8, data: &[u8]) -> Result<BrewMessage, BrewPa
             if payload_data.len() < 12 {
                 return Err(BrewParseError::TooShort(data.len()));
             }
-            let mnemonic = if payload_data.len() >= 46 {
+            let mnemonic = if payload_data.len() >= 46 && payload_data[13] > 0 {
+                // byte 12 = coding scheme, byte 13 = length in bits; 0 bits = no mnemonic
                 let mut m = [0u8; 34];
                 m.copy_from_slice(&payload_data[12..46]);
                 Some(m)
@@ -340,7 +341,10 @@ fn parse_call_control(call_state: u8, data: &[u8]) -> Result<BrewMessage, BrewPa
             if payload_data.len() < CIRCULAR_CALL_LEN {
                 return Err(BrewParseError::TooShort(data.len()));
             }
-            let mnemonic = if call_state == CALL_STATE_SETUP_REQUEST && payload_data.len() >= CIRCULAR_CALL_LEN + 34 {
+            let mnemonic = if call_state == CALL_STATE_SETUP_REQUEST
+                && payload_data.len() >= CIRCULAR_CALL_LEN + 34
+                && payload_data[CIRCULAR_CALL_LEN + 1] > 0 {
+                // byte 0 = coding scheme, byte 1 = length in bits; 0 bits = no mnemonic
                 let mut m = [0u8; 34];
                 m.copy_from_slice(&payload_data[CIRCULAR_CALL_LEN..CIRCULAR_CALL_LEN + 34]);
                 Some(m)

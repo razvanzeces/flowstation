@@ -24,6 +24,8 @@ use super::protocol::*;
 pub enum BrewEvent {
     /// Successfully connected to TetraPack server
     Connected { server_version: u8 },
+    /// Brew protocol version detected from incoming message length (mnemonic presence)
+    VersionDetected { version: u8 },
 
     /// Disconnected (with reason)
     Disconnected(String),
@@ -562,13 +564,14 @@ impl<T: NetworkTransport> BrewWorker<T> {
             CALL_STATE_GROUP_TX => {
                 if let BrewCallPayload::GroupTransmission(gt) = cc.payload {
                     tracing::info!(
-                        "BrewWorker: GROUP_TX uuid={} src={} dst={} prio={} service={}",
-                        cc.identifier,
-                        gt.source,
-                        gt.destination,
-                        gt.priority,
-                        gt.service
+                        "BrewWorker: GROUP_TX uuid={} src={} dst={} prio={} service={} mnemonic={}",
+                        cc.identifier, gt.source, gt.destination, gt.priority, gt.service,
+                        gt.mnemonic.is_some()
                     );
+                    // Detect server version from mnemonic presence (v1 includes 34-byte mnemonic)
+                    if gt.mnemonic.is_some() {
+                        let _ = self.event_sender.send(BrewEvent::VersionDetected { version: 1 });
+                    }
                     if !net_brew::is_brew_gssi_routable(&self.config, gt.destination) {
                         tracing::warn!("BrewWorker: dropping GROUP_TX to non-routable GSSI {}", gt.destination);
                         return;
