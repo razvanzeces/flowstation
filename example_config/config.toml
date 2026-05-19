@@ -10,6 +10,23 @@ stack_mode = "Bs"
 # debug_log = "./verbose_log.txt"
 
 ###############################################################################
+# FALLBACK CONFIG
+#
+# If FlowStation fails to parse this config file (e.g. after a bad edit in the
+# dashboard), it automatically tries the fallback file at the same path with
+# ".fallback" appended — e.g. /opt/tetra/config.toml.fallback
+#
+# The fallback file is NEVER overwritten automatically. Create it once with a
+# known-good config and leave it alone:
+#
+#   cp config.toml config.toml.fallback
+#
+# When the fallback is active, the dashboard shows a persistent red warning
+# banner and logs the parse error from the primary config. This lets you fix
+# the broken config.toml from the dashboard without losing remote access.
+###############################################################################
+
+###############################################################################
 
 [phy_io]
 
@@ -82,6 +99,45 @@ colour_code = 1
 # radios can synchronize their clocks. Daylight saving time is handled automatically.
 # timezone = "Europe/Bucharest"
 
+# Local SSI ranges for this cell. Traffic for these ranges will not leave the cell.
+# Overrides any settings in the brew section, if enabled.
+# Incoming brew traffic on these ranges will also be rejected.
+# The end of the range is INCLUSIVE — the end number IS in the range.
+local_ssi_ranges = [
+    [0, 90],
+]
+
+# Cell services. Leave the defaults unless you know what you're changing.
+system_wide_services = true  # If false, radios will operate in fallback mode (ignored when Brew is enabled)
+voice_service = true
+
+# Group call hangtime in seconds.
+# How long the circuit of an inactive group call stays open after the last speaker
+# releases the floor, before the call is disconnected.
+# During hangtime, any MS can resume the floor without a new D-SETUP/D-CONNECT cycle.
+# Default: 5 seconds. Valid range: 0–300.
+# hangtime_secs = 5
+
+# Maximum active call duration in seconds — ETSI EN 300 392-2 §14.9.1 T310 equivalent (FlowStation).
+# After this time the BS sends D-RELEASE regardless of call activity.
+# 0 = no limit (infinite — call runs until U-DISCONNECT or hangtime).
+# Default: 120. Valid range: 30–86400, or 0 for no limit.
+# call_timeout_secs = 120
+
+# UL inactivity timeout in seconds: if no voice frames are received from the transmitting
+# MS during this time, the BS forces TX-CEASED and enters hangtime.
+# Must be greater than T.213 (1s) to tolerate DTX and short RF fading.
+# Default: 3 seconds. Valid range: 1–30.
+# ul_inactivity_secs = 3
+
+# Periodic registration interval in seconds — ETSI T351 equivalent (FlowStation).
+# MS must re-register within this interval or be automatically deregistered by the BS.
+# The BS signals this via D-LOCATION-UPDATE-ACCEPT (PeriodicLocationUpdating).
+# On expiry: D-LOCATION-UPDATE-REJECT (ExpiryOfTimer) is sent; terminal re-attaches immediately.
+# 0 = disabled — registrations never expire.
+# Default: 3600 (1 hour). Valid range when non-zero: 60–86400.
+# periodic_registration_secs = 3600
+
 ###############################################################################
 # OPTIONAL: Home Mode Display (PID 220)
 #
@@ -143,85 +199,6 @@ colour_code = 1
 # action = "kick_all"
 ###############################################################################
 
-# Local SSI ranges for this cell. Traffic for these ranges will not leave the cell.
-# Overrides any settings in the brew section, if enabled.
-# Incoming brew traffic on these ranges will also be rejected.
-# The end of the range is INCLUSIVE — the end number IS in the range.
-local_ssi_ranges = [
-    [0, 90],
-]
-
-###############################################################################
-
-# OPTIONAL: Additional cell parameters
-
-# neighbor_cell_broadcast = 0
-# late_entry_supported = true
-# subscriber_class = 0xFFFF
-# registration = true
-# deregistration = true
-# priority_cell = false
-# no_minimum_mode = false
-# migration = false
-
-system_wide_services = true  # If false, radios will operate in fallback mode (ignored when Brew is enabled)
-voice_service = true
-# circuit_mode_data_service = true
-# sndcp_service = true
-# aie_service = false
-# advanced_link = false
-
-# system_code = 0
-# sharing_mode = 0
-# ts_reserved_frames = 0
-# u_plane_dtx = false
-# frame_18_ext = false
-# ms_txpwr_max_cell = 4
-
-# Group call hangtime in seconds.
-# How long the circuit of an inactive group call stays open after the last speaker
-# releases the floor, before the call is disconnected.
-# During hangtime, any MS can resume the floor without a new D-SETUP/D-CONNECT cycle.
-# Default: 5 seconds. Valid range: 0–300.
-# hangtime_secs = 5
-
-# Maximum active call duration in seconds — ETSI EN 300 392-2 §14.9.1 T310 equivalent (FlowStation).
-# After this time the BS sends D-RELEASE regardless of call activity.
-# 0 = no limit (infinite — call runs until U-DISCONNECT or hangtime).
-# Default: 120. Valid range: 30–86400, or 0 for no limit.
-# call_timeout_secs = 120
-
-# UL inactivity timeout in seconds: if no voice frames are received from the transmitting
-# MS during this time, the BS forces TX-CEASED and enters hangtime.
-# Must be greater than T.213 (1s) to tolerate DTX and short RF fading.
-# Default: 3 seconds. Valid range: 1–30.
-# ul_inactivity_secs = 3
-
-# Periodic registration interval in seconds — ETSI T351 equivalent (FlowStation).
-# MS must re-register within this interval or be automatically deregistered by the BS.
-# The BS signals this via D-LOCATION-UPDATE-ACCEPT (PeriodicLocationUpdating).
-# On expiry: D-LOCATION-UPDATE-REJECT (ExpiryOfTimer) is sent; terminal re-attaches immediately.
-# 0 = disabled — registrations never expire.
-# Default: 3600 (1 hour). Valid range when non-zero: 60–86400.
-# periodic_registration_secs = 3600
-
-###############################################################################
-
-# OPTIONAL: Neighbor cells for cell reselection (ETSI EN 300 392-2 Clause 18.5.17)
-#
-# Rules: max 7 entries, unique cell_identifier_ca and main_carrier_number per entry.
-# Set neighbor_cell_broadcast = 2 in [cell_info] when using this section.
-#
-# [[cell_info.neighbor_cells_ca]]
-# cell_identifier_ca = 1
-# cell_reselection_types_supported = 0   # 0=non-sync only, 1=sync only, 2=both
-# neighbor_cell_synchronized = false     # true only if cells share a GPS reference
-# cell_load_ca = 0                       # 0=unknown, 1=low, 2=medium, 3=high
-# main_carrier_number = 1522
-# mcc = 204
-# mnc = 1337
-# location_area = 3
-
 ###############################################################################
 
 # OPTIONAL: ISSI access control — whitelist (FlowStation)
@@ -241,6 +218,27 @@ voice_service = true
 #
 # [dashboard]
 # port = 8080
+# bind = "0.0.0.0"
+#
+# OPTIONAL: HTTP Basic Auth — protect the dashboard with a username and password.
+# When set, the browser will show a native login dialog on first access.
+# Both username and password must be set together, or neither.
+#
+# SECURITY NOTE: HTTP Basic Auth transmits credentials as base64 (not encrypted).
+# This protects against casual/accidental access on a LAN, but is NOT secure over
+# the public internet without TLS. For internet-facing use, put a reverse proxy
+# with HTTPS (e.g. nginx, Caddy) in front of the dashboard.
+#
+# username = "admin"
+# password = "changeme"
+#
+# OPTIONAL: explicit path to the FlowStation git source directory used by the
+# "Update" button. By default the dashboard auto-detects by walking up from the
+# binary path looking for a .git directory, then trying /opt/tetra-bluestation,
+# /opt/flowstation, /opt/tetra-bs, /opt/tetra. Set this if your binary lives
+# outside the git clone (e.g. binary copied to /usr/local/bin/, sources in /opt/...)
+# or if auto-detection finds the wrong directory.
+# source_dir = "/opt/tetra-bluestation"
 
 ###############################################################################
 

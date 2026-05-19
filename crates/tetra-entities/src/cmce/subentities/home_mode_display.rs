@@ -23,6 +23,10 @@ pub(super) struct HomeModeDisplaySender {
     warned_text_truncated: bool,
     warned_lossy_encoding: bool,
     msg_ref: u8,
+    /// Tracks last TX time for live SDS, separate from static HMD timer.
+    live_sds_last_tx: Option<TdmaTime>,
+    /// Index into live_sds_queue for round-robin; reset when queue shrinks.
+    live_sds_idx: usize,
 }
 
 impl HomeModeDisplaySender {
@@ -47,7 +51,100 @@ impl HomeModeDisplaySender {
             warned_text_truncated: false,
             warned_lossy_encoding: false,
             msg_ref: 0,
+            live_sds_last_tx: None,
+            live_sds_idx: 0,
         }
+    }
+
+    /// Called every tick. Checks the live SDS queue in SharedConfig and, when it's time,
+    /// pops the next message (round-robin), transmits it, increments its sent_count,
+    /// and removes it if repeat_count is exhausted.
+    ///
+    /// Uses the same interval as the static HMD (home_mode_display) if configured,
+    /// otherwise falls back to sds_broadcast interval, otherwise 96 multiframes.
+    pub fn tick_live_sds(&mut self, config: &SharedConfig, dltime: TdmaTime) -> Option<HomeModeDisplayTx> {
+        // Determine the interval to use: prefer home_mode_display, then sds_broadcast, then default.
+        let interval_multiframes = config.config().cell.home_mode_display.as_ref()
+            .map(|c| c.interval_multiframes)
+            .or_else(|| config.config().cell.sds_broadcast.as_ref().map(|c| c.interval_multiframes))
+            .unwrap_or(96)
+            .max(1);
+
+        let interval_slots =
+            interval_multiframes.saturating_mul(Self::SLOTS_PER_MULTIFRAME).min(i32::MAX as u32) as i32;
+
+        // Startup delay: don't fire before the static HMD has had time to send first.
+        let start_time = self.start_time.get_or_insert(dltime);
+        let start_delay_slots =
+            Self::HOME_MODE_START_DELAY_FRAMES.saturating_mul(Self::SLOTS_PER_FRAME).min(i32::MAX as u32) as i32;
+        if start_time.age(dltime) < start_delay_slots * 2 {
+            return None;
+        }
+
+        // Check interval since last live SDS TX.
+        let should_send = match self.live_sds_last_tx {
+            None => true,
+            Some(last) => last.age(dltime) >= interval_slots,
+        };
+        if !should_send {
+            return None;
+        }
+
+        // Pick the next message from the queue (round-robin by index).
+        // We work with a write lock so we can increment sent_count and remove exhausted messages.
+        let tx_result: Option<HomeModeDisplayTx> = {
+            let mut state = config.state_write();
+            let queue = &mut state.live_sds_queue;
+            if queue.is_empty() {
+                None
+            } else {
+                // Clamp index in case queue shrank since last tick.
+                if self.live_sds_idx >= queue.len() {
+                    self.live_sds_idx = 0;
+                }
+                let idx = self.live_sds_idx;
+                let msg = &mut queue[idx];
+
+                let (encoded_text, _) = Self::encode_text(&msg.text, 0x01); // ISO-8859-1 default
+                let text_len = encoded_text.len().min(Self::MAX_TEXT_BYTES);
+                let mut user_data = Vec::with_capacity(text_len + 1);
+                user_data.push(0x01u8); // text_coding_scheme = LATIN
+                user_data.extend_from_slice(&encoded_text[..text_len]);
+
+                let payload = Self::build_sds_tl_transfer_payload(msg.protocol_id, self.msg_ref, &user_data);
+                self.msg_ref = self.msg_ref.wrapping_add(1);
+
+                let tx = HomeModeDisplayTx {
+                    source_issi: msg.source_issi,
+                    dest_gssi: Self::HOME_MODE_BROADCAST_GSSI,
+                    payload,
+                };
+
+                msg.sent_count += 1;
+                let exhausted = msg.repeat_count > 0 && msg.sent_count >= msg.repeat_count;
+
+                tracing::info!(
+                    "SDS: LiveSds broadcast id={} sent={}/{} text={:?}",
+                    msg.id, msg.sent_count,
+                    if msg.repeat_count == 0 { "∞".to_string() } else { msg.repeat_count.to_string() },
+                    &msg.text
+                );
+
+                if exhausted {
+                    queue.remove(idx);
+                    // Don't advance idx — next message is now at the same position (or wrap).
+                } else {
+                    self.live_sds_idx = (idx + 1) % queue.len().max(1);
+                }
+
+                Some(tx)
+            }
+        };
+
+        if tx_result.is_some() {
+            self.live_sds_last_tx = Some(dltime);
+        }
+        tx_result
     }
 
     /// Called every tick. Returns `Some(HomeModeDisplayTx)` when it's time to broadcast,

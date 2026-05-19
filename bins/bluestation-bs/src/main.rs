@@ -32,13 +32,42 @@ use tetra_entities::{
     umac::umac_bs::UmacBs,
 };
 
-/// Load configuration file
-fn load_config_from_toml(cfg_path: &str) -> StackConfig {
+/// Result of loading config — either primary or fallback.
+enum ConfigLoadResult {
+    Primary(StackConfig),
+    Fallback { config: StackConfig, fallback_path: String, primary_error: String },
+}
+
+/// Try to load the primary config. If it fails, try the fallback
+/// (`<config>.fallback` alongside the primary file).
+/// Returns Ok(ConfigLoadResult) or exits if both fail.
+fn load_config_with_fallback(cfg_path: &str) -> ConfigLoadResult {
     match parsing::from_file(cfg_path) {
-        Ok(c) => c,
-        Err(e) => {
-            println!("Failed to load configuration from {}: {}", cfg_path, e);
-            std::process::exit(1);
+        Ok(c) => ConfigLoadResult::Primary(c),
+        Err(primary_err) => {
+            let primary_err_str = primary_err.to_string();
+            eprintln!("WARNING: Failed to load primary config '{}': {}", cfg_path, primary_err_str);
+
+            // Fallback path: same directory, same name + ".fallback"
+            let fallback_path = format!("{}.fallback", cfg_path);
+
+            eprintln!("WARNING: Trying fallback config '{}'...", fallback_path);
+            match parsing::from_file(&fallback_path) {
+                Ok(c) => {
+                    eprintln!("WARNING: Started on FALLBACK config '{}'. Primary config is invalid!", fallback_path);
+                    ConfigLoadResult::Fallback {
+                        config: c,
+                        fallback_path,
+                        primary_error: primary_err_str,
+                    }
+                }
+                Err(fallback_err) => {
+                    eprintln!("ERROR: Fallback config '{}' also failed: {}", fallback_path, fallback_err);
+                    eprintln!("ERROR: No valid config available. Cannot start.");
+                    eprintln!("HINT:  Fix '{}' or create a valid fallback at '{}'", cfg_path, fallback_path);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
@@ -201,8 +230,14 @@ fn main() {
     // Parse command-line arguments
     let args = Args::parse();
 
+    // Load config — tries primary, falls back to <config>.fallback if primary is invalid.
+    let (stack_cfg, fallback_info) = match load_config_with_fallback(&args.config) {
+        ConfigLoadResult::Primary(c) => (c, None),
+        ConfigLoadResult::Fallback { config, fallback_path, primary_error } =>
+            (config, Some((fallback_path, primary_error))),
+    };
+
     // Build immutable, cheaply clonable SharedConfig and build the base station stack
-    let stack_cfg = load_config_from_toml(&args.config);
     let mut cfg = SharedConfig::from_parts(stack_cfg, None);
 
     // If dashboard is enabled, set up log capture channel BEFORE logging initialises
@@ -215,6 +250,15 @@ fn main() {
     };
 
     let _log_guards = debug::setup_logging_default(cfg.config().debug_log.clone());
+
+    // Log fallback immediately after logging is set up, even without dashboard.
+    if let Some((ref fb_path, ref fb_reason)) = fallback_info {
+        tracing::warn!(
+            "FALLBACK CONFIG ACTIVE: primary config '{}' failed ({}). Running on '{}'.",
+            args.config, fb_reason, fb_path
+        );
+    }
+
     let (mut router, tsource, cdispatchers) = build_bs_stack(&mut cfg);
 
     // Start Telemetry and Control threads, if enabled
@@ -226,6 +270,18 @@ fn main() {
         if has_dashboard {
             let dash_cfg = cfg.config().dashboard.clone().unwrap();
             let mut dashboard = DashboardServer::new(args.config.clone());
+
+            // Propagate optional source_dir override for OTA updates.
+            dashboard.set_source_dir(dash_cfg.source_dir.clone());
+
+            // Propagate optional HTTP Basic Auth credentials.
+            if let (Some(user), Some(pass)) = (dash_cfg.username.clone(), dash_cfg.password.clone()) {
+                tracing::info!("Dashboard: HTTP Basic Auth enabled (user: {})", user);
+                dashboard.set_auth(Some((user, pass)));
+            }
+
+            // Propagate SharedConfig so the dashboard can read live SDS queue state.
+            dashboard.set_shared_config(cfg.clone());
 
             // Create a control link so dashboard can send commands to CMCE
             let dash_cmd_tx = {
@@ -240,6 +296,16 @@ fn main() {
             // start() must be called before Arc::new() because it takes &mut self
             dashboard.start(&dash_cfg.bind, dash_cfg.port);
             eprintln!(" -> Dashboard enabled on http://{}:{}", dash_cfg.bind, dash_cfg.port);
+
+            // If we started on fallback config, tell the dashboard to show the warning banner.
+            if let Some((ref fb_path, ref fb_reason)) = fallback_info {
+                let reason = format!(
+                    "Primary config '{}' failed to load: {}. Running on fallback '{}'.",
+                    args.config, fb_reason, fb_path
+                );
+                tracing::warn!("{}", reason);
+                dashboard.set_fallback_config(reason);
+            }
 
             let dashboard = std::sync::Arc::new(dashboard);
             let dash_clone = std::sync::Arc::clone(&dashboard);

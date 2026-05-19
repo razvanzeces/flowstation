@@ -54,6 +54,10 @@ pub struct DashboardStateInner {
     pub config_path: String,
     pub brew_online: bool,
     pub brew_version: u8,
+    /// Set when the stack started on the fallback config instead of the primary.
+    /// Contains the parse error that caused the primary config to be rejected.
+    pub fallback_config_active: bool,
+    pub fallback_config_reason: String,
 }
 
 pub const LAST_HEARD_MAX: usize = 50;
@@ -93,6 +97,8 @@ impl DashboardStateInner {
             config_path,
             brew_online: false,
             brew_version: 0,
+            fallback_config_active: false,
+            fallback_config_reason: String::new(),
         }
     }
 

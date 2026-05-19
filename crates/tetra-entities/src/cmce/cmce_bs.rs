@@ -100,6 +100,38 @@ impl CmceBs {
                         .status();
                 });
             }
+            ControlCommand::AddLiveSds { text, protocol_id, source_issi, repeat_count } => {
+                let mut state = sds.shared_config().state_write();
+                let id = state.next_live_sds_id;
+                state.next_live_sds_id = state.next_live_sds_id.wrapping_add(1).max(1);
+                state.live_sds_queue.push_back(
+                    tetra_config::bluestation::LiveSdsMessage {
+                        id,
+                        text: text.clone(),
+                        protocol_id,
+                        source_issi,
+                        repeat_count,
+                        sent_count: 0,
+                    }
+                );
+                tracing::info!(
+                    "CMCE: AddLiveSds id={} repeat={} text={:?}",
+                    id, repeat_count, text
+                );
+            }
+            ControlCommand::DeleteLiveSds { id } => {
+                let mut state = sds.shared_config().state_write();
+                let before = state.live_sds_queue.len();
+                state.live_sds_queue.retain(|m| m.id != id);
+                let removed = before - state.live_sds_queue.len();
+                tracing::info!("CMCE: DeleteLiveSds id={} removed={}", id, removed);
+            }
+            ControlCommand::ClearLiveSds => {
+                let mut state = sds.shared_config().state_write();
+                let n = state.live_sds_queue.len();
+                state.live_sds_queue.clear();
+                tracing::info!("CMCE: ClearLiveSds removed={}", n);
+            }
             _ => {
                 tracing::warn!("CMCE: ignoring unsupported control command {:?}", cmd);
             }

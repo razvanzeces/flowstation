@@ -30,6 +30,23 @@ pub enum ControlCommand {
     /// Stop the FlowStation service (systemctl stop tetra)
     ShutdownService,
 
+    /// Add a live SDS message to the broadcast queue.
+    /// The message will be transmitted to all MSs on the cell at the next HMD interval,
+    /// round-robining with the static Home Mode Display text.
+    /// `repeat_count = 0` means repeat indefinitely; `> 0` auto-removes after N transmissions.
+    AddLiveSds {
+        text: String,
+        protocol_id: u8,
+        source_issi: u32,
+        repeat_count: u32,
+    },
+
+    /// Remove a live SDS message from the queue by its ID.
+    DeleteLiveSds { id: u32 },
+
+    /// Remove all live SDS messages from the queue.
+    ClearLiveSds,
+
     /// Placeholder command A.
     CommandA { handle: u32, parameter: u32 },
     /// Placeholder command B.

@@ -488,54 +488,110 @@ td code{
 /* ── TS Visualizer ───────────────────────────────────────────────── */
 .ts-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:16px 18px;}
 .ts-block{
-  border:1px solid var(--border);border-radius:6px;
-  padding:12px 10px 10px;text-align:center;
+  border:1px solid var(--border);border-radius:8px;
+  padding:12px 10px 8px;text-align:center;
   position:relative;overflow:hidden;
-  transition:border-color 0.3s,box-shadow 0.3s;
+  transition:border-color 0.15s, box-shadow 0.15s, background 0.15s;
   background:var(--bg3);
+  cursor:default;
 }
 .ts-block.mcch{
-  border-color:rgba(77,166,255,0.3);
-  background:rgba(77,166,255,0.04);
+  border-color:rgba(77,166,255,0.35);
+  background:linear-gradient(160deg,rgba(77,166,255,0.07) 0%,var(--bg3) 100%);
 }
-.ts-block.active{
-  border-color:rgba(0,212,168,0.6);
-  box-shadow:0 0 12px rgba(0,212,168,0.15);
-  background:rgba(0,212,168,0.05);
+.ts-block.call{
+  border-color:rgba(255,180,36,0.5);
+  background:linear-gradient(160deg,rgba(255,180,36,0.06) 0%,var(--bg3) 100%);
+  box-shadow:0 0 14px rgba(255,180,36,0.1);
 }
-.ts-block.active .ts-activity-bar{animation:ts-pulse 0.4s ease-out;}
+.ts-block.voice{
+  border-color:rgba(255,60,80,0.7);
+  background:linear-gradient(160deg,rgba(255,60,80,0.12) 0%,var(--bg3) 100%);
+  box-shadow:0 0 18px rgba(255,60,80,0.25);
+}
+.ts-block.voice .ts-flash{animation:ts-flash-in 0.08s ease-out;}
+
+/* number badge top-left */
 .ts-num{
+  position:absolute;top:7px;left:9px;
   font-family:var(--mono);font-size:9px;font-weight:700;
-  letter-spacing:0.12em;color:var(--text3);margin-bottom:8px;
+  letter-spacing:0.1em;color:var(--text3);
 }
+.ts-block.mcch .ts-num{color:var(--accent2);}
+.ts-block.call .ts-num{color:var(--warn);}
+.ts-block.voice .ts-num{color:var(--danger);}
+
+/* LED */
 .ts-led{
   width:10px;height:10px;border-radius:50%;
-  background:var(--bg4);margin:0 auto 8px;
-  transition:background 0.2s,box-shadow 0.2s;
+  background:var(--bg4);margin:4px auto 9px;
+  transition:background 0.1s,box-shadow 0.1s;
+  flex-shrink:0;
 }
-.ts-block.mcch .ts-led{background:var(--accent2);box-shadow:0 0 6px rgba(77,166,255,0.5);}
-.ts-block.active .ts-led{background:var(--accent);box-shadow:0 0 8px rgba(0,212,168,0.6);}
+.ts-block.mcch .ts-led{background:var(--accent2);box-shadow:0 0 7px rgba(77,166,255,0.6);}
+.ts-block.call .ts-led{background:var(--warn);box-shadow:0 0 7px rgba(255,180,36,0.5);}
+.ts-block.voice .ts-led{background:var(--danger);box-shadow:0 0 10px rgba(255,60,80,0.8);animation:ts-led-pulse 0.3s ease-in-out infinite alternate;}
+
+/* waveform bars */
+.ts-wave{
+  display:flex;align-items:flex-end;justify-content:center;
+  gap:2px;height:22px;margin:0 auto 5px;width:60%;
+  opacity:0.25;transition:opacity 0.15s;
+}
+.ts-block.voice .ts-wave{opacity:1;}
+.ts-block.call .ts-wave{opacity:0.45;}
+.ts-wave-bar{
+  width:3px;border-radius:2px 2px 0 0;
+  background:var(--text3);min-height:3px;
+  transition:height 0.1s ease;
+}
+.ts-block.mcch .ts-wave-bar{background:var(--accent2);}
+.ts-block.call .ts-wave-bar{background:var(--warn);}
+.ts-block.voice .ts-wave-bar{background:var(--danger);}
+
+/* label */
 .ts-label{
   font-family:var(--mono);font-size:10px;font-weight:700;
-  letter-spacing:0.06em;
-  color:var(--text3);
-  min-height:14px;
+  letter-spacing:0.05em;color:var(--text3);
+  min-height:13px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:color 0.15s;
 }
 .ts-block.mcch .ts-label{color:var(--accent2);}
-.ts-block.active .ts-label{color:var(--accent);}
+.ts-block.call .ts-label{color:var(--warn);}
+.ts-block.voice .ts-label{color:var(--danger);}
+
+/* sub */
 .ts-sub{
   font-family:var(--mono);font-size:9px;color:var(--text3);
-  margin-top:3px;min-height:12px;
+  margin-top:2px;min-height:11px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.ts-activity-bar{
-  position:absolute;bottom:0;left:0;right:0;height:2px;
-  background:var(--accent);transform:scaleX(0);transform-origin:left;
-  transition:transform 0.15s ease;
+.ts-block.voice .ts-sub{color:rgba(255,60,80,0.7);}
+
+/* flash overlay on new voice frame */
+.ts-flash{
+  position:absolute;inset:0;
+  background:rgba(255,60,80,0.18);
+  pointer-events:none;opacity:0;border-radius:8px;
 }
-.ts-block.active .ts-activity-bar{transform:scaleX(1);}
-@keyframes ts-pulse{0%{opacity:1;}50%{opacity:0.4;}100%{opacity:1;}}
+
+/* bottom progress bar (call duration) */
+.ts-duration-bar{
+  position:absolute;bottom:0;left:0;height:2px;
+  background:var(--warn);transition:width 0.5s linear;width:0%;
+  border-radius:0 0 8px 8px;
+}
+.ts-block.voice .ts-duration-bar{background:var(--danger);}
+
+@keyframes ts-flash-in{
+  0%{opacity:1;}
+  100%{opacity:0;}
+}
+@keyframes ts-led-pulse{
+  0%{box-shadow:0 0 6px rgba(255,60,80,0.6);}
+  100%{box-shadow:0 0 14px rgba(255,60,80,1);}
+}
 </style>
 </head>
 <body>
@@ -635,6 +691,15 @@ td code{
     </div>
   </div>
 
+  <!-- Fallback config warning banner — hidden until JS shows it -->
+  <div id="fallback-banner" style="display:none;background:var(--danger);color:#fff;padding:10px 18px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;flex-shrink:0">
+    <span style="font-size:18px">⚠️</span>
+    <div>
+      <div data-i18n="fallback_title">FALLBACK CONFIG ACTIVE — Primary config failed to load</div>
+      <div id="fallback-reason" style="font-size:11px;font-weight:400;opacity:0.85;margin-top:2px"></div>
+    </div>
+  </div>
+
   <!-- Content -->
   <div id="content">
 
@@ -670,30 +735,70 @@ td code{
           <div class="ts-block mcch" id="ts-block-1">
             <div class="ts-num">TS 1</div>
             <div class="ts-led"></div>
+            <div class="ts-wave">
+              <div class="ts-wave-bar" style="height:8px"></div>
+              <div class="ts-wave-bar" style="height:14px"></div>
+              <div class="ts-wave-bar" style="height:10px"></div>
+              <div class="ts-wave-bar" style="height:16px"></div>
+              <div class="ts-wave-bar" style="height:8px"></div>
+              <div class="ts-wave-bar" style="height:12px"></div>
+              <div class="ts-wave-bar" style="height:6px"></div>
+            </div>
             <div class="ts-label">MCCH</div>
             <div class="ts-sub">Control</div>
-            <div class="ts-activity-bar"></div>
+            <div class="ts-flash"></div>
+            <div class="ts-duration-bar"></div>
           </div>
           <div class="ts-block" id="ts-block-2">
             <div class="ts-num">TS 2</div>
             <div class="ts-led"></div>
+            <div class="ts-wave">
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+            </div>
             <div class="ts-label">—</div>
             <div class="ts-sub">Idle</div>
-            <div class="ts-activity-bar"></div>
+            <div class="ts-flash"></div>
+            <div class="ts-duration-bar"></div>
           </div>
           <div class="ts-block" id="ts-block-3">
             <div class="ts-num">TS 3</div>
             <div class="ts-led"></div>
+            <div class="ts-wave">
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+            </div>
             <div class="ts-label">—</div>
             <div class="ts-sub">Idle</div>
-            <div class="ts-activity-bar"></div>
+            <div class="ts-flash"></div>
+            <div class="ts-duration-bar"></div>
           </div>
           <div class="ts-block" id="ts-block-4">
             <div class="ts-num">TS 4</div>
             <div class="ts-led"></div>
+            <div class="ts-wave">
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+              <div class="ts-wave-bar" style="height:3px"></div>
+            </div>
             <div class="ts-label">—</div>
             <div class="ts-sub">Idle</div>
-            <div class="ts-activity-bar"></div>
+            <div class="ts-flash"></div>
+            <div class="ts-duration-bar"></div>
           </div>
         </div>
       </div>
@@ -834,13 +939,22 @@ td code{
           <div class="stat-value" id="sysUptime" style="font-size:20px;color:var(--text2)">—</div>
           <div class="stat-sub" id="sysHostname">—</div>
         </div>
+        <div class="stat-card" id="cpu-temp-card" style="display:none">
+          <div class="stat-label" data-i18n="sys_temp">CPU Temp</div>
+          <div class="stat-value" id="sysCpuTemp" style="font-size:20px;color:var(--warn)">—</div>
+          <div class="stat-sub" id="sysCpuTempSub">—</div>
+        </div>
       </div>
 
-      <!-- System info -->
+      <!-- System info + CPU/RAM -->
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="sys_info">System Info</div>
-          <div class="card-actions">
+          <div class="card-actions" style="display:flex;align-items:center;gap:10px">
+            <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">
+              <input type="checkbox" id="sys-autorefresh" onchange="toggleSysAutoRefresh(this.checked)" style="cursor:pointer">
+              <span data-i18n="sys_autorefresh">Auto-refresh 5s</span>
+            </label>
             <button class="btn btn-sm" onclick="loadSystemInfo()">↻ Refresh</button>
           </div>
         </div>
@@ -848,6 +962,38 @@ td code{
           <div class="info-row"><div class="info-key" data-i18n="sys_version">FS Version</div><div class="info-val accent" id="sysVersion">—</div></div>
           <div class="info-row"><div class="info-key" data-i18n="sys_os">OS</div><div class="info-val" id="sysOs">—</div></div>
           <div class="info-row"><div class="info-key" data-i18n="sys_config">Active Config</div><div class="info-val" id="sysConfigPath">—</div></div>
+          <div class="info-row"><div class="info-key" data-i18n="sys_cpu">CPU</div><div class="info-val" id="sysCpu">—</div></div>
+          <div class="info-row">
+            <div class="info-key" data-i18n="sys_cpu_load">CPU Load</div>
+            <div class="info-val" style="display:flex;align-items:center;gap:8px">
+              <div style="flex:1;height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;max-width:120px">
+                <div id="sysCpuBar" style="height:100%;width:0%;background:var(--accent);border-radius:3px;transition:width 0.3s"></div>
+              </div>
+              <span id="sysCpuPct" style="font-family:var(--mono);font-size:12px;color:var(--text2)">—</span>
+            </div>
+          </div>
+          <div class="info-row">
+            <div class="info-key" data-i18n="sys_ram">RAM</div>
+            <div class="info-val" style="display:flex;align-items:center;gap:8px">
+              <div style="flex:1;height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;max-width:120px">
+                <div id="sysRamBar" style="height:100%;width:0%;background:var(--accent2);border-radius:3px;transition:width 0.3s"></div>
+              </div>
+              <span id="sysRamVal" style="font-family:var(--mono);font-size:12px;color:var(--text2)">—</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RF / SDR Hardware -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title" data-i18n="sys_rf">RF Hardware (SoapySDR)</div>
+          <div class="card-actions">
+            <button class="btn btn-sm" onclick="loadSystemInfo()">↻ Probe</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <pre id="sysSoapy" style="font-family:var(--mono);font-size:11px;color:var(--text2);white-space:pre-wrap;word-break:break-all;margin:0;padding:0">—</pre>
         </div>
       </div>
 
@@ -863,10 +1009,58 @@ td code{
           <div id="profileList"></div>
         </div>
       </div>
+
+      <!-- Live SDS Broadcast -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">📢 Live SDS Broadcast</div>
+          <div class="card-actions">
+            <button class="btn btn-sm" onclick="loadLiveSds()">↻ Refresh</button>
+            <button class="btn btn-sm btn-danger" onclick="clearAllLiveSds()" id="live-sds-clear-btn" style="display:none" data-i18n="live_sds_clear_all">Clear All</button>
+          </div>
+        </div>
+        <div class="card-body" style="padding:14px 18px">
+          <p style="font-size:12px;color:var(--text2);margin-bottom:12px" data-i18n="live_sds_desc">Broadcast a text message to all radios on the cell, repeating at the Home Mode Display interval. Repeats until deleted or the repeat count is reached.</p>
+          <div class="form-row" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+            <div style="flex:1;min-width:180px">
+              <label class="form-label" data-i18n="live_sds_text">Message text (max 251 chars)</label>
+              <input type="text" id="live-sds-text" class="form-input" maxlength="251" placeholder="e.g. Repeater test 18:00-20:00">
+            </div>
+            <div style="width:90px">
+              <label class="form-label" data-i18n="live_sds_repeat">Repeat (0=∞)</label>
+              <input type="number" id="live-sds-repeat" class="form-input" value="0" min="0" max="999" style="width:100%">
+            </div>
+            <button class="btn btn-primary" onclick="addLiveSds()" data-i18n="live_sds_send">📢 Broadcast</button>
+          </div>
+          <div id="live-sds-list" style="margin-top:14px"></div>
+        </div>
+      </div>
     </div>
 
   </div><!-- /content -->
 </div><!-- /main -->
+
+<!-- ── Edit Profile Modal ── -->
+<div class="modal-overlay" id="edit-profile-modal">
+  <div class="modal" style="width:min(700px,95vw);max-height:90vh;display:flex;flex-direction:column">
+    <div class="modal-title">
+      ✏️ <span data-i18n="profile_edit_title">Edit Config Profile</span>:
+      <span id="edit-profile-name" style="color:var(--accent);font-family:var(--mono);font-size:14px"></span>
+    </div>
+    <div style="flex:1;overflow:hidden;display:flex;flex-direction:column;gap:8px;min-height:0">
+      <textarea id="edit-profile-editor"
+        style="flex:1;width:100%;min-height:300px;font-family:var(--mono);font-size:12px;
+               background:var(--bg3);color:var(--text);border:1px solid var(--border2);
+               border-radius:6px;padding:10px;resize:vertical;line-height:1.5"
+        spellcheck="false"></textarea>
+      <div id="edit-profile-msg" style="font-size:12px;min-height:16px"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeEditProfileModal()" data-i18n="cancel">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditProfile()" data-i18n="save">Save</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── SDS Modal ── -->
 <div class="modal-overlay" id="sds-modal">
@@ -913,6 +1107,11 @@ const LANGS={
     live_log:'Live Log',autoscroll:'Auto-scroll',filter_all:'All',
     clear:'Clear',restart:'⟳ Restart',shutdown:'⏻ Shutdown',save:'Save',
     sds_title:'⬡ Send SDS Message',sds_dest:'Destination ISSI',
+    live_sds_desc:'Broadcast a text message to all radios on the cell, repeating at the Home Mode Display interval. Repeats until deleted or the repeat count is reached.',
+    live_sds_text:'Message text (max 251 chars)',live_sds_repeat:'Repeat (0=∞)',live_sds_send:'📢 Broadcast',
+    live_sds_clear_all:'Clear All',live_sds_empty:'No active broadcasts.',
+    live_sds_sent:'sent',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
+    fallback_title:'⚠ FALLBACK CONFIG ACTIVE — Primary config failed to load',
     sds_msg_label:'Message',cancel:'Cancel',send:'Send',
     th_issi:'ISSI',th_groups:'Groups',th_ee:'EE',th_signal:'Signal',
     th_status:'Status',th_last_seen:'Last seen',th_actions:'Actions',
@@ -934,6 +1133,11 @@ const LANGS={
     update_done_err:'✗ Update failed. See log above.',
     update_close:'Close',
     system:'System',sys_info:'System Info',sys_hostname:'Hostname',sys_uptime:'Uptime',
+    sys_version:'FS Version',sys_os:'OS',sys_config:'Active Config',
+    sys_cpu:'CPU',sys_cpu_load:'CPU Load',sys_ram:'RAM',sys_temp:'CPU Temp',
+    sys_rf:'RF Hardware (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
+    profile_edit_title:'Edit Config Profile',profile_edit_btn:'Edit',
+    profile_edit_save_ok:'✓ Saved',profile_edit_save_fail:'✗ Save failed',
     sys_os:'OS',sys_version:'FS Version',sys_config:'Active Config',
     sys_profiles:'Config Profiles',sys_activate:'Activate & Restart',
     sys_active_badge:'ACTIVE',sys_no_profiles:'No .toml profiles found in config directory.',
@@ -950,6 +1154,11 @@ const LANGS={
     no_terminals:'Niciun radio înregistrat',no_calls:'Niciun apel activ',
     live_log:'Log Live',autoscroll:'Auto-scroll',filter_all:'Toate',
     clear:'Șterge',restart:'⟳ Repornire',shutdown:'⏻ Oprire',save:'Salvează',
+    live_sds_desc:'Transmite un mesaj text către toate radiourile din celulă, repetând la intervalul Home Mode Display.',
+    live_sds_text:'Text mesaj (max 251 caractere)',live_sds_repeat:'Repetări (0=∞)',live_sds_send:'📢 Broadcast',
+    live_sds_clear_all:'Șterge Tot',live_sds_empty:'Niciun broadcast activ.',
+    live_sds_sent:'trimis',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
+    fallback_title:'⚠ CONFIG DE REZERVĂ ACTIV — Config principal nu a putut fi încărcat',
     sds_title:'⬡ Trimite Mesaj SDS',sds_dest:'ISSI Destinatar',
     sds_msg_label:'Mesaj',cancel:'Anulează',send:'Trimite',
     th_issi:'ISSI',th_groups:'Grupuri',th_ee:'EE',th_signal:'Semnal',
@@ -973,6 +1182,10 @@ const LANGS={
     update_close:'Închide',
     system:'Sistem',sys_info:'Info Sistem',sys_hostname:'Hostname',sys_uptime:'Uptime',
     sys_os:'OS',sys_version:'Versiune FS',sys_config:'Config Activ',
+    sys_cpu:'CPU',sys_cpu_load:'Încărcare CPU',sys_ram:'RAM',sys_temp:'Temp CPU',
+    sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
+    profile_edit_title:'Editare Profil Config',profile_edit_btn:'Editează',
+    profile_edit_save_ok:'✓ Salvat',profile_edit_save_fail:'✗ Salvare eșuată',
     sys_profiles:'Profile Config',sys_activate:'Activează & Repornire',
     sys_active_badge:'ACTIV',sys_no_profiles:'Niciun profil .toml găsit în directorul config.',
     sys_activate_confirm:'Comutare la profilul "{name}" și repornire?\nConfig-ul curent va fi salvat.',
@@ -988,6 +1201,11 @@ const LANGS={
     no_terminals:'Keine Radios registriert',no_calls:'Keine aktiven Anrufe',
     live_log:'Live-Log',autoscroll:'Auto-Scroll',filter_all:'Alle',
     clear:'Löschen',restart:'⟳ Neustart',shutdown:'⏻ Herunterfahren',save:'Speichern',
+    live_sds_desc:'Sendet eine Textnachricht an alle Funkgeräte der Zelle, wiederholt im Home-Mode-Display-Intervall.',
+    live_sds_text:'Nachrichtentext (max. 251 Zeichen)',live_sds_repeat:'Wiederh. (0=∞)',live_sds_send:'📢 Senden',
+    live_sds_clear_all:'Alle löschen',live_sds_empty:'Keine aktiven Broadcasts.',
+    live_sds_sent:'gesendet',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
+    fallback_title:'⚠ FALLBACK-KONFIGURATION AKTIV — Primäre Konfiguration konnte nicht geladen werden',
     sds_title:'⬡ SDS-Nachricht senden',sds_dest:'Ziel-ISSI',
     sds_msg_label:'Nachricht',cancel:'Abbrechen',send:'Senden',
     th_issi:'ISSI',th_groups:'Gruppen',th_ee:'EE',th_signal:'Signal',
@@ -1011,6 +1229,10 @@ const LANGS={
     update_close:'Schließen',
     system:'System',sys_info:'Systeminfo',sys_hostname:'Hostname',sys_uptime:'Laufzeit',
     sys_os:'OS',sys_version:'FS-Version',sys_config:'Aktive Konfig',
+    sys_cpu:'CPU',sys_cpu_load:'CPU-Auslastung',sys_ram:'RAM',sys_temp:'CPU-Temp',
+    sys_rf:'RF-Hardware (SoapySDR)',sys_autorefresh:'Auto-Aktualisierung 5s',
+    profile_edit_title:'Konfigprofil bearbeiten',profile_edit_btn:'Bearbeiten',
+    profile_edit_save_ok:'✓ Gespeichert',profile_edit_save_fail:'✗ Speichern fehlgeschlagen',
     sys_profiles:'Konfigprofile',sys_activate:'Aktivieren & Neustart',
     sys_active_badge:'AKTIV',sys_no_profiles:'Keine .toml-Profile im Konfigverzeichnis gefunden.',
     sys_activate_confirm:'Zum Profil "{name}" wechseln und neu starten?\nAktuelle Konfig wird gesichert.',
@@ -1026,6 +1248,11 @@ const LANGS={
     no_terminals:'No hay radios registrados',no_calls:'No hay llamadas activas',
     live_log:'Log en Vivo',autoscroll:'Auto-desplaz.',filter_all:'Todos',
     clear:'Limpiar',restart:'⟳ Reiniciar',shutdown:'⏻ Apagar',save:'Guardar',
+    live_sds_desc:'Transmite un mensaje de texto a todos los radios de la celda, repitiéndose al intervalo de Home Mode Display.',
+    live_sds_text:'Texto del mensaje (máx. 251 caracteres)',live_sds_repeat:'Repetir (0=∞)',live_sds_send:'📢 Difundir',
+    live_sds_clear_all:'Borrar Todo',live_sds_empty:'No hay difusiones activas.',
+    live_sds_sent:'enviado',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
+    fallback_title:'⚠ CONFIGURACIÓN DE RESERVA ACTIVA — No se pudo cargar la configuración principal',
     sds_title:'⬡ Enviar Mensaje SDS',sds_dest:'ISSI Destino',
     sds_msg_label:'Mensaje',cancel:'Cancelar',send:'Enviar',
     th_issi:'ISSI',th_groups:'Grupos',th_ee:'EE',th_signal:'Señal',
@@ -1049,6 +1276,10 @@ const LANGS={
     update_close:'Cerrar',
     system:'Sistema',sys_info:'Info del Sistema',sys_hostname:'Hostname',sys_uptime:'Tiempo activo',
     sys_os:'OS',sys_version:'Versión FS',sys_config:'Config Activa',
+    sys_cpu:'CPU',sys_cpu_load:'Carga CPU',sys_ram:'RAM',sys_temp:'Temp CPU',
+    sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-actualización 5s',
+    profile_edit_title:'Editar Perfil Config',profile_edit_btn:'Editar',
+    profile_edit_save_ok:'✓ Guardado',profile_edit_save_fail:'✗ Error al guardar',
     sys_profiles:'Perfiles de Config',sys_activate:'Activar y Reiniciar',
     sys_active_badge:'ACTIVO',sys_no_profiles:'No se encontraron perfiles .toml en el directorio.',
     sys_activate_confirm:'¿Cambiar al perfil "{name}" y reiniciar?\nLa config actual será respaldada.',
@@ -1149,13 +1380,24 @@ function showPage(name,el){
   else{const nav=document.getElementById('nav-'+name);if(nav)nav.classList.add('active');}
   document.getElementById('topbar-title').textContent=t(name)||name;
   if(name==='config')loadConfig();
-  if(name==='system'){loadSystemInfo();loadConfigProfiles();}
+  if(name==='system'){loadSystemInfo();loadConfigProfiles();loadLiveSds();}
+  else if(sysAutoRefreshTimer){clearInterval(sysAutoRefreshTimer);sysAutoRefreshTimer=null;const cb=document.getElementById('sys-autorefresh');if(cb)cb.checked=false;}
   if(window.innerWidth<=700)closeMobileSidebar();
 }
 
 // ── State + WS ────────────────────────────────────────────────────────────
 let ws=null,state={ms:{},calls:{},lastHeard:[],brewOnline:false,brewVer:0},sdsDest=0;
 const logFilter=()=>document.getElementById('log-filter').value;
+
+function showFallbackBanner(reason){
+  const banner=document.getElementById('fallback-banner');
+  if(!banner)return;
+  banner.style.display='flex';
+  const titleEl=banner.querySelector('[data-i18n="fallback_title"]');
+  if(titleEl)titleEl.textContent=t('fallback_title');
+  const reasonEl=document.getElementById('fallback-reason');
+  if(reasonEl)reasonEl.textContent=reason;
+}
 
 function setBrewStatus(online,version){
   state.brewOnline=online;state.brewVer=version||0;
@@ -1218,6 +1460,7 @@ function handleMsg(msg){
       });
       if(msg.log&&msg.log.length){document.getElementById('log-container').innerHTML='';msg.log.forEach(e=>appendLog(e));}
       setBrewStatus(!!msg.brew_online,msg.brew_version||0);
+      if(msg.fallback_config_active){showFallbackBanner(msg.fallback_config_reason||'');}
       renderAll();break;
     case 'brew_status':
       setBrewStatus(!!msg.connected,msg.brew_version||0);break;
@@ -1300,53 +1543,107 @@ function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocks();}
 
 // ── TS Visualizer ─────────────────────────────────────────────────────────
-// ts_state[ts-1]: {call_id, call_type, label, sub, voice_ts} (voice_ts = Date.now() of last frame)
-const tsState=[null,null,null,null]; // index 0=TS1..3=TS4
-const TS_VOICE_DECAY_MS=800; // fade active indicator after 800ms without voice frame
+// tsState[ts-1]: {call_id, call_type, label, sub, voice_ts, started_at}
+const tsState=[null,null,null,null];
+const TS_VOICE_DECAY_MS=800;
+// Random wave heights per bar per TS — regenerated on each voice frame
+const tsWaveHeights=[[],[],[],[]];
+
+function tsRandWave(ts){
+  const bars=7;
+  tsWaveHeights[ts-1]=Array.from({length:bars},()=>Math.floor(Math.random()*14)+4);
+}
+function tsApplyWave(ts,active){
+  const block=document.getElementById('ts-block-'+ts);
+  if(!block)return;
+  const bars=block.querySelectorAll('.ts-wave-bar');
+  if(active){
+    tsWaveHeights[ts-1].forEach((h,i)=>{if(bars[i])bars[i].style.height=h+'px';});
+  } else {
+    bars.forEach(b=>b.style.height='3px');
+  }
+}
 
 function updateTsBlocks(){
+  const now=Date.now();
   for(let i=0;i<4;i++){
     const ts=i+1;
     const block=document.getElementById('ts-block-'+ts);
     if(!block)continue;
-    if(ts===1){
-      // TS1 is always MCCH
-      block.className='ts-block mcch';
-      block.querySelector('.ts-label').textContent='MCCH';
-      block.querySelector('.ts-sub').textContent='Control';
-      continue;
-    }
-    const st=tsState[i];
     const label=block.querySelector('.ts-label');
     const sub=block.querySelector('.ts-sub');
+    const dur=block.querySelector('.ts-duration-bar');
+
+    if(ts===1){
+      block.className='ts-block mcch';
+      label.textContent='MCCH';
+      sub.textContent='Control';
+      // subtle MCCH wave animation
+      if(!tsWaveHeights[0].length)tsRandWave(1);
+      tsApplyWave(1,true);
+      if(dur)dur.style.width='0%';
+      continue;
+    }
+
+    const st=tsState[i];
     if(!st){
       block.className='ts-block';
       label.textContent='—';
       sub.textContent='Idle';
+      tsApplyWave(ts,false);
+      if(dur)dur.style.width='0%';
       continue;
     }
-    // Check if voice activity is recent
-    const voiceRecent=st.voice_ts&&(Date.now()-st.voice_ts)<TS_VOICE_DECAY_MS;
-    block.className='ts-block'+(voiceRecent?' active':'');
-    label.textContent=st.label||'—';
-    sub.textContent=voiceRecent?'TX ▶':st.sub||'Alloc';
+
+    const voiceRecent=st.voice_ts&&(now-st.voice_ts)<TS_VOICE_DECAY_MS;
+
+    if(voiceRecent){
+      block.className='ts-block voice';
+      label.textContent=st.label||'—';
+      sub.textContent='▶ TX';
+    } else {
+      block.className='ts-block call';
+      label.textContent=st.label||'—';
+      const elapsed=Math.floor((now-(st.started_at||now))/1000);
+      sub.textContent=elapsed>0?formatDur(elapsed):(st.sub||'Alloc');
+    }
+    tsApplyWave(ts, voiceRecent);
+
+    // Duration bar — fills over 120s then stays full
+    if(dur&&st.started_at){
+      const pct=Math.min(100,((now-st.started_at)/120000)*100);
+      dur.style.width=pct+'%';
+    }
   }
+}
+
+function formatDur(s){
+  if(s<60)return s+'s';
+  return Math.floor(s/60)+'m'+String(s%60).padStart(2,'0')+'s';
 }
 
 function tsSetCall(ts, call_id, call_type, label, sub){
   if(ts<2||ts>4)return;
-  tsState[ts-1]={call_id,call_type,label,sub,voice_ts:null};
+  tsState[ts-1]={call_id,call_type,label,sub,voice_ts:null,started_at:Date.now()};
 }
 function tsClearCall(call_id){
   for(let i=1;i<4;i++){if(tsState[i]&&tsState[i].call_id===call_id)tsState[i]=null;}
 }
 function tsVoice(ts){
   if(ts<2||ts>4)return;
-  if(!tsState[ts-1])tsState[ts-1]={call_id:0,call_type:'',label:'Traffic',sub:'Alloc',voice_ts:null};
+  if(!tsState[ts-1])tsState[ts-1]={call_id:0,call_type:'',label:'Traffic',sub:'',voice_ts:null,started_at:Date.now()};
   tsState[ts-1].voice_ts=Date.now();
+  // Randomize waveform bars on each voice frame for live feel
+  tsRandWave(ts);
+  // Flash effect
+  const block=document.getElementById('ts-block-'+ts);
+  if(block){
+    const flash=block.querySelector('.ts-flash');
+    if(flash){flash.style.animation='none';void flash.offsetWidth;flash.style.animation='ts-flash-in 0.08s ease-out forwards';}
+  }
   updateTsBlocks();
 }
-setInterval(updateTsBlocks, 200); // refresh to catch voice decay
+setInterval(updateTsBlocks, 150); // refresh to catch voice decay + duration tick
 
 function renderStations(){
   const ms=Object.values(state.ms);
@@ -1471,6 +1768,12 @@ async function startUpdate(){
 
 // ── System tab ────────────────────────────────────────────────────────────
 let sysData=null;
+let sysAutoRefreshTimer = null;
+function toggleSysAutoRefresh(on) {
+  if (sysAutoRefreshTimer) { clearInterval(sysAutoRefreshTimer); sysAutoRefreshTimer = null; }
+  if (on) sysAutoRefreshTimer = setInterval(loadSystemInfo, 5000);
+}
+
 async function loadSystemInfo(){
   try{
     const r=await fetch('/api/system');if(!r.ok)return;
@@ -1479,8 +1782,46 @@ async function loadSystemInfo(){
     document.getElementById('sysVersion').textContent=sysData.stack_version||'—';
     document.getElementById('sysOs').textContent=sysData.os||'—';
     document.getElementById('sysConfigPath').textContent=sysData.config_path||'—';
+
+    // CPU
+    const cpuEl=document.getElementById('sysCpu');
+    if(cpuEl) cpuEl.textContent=(sysData.cpu_model||'—')+(sysData.cpu_cores?` (${sysData.cpu_cores} cores)`:'');
+    const cpuPct=sysData.cpu_pct||0;
+    const cpuBarEl=document.getElementById('sysCpuBar');
+    const cpuPctEl=document.getElementById('sysCpuPct');
+    if(cpuBarEl) cpuBarEl.style.width=cpuPct+'%';
+    if(cpuBarEl) cpuBarEl.style.background=cpuPct>80?'var(--danger)':cpuPct>60?'var(--warn)':'var(--accent)';
+    if(cpuPctEl) cpuPctEl.textContent=cpuPct+'%';
+
+    // RAM
+    const ramTotal=sysData.ram_total_mb||0;
+    const ramUsed=sysData.ram_used_mb||0;
+    const ramPct=ramTotal>0?Math.round(ramUsed/ramTotal*100):0;
+    const ramBarEl=document.getElementById('sysRamBar');
+    const ramValEl=document.getElementById('sysRamVal');
+    if(ramBarEl) ramBarEl.style.width=ramPct+'%';
+    if(ramBarEl) ramBarEl.style.background=ramPct>85?'var(--danger)':ramPct>70?'var(--warn)':'var(--accent2)';
+    if(ramValEl) ramValEl.textContent=`${ramUsed} / ${ramTotal} MB (${ramPct}%)`;
+
+    // Temperature
+    const tempCard=document.getElementById('cpu-temp-card');
+    const tempEl=document.getElementById('sysCpuTemp');
+    const tempSub=document.getElementById('sysCpuTempSub');
+    if(sysData.cpu_temp_c!=null){
+      const t=sysData.cpu_temp_c.toFixed(1);
+      if(tempCard) tempCard.style.display='';
+      if(tempEl){ tempEl.textContent=t+'°C'; tempEl.style.color=sysData.cpu_temp_c>75?'var(--danger)':sysData.cpu_temp_c>60?'var(--warn)':'var(--accent)';}
+      if(tempSub) tempSub.textContent=sysData.cpu_temp_c>75?'⚠ HOT':sysData.cpu_temp_c>60?'Warm':'OK';
+    } else {
+      if(tempCard) tempCard.style.display='none';
+    }
+
+    // RF / SoapySDR
+    const soapyEl=document.getElementById('sysSoapy');
+    if(soapyEl) soapyEl.textContent=sysData.soapy_info||'—';
+
     updateSystemUptime();
-  }catch{}
+  }catch(e){console.error('loadSystemInfo',e);}
 }
 function updateSystemUptime(){
   if(!sysData||!sysData.uptime_secs)return;
@@ -1504,6 +1845,10 @@ async function loadConfigProfiles(){
       if(p.active){
         const b=document.createElement('span');b.className='badge badge-green';b.textContent=t('sys_active_badge');row.appendChild(b);
       } else {
+        const editBtn=document.createElement('button');
+        editBtn.className='btn btn-sm';editBtn.textContent=t('profile_edit_btn')||'Edit';
+        editBtn.onclick=()=>openEditProfile(p.name);
+        row.appendChild(editBtn);
         const btn=document.createElement('button');btn.className='btn btn-primary btn-sm';btn.textContent=t('sys_activate');
         btn.onclick=()=>activateProfile(p.name);row.appendChild(btn);
       }
@@ -1532,6 +1877,129 @@ function updateSysBtsPanel(online,brewOnline,brewVer){
   if(bdEl){bdEl.textContent=brewOnline?`Brew v${brewVer||0}`:'—';}
 }
 
+// ── Edit Profile (inactive config) ───────────────────────────────────────
+let editProfileName = null;
+async function openEditProfile(name) {
+  editProfileName = name;
+  document.getElementById('edit-profile-name').textContent = name;
+  document.getElementById('edit-profile-msg').textContent = '';
+  document.getElementById('edit-profile-editor').value = 'Loading...';
+  document.getElementById('edit-profile-modal').classList.add('open');
+  try {
+    const r = await fetch(`/api/configs/${encodeURIComponent(name)}`);
+    if (r.ok) {
+      document.getElementById('edit-profile-editor').value = await r.text();
+    } else {
+      document.getElementById('edit-profile-editor').value = '';
+      document.getElementById('edit-profile-msg').textContent = 'Failed to load: ' + await r.text();
+      document.getElementById('edit-profile-msg').style.color = 'var(--danger)';
+    }
+  } catch(e) {
+    document.getElementById('edit-profile-editor').value = '';
+    document.getElementById('edit-profile-msg').textContent = 'Error: ' + e.message;
+    document.getElementById('edit-profile-msg').style.color = 'var(--danger)';
+  }
+}
+
+function closeEditProfileModal() {
+  document.getElementById('edit-profile-modal').classList.remove('open');
+  editProfileName = null;
+}
+
+async function saveEditProfile() {
+  if (!editProfileName) return;
+  const content = document.getElementById('edit-profile-editor').value;
+  const msgEl = document.getElementById('edit-profile-msg');
+  try {
+    const r = await fetch(`/api/configs/${encodeURIComponent(editProfileName)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: content,
+    });
+    if (r.ok) {
+      msgEl.textContent = t('profile_edit_save_ok');
+      msgEl.style.color = 'var(--accent)';
+    } else {
+      msgEl.textContent = t('profile_edit_save_fail') + ': ' + await r.text();
+      msgEl.style.color = 'var(--danger)';
+    }
+  } catch(e) {
+    msgEl.textContent = 'Error: ' + e.message;
+    msgEl.style.color = 'var(--danger)';
+  }
+}
+
+// ── Live SDS Broadcast ────────────────────────────────────────────────────
+async function loadLiveSds() {
+  const list = document.getElementById('live-sds-list');
+  const clearBtn = document.getElementById('live-sds-clear-btn');
+  try {
+    const r = await fetch('/api/live-sds');
+    if (!r.ok) { list.innerHTML = `<div style="color:var(--danger);font-size:12px">Error ${r.status}</div>`; return; }
+    const items = await r.json();
+    if (!items || !items.length) {
+      list.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:12px">${t('live_sds_empty')}</div>`;
+      if (clearBtn) clearBtn.style.display = 'none';
+      return;
+    }
+    if (clearBtn) clearBtn.style.display = '';
+    list.innerHTML = '';
+    items.forEach(m => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)';
+      const repeatLabel = m.repeat_count === 0
+        ? `<span style="color:var(--accent2);font-size:11px">${t('live_sds_forever')}</span>`
+        : `<span style="font-size:11px;color:var(--text2)">${m.sent_count}/${m.repeat_count}${t('live_sds_times')}</span>`;
+      row.innerHTML = `
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(m.text)}</div>
+          <div style="font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:2px">
+            PID ${m.protocol_id} · src ${m.source_issi} · ${t('live_sds_sent')}: ${repeatLabel}
+          </div>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="deleteLiveSds(${m.id})" title="${t('live_sds_delete')}">${t('live_sds_delete')}</button>`;
+      list.appendChild(row);
+    });
+  } catch(e) {
+    list.innerHTML = `<div style="color:var(--danger);font-size:12px">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+async function addLiveSds() {
+  const text = document.getElementById('live-sds-text').value.trim();
+  const repeat = parseInt(document.getElementById('live-sds-repeat').value) || 0;
+  if (!text) { document.getElementById('live-sds-text').focus(); return; }
+  try {
+    const r = await fetch('/api/live-sds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, repeat_count: repeat, protocol_id: 220, source_issi: 16777215 })
+    });
+    if (r.ok) {
+      document.getElementById('live-sds-text').value = '';
+      document.getElementById('live-sds-repeat').value = '0';
+      await loadLiveSds();
+    } else {
+      alert('Error: ' + await r.text());
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function deleteLiveSds(id) {
+  try {
+    const r = await fetch(`/api/live-sds/${id}`, { method: 'DELETE' });
+    if (r.ok) await loadLiveSds();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function clearAllLiveSds() {
+  if (!confirm(t('live_sds_clear_all') + '?')) return;
+  try {
+    const r = await fetch('/api/live-sds', { method: 'DELETE' });
+    if (r.ok) await loadLiveSds();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
 // ── Tick ──────────────────────────────────────────────────────────────────
 setInterval(()=>{
   if(document.getElementById('page-calls').classList.contains('active'))renderCalls();
@@ -1539,6 +2007,13 @@ setInterval(()=>{
   if(document.getElementById('page-lastheard').classList.contains('active'))renderLastHeard();
   if(document.getElementById('page-system').classList.contains('active'))updateSystemUptime();
 },1000);
+
+// Refresh live SDS list every 10s when System tab is visible (sent_count updates in background)
+setInterval(()=>{
+  if(document.getElementById('page-system').classList.contains('active')){
+    loadLiveSds();
+  }
+},10000);
 
 // ── Init ──────────────────────────────────────────────────────────────────
 (function(){

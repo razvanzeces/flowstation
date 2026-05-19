@@ -1,5 +1,30 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use tetra_core::TimeslotAllocator;
+
+/// A one-shot or repeating SDS broadcast message injected at runtime via the dashboard.
+///
+/// Each message is broadcast to all MSs on the cell (GSSI 0xFFFFFF) using the same
+/// SDS-TL TRANSFER mechanism as Home Mode Display. Messages are transmitted at the
+/// `home_mode_display` interval (or `sds_broadcast` interval if that is configured),
+/// round-robining with the static PID-220 callsign text so neither displaces the other.
+///
+/// - `repeat_count = 0` → repeats indefinitely until explicitly deleted.
+/// - `repeat_count > 0` → auto-removed after that many transmissions.
+#[derive(Debug, Clone)]
+pub struct LiveSdsMessage {
+    /// Unique ID (monotonically incrementing, assigned by the stack).
+    pub id: u32,
+    /// Text to broadcast (UTF-8; encoded as ISO-8859-1 on TX, unknown chars → '?').
+    pub text: String,
+    /// SDS protocol ID. Defaults to 220 so it appears on the radio home screen.
+    pub protocol_id: u8,
+    /// Source ISSI shown on the radio. Defaults to 16777215 (0xFFFFFF, "network").
+    pub source_issi: u32,
+    /// 0 = repeat forever; >0 = auto-remove after this many transmissions.
+    pub repeat_count: u32,
+    /// Number of times this message has been transmitted so far.
+    pub sent_count: u32,
+}
 
 #[derive(Debug, Clone)]
 pub struct Subscriber {
@@ -107,6 +132,11 @@ pub struct StackState {
     pub network_connected: bool,
     /// Centralized subscriber registry for local-first routing decisions.
     pub subscribers: SubscriberRegistry,
+    /// Queue of live SDS messages injected at runtime via the dashboard.
+    /// Transmitted round-robin alongside the static Home Mode Display text.
+    pub live_sds_queue: VecDeque<LiveSdsMessage>,
+    /// Monotonically incrementing ID counter for live SDS messages.
+    pub next_live_sds_id: u32,
 }
 
 #[cfg(test)]
@@ -200,6 +230,8 @@ impl Default for StackState {
             timeslot_alloc: TimeslotAllocator::default(),
             network_connected: false,
             subscribers: SubscriberRegistry::new(),
+            live_sds_queue: VecDeque::new(),
+            next_live_sds_id: 1,
         }
     }
 }

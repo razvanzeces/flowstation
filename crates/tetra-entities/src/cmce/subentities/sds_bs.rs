@@ -33,6 +33,7 @@ pub struct SdsBsSubentity {
     telemetry: Option<TelemetrySink>,
     home_mode_display_sender: HomeModeDisplaySender,
     sds_broadcast_sender: HomeModeDisplaySender,
+    live_sds_sender: HomeModeDisplaySender,
     pub pending_actions: Vec<SdsPendingAction>,
 }
 
@@ -43,12 +44,17 @@ impl SdsBsSubentity {
             telemetry: None,
             home_mode_display_sender: HomeModeDisplaySender::new(),
             sds_broadcast_sender: HomeModeDisplaySender::new(),
+            live_sds_sender: HomeModeDisplaySender::new(),
             pending_actions: Vec::new(),
         }
     }
 
     pub fn set_telemetry(&mut self, sink: TelemetrySink) {
         self.telemetry = Some(sink);
+    }
+
+    pub fn shared_config(&self) -> &SharedConfig {
+        &self.config
     }
 
     fn emit(&self, event: TelemetryEvent) {
@@ -63,6 +69,9 @@ impl SdsBsSubentity {
             self.send_d_sds_data(queue, hmd_tx.source_issi, hmd_tx.dest_gssi, SsiType::Gssi, hmd_tx.payload);
         }
         if let Some(tx) = self.sds_broadcast_sender.tick_start_broadcast(&self.config, dltime) {
+            self.send_d_sds_data(queue, tx.source_issi, tx.dest_gssi, SsiType::Gssi, tx.payload);
+        }
+        if let Some(tx) = self.live_sds_sender.tick_live_sds(&self.config, dltime) {
             self.send_d_sds_data(queue, tx.source_issi, tx.dest_gssi, SsiType::Gssi, tx.payload);
         }
     }

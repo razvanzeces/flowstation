@@ -42,24 +42,100 @@ impl UpdateState {
 
 type SharedUpdateState = Arc<Mutex<UpdateState>>;
 
+/// Resolve the FlowStation git source directory for OTA updates.
+///
+/// Resolution order (first match wins):
+///   1. `override_dir` from config ([dashboard].source_dir) — explicit user choice.
+///   2. Walk up from `current_exe()` looking for a `.git` directory. This handles
+///      the development case where the binary lives at `<src>/target/release/...`.
+///   3. Well-known install paths: `/opt/tetra-bluestation`, `/opt/flowstation`,
+///      `/opt/tetra-bs`, `/opt/tetra`. Useful when the binary was deployed
+///      separately from the source tree (e.g. binary in `/opt/tetra/`, sources
+///      cloned in `/opt/tetra-bluestation/`).
+///   4. `current_dir()` if it contains a `.git` directory.
+///
+/// Returns `Ok(path)` on success, or `Err(message)` listing all paths tried.
+/// The returned path is guaranteed to contain a `.git` entry (file or directory —
+/// `.git` can be a file in git worktrees).
+fn resolve_source_dir(override_dir: Option<&str>) -> Result<std::path::PathBuf, String> {
+    fn is_git_repo(p: &std::path::Path) -> bool {
+        // `.git` is a directory in normal clones, but a file in git worktrees,
+        // so check for existence of either form.
+        p.join(".git").exists()
+    }
+
+    let mut tried: Vec<String> = Vec::new();
+
+    // 1. Explicit override from config.
+    if let Some(dir) = override_dir {
+        let path = std::path::PathBuf::from(dir);
+        if is_git_repo(&path) {
+            return Ok(path);
+        }
+        tried.push(format!("{} (from config: not a git repo)", path.display()));
+    }
+
+    // 2. Walk up from the running binary path, up to 6 levels.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cur = exe.parent().map(|p| p.to_path_buf());
+        for _ in 0..6 {
+            let Some(p) = cur else { break };
+            // Don't accept "/" as a result — virtually never the right answer
+            // and walking past the root produces None anyway.
+            if p.parent().is_none() {
+                tried.push(format!("{} (filesystem root — skipped)", p.display()));
+                break;
+            }
+            if is_git_repo(&p) {
+                return Ok(p);
+            }
+            tried.push(format!("{} (walked up from binary)", p.display()));
+            cur = p.parent().map(|pp| pp.to_path_buf());
+        }
+    }
+
+    // 3. Well-known install paths.
+    for candidate in &[
+        "/opt/tetra-bluestation",
+        "/opt/flowstation",
+        "/opt/tetra-bs",
+        "/opt/tetra",
+    ] {
+        let p = std::path::PathBuf::from(candidate);
+        if is_git_repo(&p) {
+            return Ok(p);
+        }
+        if p.exists() {
+            tried.push(format!("{} (well-known path: exists but not a git repo)", candidate));
+        }
+    }
+
+    // 4. Current working directory.
+    if let Ok(cwd) = std::env::current_dir() {
+        if is_git_repo(&cwd) {
+            return Ok(cwd);
+        }
+        tried.push(format!("{} (current working dir: not a git repo)", cwd.display()));
+    }
+
+    Err(format!(
+        "could not locate FlowStation git source. Set [dashboard].source_dir in config.toml \
+         to the absolute path of your git clone (e.g. source_dir = \"/opt/tetra-bluestation\"). \
+         Paths tried: {}",
+        if tried.is_empty() { "(none)".to_string() } else { tried.join("; ") }
+    ))
+}
+
 /// Run git pull + cargo build --release in a background thread.
 /// Steps:
-///   1. Backup config.toml → config.toml.bak
-///   2. git -C <src_dir> pull
-///   3. cargo build --release
-///   4. systemctl restart tetra   (after short delay, gives 200 OK time to reach browser)
-///
-/// src_dir is derived from the binary path: the directory containing the running binary's
-/// parent (i.e. target/release is sibling of src root), so we go up two levels.
-fn run_update(update: SharedUpdateState, config_path: String) {
-    // Derive source root from the running binary's location.
-    // Binary lives at  <src_root>/target/release/bluestation-bs
-    // so src_root = binary_path.parent().parent().parent()
-    let src_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-
+///   1. Resolve source dir (config override -> walk-up -> well-known paths -> CWD)
+///   2. Validate it is a git repository
+///   3. Backup config.toml -> config.toml.bak
+///   4. git fetch + compare commits
+///   5. git merge --ff-only origin/main
+///   6. cargo build --release
+///   7. systemctl restart <service>  (after short delay)
+fn run_update(update: SharedUpdateState, config_path: String, source_dir_override: Option<String>) {
     macro_rules! log {
         ($update:expr, $($arg:tt)*) => {{
             let line = format!($($arg)*);
@@ -67,6 +143,20 @@ fn run_update(update: SharedUpdateState, config_path: String) {
             $update.lock().unwrap().append(&line);
         }};
     }
+
+    log!(update, "=== FlowStation OTA Update ===");
+
+    // Step 1: resolve source directory. Bail out cleanly if we can't find a git repo.
+    let src_dir = match resolve_source_dir(source_dir_override.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            log!(update, "ERROR: {}", e);
+            update.lock().unwrap().finish(false);
+            return;
+        }
+    };
+
+    log!(update, "Source dir: {}", src_dir.display());
 
     /// Run a command, stream stdout+stderr into the log, return Ok(stdout) or Err.
     fn run_cmd_output(
@@ -101,18 +191,23 @@ fn run_update(update: SharedUpdateState, config_path: String) {
         }
     }
 
-    log!(update, "=== FlowStation OTA Update ===");
-    log!(update, "Source dir: {}", src_dir.display());
-
     let src_str = src_dir.to_str().unwrap_or(".");
 
-    // Step 1: fetch remote without merging — just update refs
+    // Step 2: explicit sanity check that this is a working git repo.
+    // The .git existence check in resolve_source_dir() is necessary but not sufficient
+    // (e.g. a corrupted repo). This catches edge cases with a clear error.
+    log!(update, "--- Verifying git repository ---");
+    if run_cmd_output(&update, "git", &["-C", src_str, "rev-parse", "--is-inside-work-tree"], &src_dir).is_none() {
+        return;
+    }
+
+    // Step 3: fetch remote without merging — just update refs
     log!(update, "--- Checking remote for updates ---");
     if run_cmd_output(&update, "git", &["-C", src_str, "fetch", "origin", "main"], &src_dir).is_none() {
         return;
     }
 
-    // Step 2: compare local HEAD with remote origin/main
+    // Step 4: compare local HEAD with remote origin/main
     let local_commit = run_cmd_output(&update, "git", &["-C", src_str, "rev-parse", "HEAD"], &src_dir)
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
@@ -132,30 +227,30 @@ fn run_update(update: SharedUpdateState, config_path: String) {
         return;
     }
 
-    // Step 3: show what changed
+    // Step 5: show what changed
     let _ = run_cmd_output(&update, "git", &["-C", src_str, "log", "--oneline",
         &format!("HEAD..origin/main")], &src_dir);
 
-    // Step 4: backup config before touching anything
+    // Step 6: backup config before touching anything
     let backup_path = format!("{}.bak", config_path);
     match std::fs::copy(&config_path, &backup_path) {
         Ok(_)  => log!(update, "Config backed up → {}", backup_path),
         Err(e) => log!(update, "WARNING: config backup failed: {} (continuing)", e),
     }
 
-    // Step 5: fast-forward merge (only changed files are touched on disk)
+    // Step 7: fast-forward merge (only changed files are touched on disk)
     log!(update, "--- git merge (fast-forward only) ---");
     if run_cmd_output(&update, "git", &["-C", src_str, "merge", "--ff-only", "origin/main"], &src_dir).is_none() {
         return;
     }
 
-    // Step 6: incremental build (cargo only recompiles changed crates)
+    // Step 8: incremental build (cargo only recompiles changed crates)
     log!(update, "--- cargo build --release (incremental) ---");
     if run_cmd_output(&update, "cargo", &["build", "--release"], &src_dir).is_none() {
         return;
     }
 
-    // Step 7: done — schedule restart
+    // Step 9: done — schedule restart
     log!(update, "--- Build successful. Restarting service in 2s... ---");
     update.lock().unwrap().finish(true);
 
@@ -169,8 +264,15 @@ pub struct DashboardServer {
     pub state: DashboardState,
     clients: WsClients,
     config_path: String,
+    /// Shared stack config — used to read live_sds_queue from StackState.
+    shared_config: Option<tetra_config::bluestation::SharedConfig>,
     cmd_tx: Option<CmdSender>,
     update_state: SharedUpdateState,
+    /// Optional override for the OTA update source directory.
+    /// If None, the update routine auto-detects.
+    source_dir_override: Option<String>,
+    /// HTTP Basic Auth credentials. None = no auth (open access).
+    auth: Option<(String, String)>,
     /// Last time a ts_voice WS message was broadcast per TS (indexed 0..3 for TS1..TS4)
     ts_last_broadcast: std::sync::Mutex<[std::time::Instant; 4]>,
 }
@@ -182,14 +284,40 @@ impl DashboardServer {
             state: Arc::new(RwLock::new(DashboardStateInner::new(config_path.clone()))),
             clients: Arc::new(Mutex::new(Vec::new())),
             config_path,
+            shared_config: None,
             cmd_tx: None,
             update_state: Arc::new(Mutex::new(UpdateState::new())),
+            source_dir_override: None,
+            auth: None,
             ts_last_broadcast: std::sync::Mutex::new([now; 4]),
         }
     }
 
     pub fn set_cmd_sender(&mut self, tx: CmdSender) {
         self.cmd_tx = Some(tx);
+    }
+
+    /// Provide the SharedConfig so the dashboard can read live SDS queue state.
+    pub fn set_shared_config(&mut self, cfg: tetra_config::bluestation::SharedConfig) {
+        self.shared_config = Some(cfg);
+    }
+
+    /// Configure an explicit source directory for OTA updates.
+    pub fn set_source_dir(&mut self, source_dir: Option<String>) {
+        self.source_dir_override = source_dir;
+    }
+
+    /// Configure HTTP Basic Auth credentials.
+    pub fn set_auth(&mut self, auth: Option<(String, String)>) {
+        self.auth = auth;
+    }
+
+    /// Mark that the stack started on the fallback config, with the reason why.
+    /// The dashboard will display a persistent warning banner.
+    pub fn set_fallback_config(&self, reason: String) {
+        let mut s = self.state.write().unwrap();
+        s.fallback_config_active = true;
+        s.fallback_config_reason = reason;
     }
 
     pub fn start(&mut self, bind: &str, port: u16) {
@@ -200,6 +328,9 @@ impl DashboardServer {
         let cmd_tx: Arc<Mutex<Option<CmdSender>>> =
             Arc::new(Mutex::new(self.cmd_tx.take()));
         let update_state = Arc::clone(&self.update_state);
+        let source_dir_override = self.source_dir_override.clone();
+        let auth = self.auth.clone();
+        let shared_config = self.shared_config.clone();
 
         std::thread::Builder::new()
             .name("dashboard-server".into())
@@ -215,9 +346,12 @@ impl DashboardServer {
                     let config_path = config_path.clone();
                     let cmd_tx = Arc::clone(&cmd_tx);
                     let update_state = Arc::clone(&update_state);
+                    let source_dir_override = source_dir_override.clone();
+                    let auth = auth.clone();
+                    let shared_config = shared_config.clone();
                     std::thread::Builder::new()
                         .name("dashboard-conn".into())
-                        .spawn(move || handle_connection(stream, state, clients, config_path, cmd_tx, update_state))
+                        .spawn(move || handle_connection(stream, state, clients, config_path, cmd_tx, update_state, source_dir_override, auth, shared_config))
                         .ok();
                 }
             })
@@ -385,6 +519,92 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
     serde_json::to_string(&v).ok()
 }
 
+// ---------------------------------------------------------------------------
+// HTTP Basic Auth helpers
+// ---------------------------------------------------------------------------
+
+/// Parse the `Authorization: Basic <base64>` header from raw HTTP headers string.
+/// Returns `Some((username, password))` on success, `None` if absent or malformed.
+fn parse_basic_auth(headers: &str) -> Option<(String, String)> {
+    for line in headers.lines() {
+        let lower = line.to_lowercase();
+        if lower.starts_with("authorization:") {
+            let value = line[14..].trim();
+            if let Some(encoded) = value.strip_prefix("Basic ").or_else(|| value.strip_prefix("basic ")) {
+                use base64::Engine;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(encoded.trim())
+                    .ok()?;
+                let s = String::from_utf8(decoded).ok()?;
+                let mut parts = s.splitn(2, ':');
+                let user = parts.next()?.to_string();
+                let pass = parts.next().unwrap_or("").to_string();
+                return Some((user, pass));
+            }
+        }
+    }
+    None
+}
+
+/// Constant-time byte slice comparison to mitigate timing attacks.
+/// Returns true iff a == b in length and content.
+fn timing_safe_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Send an HTTP 401 Unauthorized response that triggers the browser's native
+/// Basic Auth dialog.
+fn http_response_401(mut stream: TcpStream) {
+    let body = "Unauthorized";
+    let resp = format!(
+        "HTTP/1.1 401 Unauthorized\r\n\
+         WWW-Authenticate: Basic realm=\"FlowStation Dashboard\", charset=\"UTF-8\"\r\n\
+         Content-Type: text/plain\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        body.len(), body
+    );
+    let _ = stream.write_all(resp.as_bytes());
+}
+
+/// Send a ControlCommand through the dashboard → CMCE channel, best-effort.
+fn send_control_cmd(cmd_tx: &Arc<Mutex<Option<CmdSender>>>, cmd: ControlCommand) {
+    if let Ok(guard) = cmd_tx.lock() {
+        if let Some(ref tx) = *guard {
+            let _ = tx.send(cmd);
+        }
+    }
+}
+
+/// Serialize the current live SDS queue to JSON and serve it.
+fn serve_live_sds_list(mut stream: TcpStream, cfg: &Option<tetra_config::bluestation::SharedConfig>) {
+    let items: Vec<serde_json::Value> = cfg.as_ref().map(|c| {
+        let state = c.state_read();
+        state.live_sds_queue.iter().map(|m| serde_json::json!({
+            "id": m.id,
+            "text": m.text,
+            "protocol_id": m.protocol_id,
+            "source_issi": m.source_issi,
+            "repeat_count": m.repeat_count,
+            "sent_count": m.sent_count,
+        })).collect()
+    }).unwrap_or_default();
+    let body = serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string());
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(body.as_bytes());
+}
+
 fn handle_connection(
     stream: TcpStream,
     state: DashboardState,
@@ -392,16 +612,49 @@ fn handle_connection(
     config_path: String,
     cmd_tx: Arc<Mutex<Option<CmdSender>>>,
     update_state: SharedUpdateState,
+    source_dir_override: Option<String>,
+    auth: Option<(String, String)>,
+    shared_config: Option<tetra_config::bluestation::SharedConfig>,
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
 
-    let mut peek_buf = [0u8; 256];
-    let n = match stream.peek(&mut peek_buf) { Ok(n) => n, Err(_) => return };
-    let peek_str = String::from_utf8_lossy(&peek_buf[..n]);
-    let req_line = peek_str.lines().next().unwrap_or("").to_string();
+    // ── Read the first 4KB of headers into a buffer, peek first for routing ──
+    // We need to both route on the request line AND read the Authorization header,
+    // so we collect all headers before dispatching.
+    let mut header_buf = Vec::with_capacity(2048);
+    {
+        // peek for the request line (already works for routing)
+        let mut peek_buf = [0u8; 4096];
+        let n = match stream.peek(&mut peek_buf) { Ok(n) => n, Err(_) => return };
+        header_buf.extend_from_slice(&peek_buf[..n]);
+    }
+    let header_str = String::from_utf8_lossy(&header_buf);
+    let req_line = header_str.lines().next().unwrap_or("").to_string();
+
+    // ── HTTP Basic Auth check ────────────────────────────────────────────────
+    // Runs on every request when auth is configured. The check is done before
+    // any routing so that no endpoint is ever reachable without credentials.
+    if let Some((ref expected_user, ref expected_pass)) = auth {
+        let authorized = parse_basic_auth(&header_str)
+            .map(|(u, p)| timing_safe_eq(u.as_bytes(), expected_user.as_bytes())
+                       && timing_safe_eq(p.as_bytes(), expected_pass.as_bytes()))
+            .unwrap_or(false);
+
+        if !authorized {
+            // Consume the stream into a BufReader just to drain headers, then send 401.
+            let mut buf = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                let _ = buf.read_line(&mut line);
+                if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            }
+            http_response_401(buf.into_inner());
+            return;
+        }
+    }
 
     if req_line.contains("/ws") {
-        handle_ws(stream, state, clients, cmd_tx, update_state);
+        handle_ws(stream, state, clients, cmd_tx, update_state, auth);
     } else if req_line.contains("GET /api/system") {
         let mut buf = BufReader::new(stream);
         loop {
@@ -440,7 +693,47 @@ fn handle_connection(
             let _ = buf.read_line(&mut line);
             if line == "\r\n" || line.is_empty() || line == "\n" { break; }
         }
-        serve_config_list(buf.into_inner(), &config_path);
+        // GET /api/configs/<name> — read a specific profile's content
+        // GET /api/configs       — list all profiles
+        let profile_name: Option<String> = req_line.split_whitespace().nth(1)
+            .and_then(|path| path.strip_prefix("/api/configs/"))
+            .map(|n| n.to_string());
+        if let Some(name) = profile_name {
+            serve_config_profile_get(buf.into_inner(), &config_path, &name);
+        } else {
+            serve_config_list(buf.into_inner(), &config_path);
+        }
+    } else if req_line.contains("POST /api/configs/") {
+        // POST /api/configs/<name> — save content to a specific profile (not activate)
+        let profile_name: Option<String> = req_line.split_whitespace().nth(1)
+            .and_then(|path| path.strip_prefix("/api/configs/"))
+            .map(|n| n.to_string());
+        let mut buf = BufReader::new(stream);
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            let lower = line.to_lowercase();
+            if lower.starts_with("content-length:") {
+                content_length = lower.trim_start_matches("content-length:").trim()
+                    .trim_end_matches("\r\n").trim_end_matches('\n').parse().unwrap_or(0);
+            }
+        }
+        let mut body = vec![0u8; content_length.min(512 * 1024)];
+        let _ = buf.read_exact(&mut body);
+        match profile_name {
+            None => http_response(buf.into_inner(), 400, "missing profile name"),
+            Some(name) => {
+                match save_config_profile(&config_path, &name, &String::from_utf8_lossy(&body)) {
+                    Ok(_) => {
+                        tracing::info!("Dashboard: saved profile '{}'", name);
+                        http_response(buf.into_inner(), 200, "OK")
+                    }
+                    Err(e) => http_response(buf.into_inner(), 500, &e),
+                }
+            }
+        }
     } else if req_line.contains("GET /api/update/status") {
         let mut buf = BufReader::new(stream);
         loop {
@@ -467,9 +760,10 @@ fn handle_connection(
         tracing::info!("Dashboard: OTA update triggered");
         let update_clone = Arc::clone(&update_state);
         let cfg_clone = config_path.clone();
+        let src_override = source_dir_override.clone();
         std::thread::Builder::new()
             .name("ota-update".into())
-            .spawn(move || run_update(update_clone, cfg_clone))
+            .spawn(move || run_update(update_clone, cfg_clone, src_override))
             .ok();
         http_response(buf.into_inner(), 200, "OK");
     } else if req_line.contains("GET /api/config/backup") {
@@ -530,6 +824,77 @@ fn handle_connection(
             if line == "\r\n" || line.is_empty() || line == "\n" { break; }
         }
         serve_config_get(buf.into_inner(), &config_path);
+    } else if req_line.contains("GET /api/live-sds") {
+        // Return current live SDS queue as JSON.
+        let mut buf = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+        }
+        serve_live_sds_list(buf.into_inner(), &shared_config);
+    } else if req_line.contains("DELETE /api/live-sds/") {
+        // DELETE /api/live-sds/<id>
+        let id: u32 = req_line.split('/').nth(3)
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let mut buf = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+        }
+        if id == 0 {
+            http_response(buf.into_inner(), 400, "invalid id");
+        } else {
+            send_control_cmd(&cmd_tx, ControlCommand::DeleteLiveSds { id });
+            http_response(buf.into_inner(), 200, "OK");
+        }
+    } else if req_line.contains("DELETE /api/live-sds") {
+        // DELETE /api/live-sds  — clear all
+        let mut buf = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+        }
+        send_control_cmd(&cmd_tx, ControlCommand::ClearLiveSds);
+        http_response(buf.into_inner(), 200, "OK");
+    } else if req_line.contains("POST /api/live-sds") {
+        // POST /api/live-sds  body: JSON { "text": "...", "protocol_id": 220, "source_issi": 16777215, "repeat_count": 0 }
+        let mut buf = BufReader::new(stream);
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+            let lower = line.to_lowercase();
+            if lower.starts_with("content-length:") {
+                content_length = lower.trim_start_matches("content-length:").trim()
+                    .trim_end_matches("\r\n").trim_end_matches('\n').parse().unwrap_or(0);
+            }
+        }
+        let mut body = vec![0u8; content_length.min(4096)];
+        let _ = buf.read_exact(&mut body);
+        match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(v) => {
+                let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+                if text.is_empty() || text.len() > 251 {
+                    http_response(buf.into_inner(), 400, "text required, max 251 chars");
+                } else {
+                    let protocol_id = v.get("protocol_id").and_then(|p| p.as_u64()).unwrap_or(220) as u8;
+                    let source_issi = v.get("source_issi").and_then(|s| s.as_u64()).unwrap_or(16777215) as u32;
+                    let repeat_count = v.get("repeat_count").and_then(|r| r.as_u64()).unwrap_or(0) as u32;
+                    tracing::info!("Dashboard: AddLiveSds text={:?} repeat={}", text, repeat_count);
+                    send_control_cmd(&cmd_tx, ControlCommand::AddLiveSds {
+                        text, protocol_id, source_issi, repeat_count,
+                    });
+                    http_response(buf.into_inner(), 200, "OK");
+                }
+            }
+            Err(e) => http_response(buf.into_inner(), 400, &format!("invalid JSON: {}", e)),
+        }
     } else {
         let mut buf = BufReader::new(stream);
         loop {
@@ -542,10 +907,60 @@ fn handle_connection(
 }
 
 fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
-             cmd_tx: Arc<Mutex<Option<CmdSender>>>, update_state: SharedUpdateState) {
+             cmd_tx: Arc<Mutex<Option<CmdSender>>>, update_state: SharedUpdateState,
+             auth: Option<(String, String)>) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(50)));
 
-    let callback = |_req: &Request, res: Response| Ok(res);
+    // When auth is enabled, verify credentials during the WS upgrade handshake.
+    // tungstenite's accept_hdr callback lets us inspect HTTP headers before upgrading;
+    // returning an error aborts the upgrade and we can send a 401 instead.
+    let auth_clone = auth.clone();
+    let callback = move |req: &Request, res: Response| {
+        if let Some((ref expected_user, ref expected_pass)) = auth_clone {
+            // Extract Authorization header from the WS upgrade request.
+            let auth_header = req.headers()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            // Parse "Basic <base64>"
+            let authorized = if let Some(encoded) = auth_header.strip_prefix("Basic ").or_else(|| auth_header.strip_prefix("basic ")) {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded.trim())
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .map(|s| {
+                        let mut parts = s.splitn(2, ':');
+                        let u = parts.next().unwrap_or("").as_bytes().to_vec();
+                        let p = parts.next().unwrap_or("").as_bytes().to_vec();
+                        timing_safe_eq(&u, expected_user.as_bytes())
+                            && timing_safe_eq(&p, expected_pass.as_bytes())
+                    })
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            if !authorized {
+                // Reject the WS upgrade with 401. The browser will show the auth dialog
+                // and retry; subsequent HTTP requests will be caught by handle_connection.
+                let reject = tungstenite::http::Response::builder()
+                    .status(401)
+                    .header("WWW-Authenticate", "Basic realm=\"FlowStation Dashboard\"")
+                    .body(Some("Unauthorized".into()))
+                    .unwrap_or_else(|_| {
+                        // Fallback: plain 401 with no extra headers
+                        let mut r = tungstenite::http::Response::new(Some("Unauthorized".into()));
+                        *r.status_mut() = tungstenite::http::StatusCode::UNAUTHORIZED;
+                        r
+                    });
+                return Err(reject);
+            }
+        }
+        Ok(res)
+    };
+
     let mut ws = match accept_hdr(stream, callback) {
         Ok(w) => w,
         Err(e) => { tracing::debug!("WS handshake failed: {}", e); return; }
@@ -565,12 +980,15 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
         let calls = s.snapshot_calls();
         let logs: Vec<_> = s.log_ring.iter().cloned().collect();
         let last_heard: Vec<_> = s.last_heard.iter().cloned().collect();
+        let brew_online = s.brew_online;
+        let brew_version = s.brew_version;
+        let fallback_active = s.fallback_config_active;
+        let fallback_reason = s.fallback_config_reason.clone();
         drop(s);
-        let brew_online = state.read().unwrap().brew_online;
-        let brew_version = state.read().unwrap().brew_version;
         if let Ok(json) = serde_json::to_string(&serde_json::json!({
             "type": "snapshot", "ms": ms, "calls": calls, "log": logs,
-            "brew_online": brew_online, "brew_version": brew_version, "last_heard": last_heard
+            "brew_online": brew_online, "brew_version": brew_version, "last_heard": last_heard,
+            "fallback_config_active": fallback_active, "fallback_config_reason": fallback_reason
         })) {
             let _ = ws.send(Message::Text(json));
         }
@@ -715,15 +1133,107 @@ fn serve_system_info(mut stream: TcpStream, config_path: &str) {
         .parent().map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| ".".to_string());
 
-    let body = format!(
-        "{{\"hostname\":{},\"uptime_secs\":{},\"os\":{},\"config_path\":{},\"config_dir\":{},\"stack_version\":{}}}",
-        serde_json::to_string(&hostname).unwrap_or_default(),
-        uptime_secs,
-        serde_json::to_string(&os_info).unwrap_or_default(),
-        serde_json::to_string(config_path).unwrap_or_default(),
-        serde_json::to_string(&config_dir).unwrap_or_default(),
-        serde_json::to_string(tetra_core::STACK_VERSION).unwrap_or_default(),
-    );
+    // CPU model — /proc/cpuinfo "model name" (x86) or "Model" (ARM/Pi)
+    let cpu_model = std::fs::read_to_string("/proc/cpuinfo").ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.to_lowercase().starts_with("model name") || l.to_lowercase().starts_with("hardware"))
+                .and_then(|l| l.splitn(2, ':').nth(1).map(|v| v.trim().to_string()))
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // CPU core count
+    let cpu_cores = std::fs::read_to_string("/proc/cpuinfo").ok()
+        .map(|s| s.lines().filter(|l| l.starts_with("processor")).count())
+        .unwrap_or(0);
+
+    // CPU load — /proc/stat first line: user nice system idle iowait irq softirq
+    // Take a 100ms sample for a meaningful reading
+    fn read_cpu_stat() -> Option<(u64, u64)> {
+        let s = std::fs::read_to_string("/proc/stat").ok()?;
+        let line = s.lines().next()?;
+        let nums: Vec<u64> = line.split_whitespace().skip(1)
+            .filter_map(|n| n.parse().ok()).collect();
+        if nums.len() < 4 { return None; }
+        let idle = nums[3] + nums.get(4).copied().unwrap_or(0); // idle + iowait
+        let total: u64 = nums.iter().sum();
+        Some((total, idle))
+    }
+    let cpu_pct = if let (Some((t1, i1)), Some((t2, i2))) = (
+        read_cpu_stat(),
+        { std::thread::sleep(std::time::Duration::from_millis(100)); read_cpu_stat() }
+    ) {
+        let dt = t2.saturating_sub(t1);
+        let di = i2.saturating_sub(i1);
+        if dt > 0 { ((dt - di) * 100 / dt) as u8 } else { 0 }
+    } else { 0 };
+
+    // RAM — /proc/meminfo MemTotal and MemAvailable
+    let (ram_total_mb, ram_used_mb) = std::fs::read_to_string("/proc/meminfo").ok()
+        .map(|s| {
+            let mut total = 0u64;
+            let mut available = 0u64;
+            for line in s.lines() {
+                if line.starts_with("MemTotal:") {
+                    total = line.split_whitespace().nth(1).and_then(|n| n.parse().ok()).unwrap_or(0);
+                } else if line.starts_with("MemAvailable:") {
+                    available = line.split_whitespace().nth(1).and_then(|n| n.parse().ok()).unwrap_or(0);
+                }
+            }
+            (total / 1024, (total.saturating_sub(available)) / 1024)
+        })
+        .unwrap_or((0, 0));
+
+    // CPU temperature — try common Linux thermal zone paths
+    let cpu_temp_c: Option<f32> = [
+        "/sys/class/thermal/thermal_zone0/temp",
+        "/sys/class/thermal/thermal_zone1/temp",
+        "/sys/devices/virtual/thermal/thermal_zone0/temp",
+    ].iter().find_map(|path| {
+        std::fs::read_to_string(path).ok()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .map(|t| t as f32 / 1000.0)
+            .filter(|&t| t > 0.0 && t < 150.0) // sanity check
+    });
+
+    // RF / SoapySDR info — read from startup log or use SoapySDRUtil --probe (non-blocking, timeout)
+    let soapy_info = std::process::Command::new("SoapySDRUtil")
+        .args(["--probe"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let out = String::from_utf8_lossy(&o.stdout).to_string();
+            // Extract just the driver/hardware lines — full probe is very verbose
+            let lines: Vec<&str> = out.lines()
+                .filter(|l| {
+                    let ll = l.to_lowercase();
+                    ll.contains("driver") || ll.contains("hardware") || ll.contains("serial")
+                    || ll.contains("fpga") || ll.contains("firmware") || ll.contains("manufacturer")
+                    || ll.contains("product") || ll.contains("name")
+                })
+                .take(12)
+                .collect();
+            if lines.is_empty() { "No device found".to_string() } else { lines.join("\n") }
+        })
+        .unwrap_or_else(|| "SoapySDRUtil not available".to_string());
+
+    let body = serde_json::to_string(&serde_json::json!({
+        "hostname": hostname,
+        "uptime_secs": uptime_secs,
+        "os": os_info,
+        "config_path": config_path,
+        "config_dir": config_dir,
+        "stack_version": tetra_core::STACK_VERSION,
+        "cpu_model": cpu_model,
+        "cpu_cores": cpu_cores,
+        "cpu_pct": cpu_pct,
+        "ram_total_mb": ram_total_mb,
+        "ram_used_mb": ram_used_mb,
+        "cpu_temp_c": cpu_temp_c,
+        "soapy_info": soapy_info,
+    })).unwrap_or_else(|_| "{}".to_string());
+
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
@@ -765,6 +1275,46 @@ fn serve_config_list(mut stream: TcpStream, config_path: &str) {
     );
     let _ = stream.write_all(header.as_bytes());
     let _ = stream.write_all(body.as_bytes());
+}
+
+/// Read a specific config profile and serve its content as plain text.
+fn serve_config_profile_get(stream: TcpStream, config_path: &str, profile_name: &str) {
+    if profile_name.contains('/') || profile_name.contains('\\') || profile_name.contains("..") {
+        return http_response(stream, 400, "invalid profile name");
+    }
+    if !profile_name.ends_with(".toml") {
+        return http_response(stream, 400, "profile must be a .toml file");
+    }
+    let config_dir = std::path::Path::new(config_path)
+        .parent().unwrap_or(std::path::Path::new("."));
+    let profile_path = config_dir.join(profile_name);
+    serve_config_get(stream, &profile_path.to_string_lossy());
+}
+
+/// Save content to a specific config profile (not the active config).
+/// The active config is identified by config_path; writing to it is rejected
+/// (use POST /api/config for that).
+fn save_config_profile(config_path: &str, profile_name: &str, content: &str) -> Result<(), String> {
+    if profile_name.contains('/') || profile_name.contains('\\') || profile_name.contains("..") {
+        return Err("invalid profile name".to_string());
+    }
+    if !profile_name.ends_with(".toml") {
+        return Err("profile must be a .toml file".to_string());
+    }
+    let config_dir = std::path::Path::new(config_path)
+        .parent().unwrap_or(std::path::Path::new("."));
+    let profile_path = config_dir.join(profile_name);
+
+    // Refuse to overwrite the active config through this endpoint
+    let active_name = std::path::Path::new(config_path)
+        .file_name().map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if profile_name == active_name {
+        return Err("cannot overwrite active config via profile editor — use the Config editor tab".to_string());
+    }
+
+    std::fs::write(&profile_path, content.as_bytes())
+        .map_err(|e| format!("failed to write profile: {}", e))
 }
 
 /// Copy selected profile over the active config_path, preserving a backup.
