@@ -687,7 +687,7 @@ td code{
         <button class="lang-btn" onclick="setLang('de',this)">DE</button>
         <button class="lang-btn" onclick="setLang('es',this)">ES</button>
         <button class="lang-btn" onclick="setLang('hu',this)">HU</button>
-        <button class="lang-btn" onclick="setLang('hu',this)">CN</button>
+        <button class="lang-btn" onclick="setLang('zh',this)">CN</button>
       </div>
     </div>
   </div>
