@@ -29,7 +29,7 @@ html,body{height:100%;overflow:hidden;}
   --card-shadow: 0 1px 3px rgba(0,0,0,0.4);
   --r: 8px;
   --mono: 'ui-monospace','Cascadia Code','Consolas','Liberation Mono','Menlo',monospace;
-  --sans: 'ui-sans-serif','system-ui',-apple-system,'Segoe UI',sans-serif;
+  --sans: 'ui-sans-serif', system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'WenQuanYi Micro Hei', sans-serif;
 }
 [data-theme="light"]{
   --bg:#f0f4f9;--bg2:#ffffff;--bg3:#e8eef6;--bg4:#dce4ef;
@@ -687,6 +687,7 @@ td code{
         <button class="lang-btn" onclick="setLang('de',this)">DE</button>
         <button class="lang-btn" onclick="setLang('es',this)">ES</button>
         <button class="lang-btn" onclick="setLang('hu',this)">HU</button>
+        <button class="lang-btn" onclick="setLang('hu',this)">CN</button>
       </div>
     </div>
   </div>
@@ -1322,6 +1323,53 @@ const LANGS={
     sys_active_badge:'AKTÍV',sys_no_profiles:'Nem található .toml profil a könyvtárban.',
     sys_activate_confirm:'Váltás a(z) "{name}" profilra és újraindítás?\nAz aktuális konfig mentésre kerül.',
     sys_bts:'BTS kapcsolat',
+  },
+  zh:{
+    bts_ip:'BTS IP',offline:'离线',online:'在线',
+    brew_online:'在线',brew_offline:'离线',
+    stations:'终端',calls:'通话',lastheard:'最近通话',log:'日志',config:'配置',
+    terminals:'终端',registered:'已注册',
+    active_calls:'活跃通话',circuits:'占用信道',
+    registered_terminals:'已注册终端',
+    no_terminals:'暂无终端注册',no_calls:'无活跃通话',
+    live_log:'实时日志',autoscroll:'自动滚动',filter_all:'全部',
+    clear:'清除',restart:'⟳ 重启',shutdown:'⏻ 关机',save:'保存',
+    sds_title:'⬡ 发送 SDS 短消息',sds_dest:'目标 ISSI',
+    live_sds_desc:'向本小区所有终端广播文本消息，按 Home Mode Display 间隔重复发送。直到删除或达到重复次数为止。',
+    live_sds_text:'消息内容（最多 251 字符）',live_sds_repeat:'重复次数 (0=无限)',live_sds_send:'📢 广播',
+    live_sds_clear_all:'清除全部',live_sds_empty:'暂无广播任务。',
+    live_sds_sent:'已发送',live_sds_times:'次',live_sds_forever:'∞',live_sds_delete:'删除',
+    fallback_title:'⚠ 正在使用后备配置 — 主配置加载失败',
+    sds_msg_label:'消息内容',cancel:'取消',send:'发送',
+    th_issi:'ISSI',th_groups:'群组',th_ee:'EE',th_signal:'信号',
+    th_status:'状态',th_last_seen:'最后在线',th_actions:'操作',
+    th_id:'ID',th_type:'类型',th_caller:'主叫',
+    th_dest:'被叫',th_speaker:'讲话者',th_duration:'时长',
+    th_time:'时间',th_activity:'活动',
+    last_heard_title:'最近通话记录',no_activity:'暂无活动记录',
+    act_call_group:'组呼',act_call_individual:'点对点',act_sds:'SDS',
+    online_badge:'在线',kick:'踢下线',sds:'SDS',
+    call_group:'组呼',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
+    confirm_kick:'确定踢下 ISSI {issi}？\n终端将被注销并强制重新注册。',
+    confirm_restart:'确定重启 FlowStation？\n所有正在进行的通话将被中断。',
+    confirm_shutdown:'确定关闭 FlowStation？\n服务将停止，需要手动重启。',
+    saved:'✓ 已保存 — 重启后生效',save_fail:'✗ 保存失败',conn_error:'连接错误',
+    update:'⬆ 更新',update_title:'OTA 在线更新 — github.com/razvanzeces/flowstation',
+    update_confirm:'是否从 main 分支拉取最新代码并重新构建？\n服务将自动重启。',
+    update_running:'正在更新… 请不要关闭此窗口',
+    update_done_ok:'✓ 更新完成，正在重启…',
+    update_done_err:'✗ 更新失败，请查看上方日志',
+    update_close:'关闭',
+    system:'系统',sys_info:'系统信息',sys_hostname:'主机名',sys_uptime:'运行时间',
+    sys_version:'FS 版本',sys_os:'操作系统',sys_config:'当前配置',
+    sys_cpu:'CPU',sys_cpu_load:'CPU 负载',sys_ram:'内存',sys_temp:'CPU 温度',
+    sys_rf:'RF 硬件 (SoapySDR)',sys_autorefresh:'自动刷新 5秒',
+    profile_edit_title:'编辑配置文件',profile_edit_btn:'编辑',
+    profile_edit_save_ok:'✓ 已保存',profile_edit_save_fail:'✗ 保存失败',
+    sys_profiles:'配置文件',sys_activate:'激活并重启',
+    sys_active_badge:'当前使用',sys_no_profiles:'配置目录中未找到 .toml 配置文件。',
+    sys_activate_confirm:'切换到配置文件 "{name}" 并重启？\n当前配置将被备份。',
+    sys_bts:'BTS 连接',
   },
 };
 
