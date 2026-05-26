@@ -849,7 +849,7 @@ fn serve_live_sds_list(mut stream: TcpStream, cfg: &Option<tetra_config::bluesta
 }
 
 fn handle_connection(
-    stream: TcpStream,
+    mut stream: TcpStream,
     state: DashboardState,
     clients: WsClients,
     config_path: String,
@@ -1227,6 +1227,114 @@ fn handle_connection(
             }
             Err(e) => http_response(buf.into_inner(), 400, &format!("invalid JSON: {}", e)),
         }
+    // ── WiFi management endpoints ──────────────────────────────────────
+    // All paths under /api/wifi/* are GET (read) or POST (mutate). We keep
+    // the handlers small and delegate to the `wifi` module — see that for
+    // docs on what each operation does. Responses are JSON.
+    } else if req_line.contains("GET /api/wifi/status") {
+        drain_http_headers(&mut stream);
+        let body = match crate::wifi::status() {
+            Ok(s) => serde_json::to_string(&serde_json::json!({"ok": true, "status": s})).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&serde_json::json!({"ok": false, "error": e})).unwrap_or_default(),
+        };
+        http_json_response(stream, 200, &body);
+    } else if req_line.contains("GET /api/wifi/scan") {
+        drain_http_headers(&mut stream);
+        let body = match crate::wifi::scan() {
+            Ok(networks) => serde_json::to_string(&serde_json::json!({"ok": true, "networks": networks})).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&serde_json::json!({"ok": false, "error": e})).unwrap_or_default(),
+        };
+        http_json_response(stream, 200, &body);
+    } else if req_line.contains("GET /api/wifi/saved") {
+        drain_http_headers(&mut stream);
+        let body = match crate::wifi::list_saved() {
+            Ok(profiles) => serde_json::to_string(&serde_json::json!({"ok": true, "profiles": profiles})).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&serde_json::json!({"ok": false, "error": e})).unwrap_or_default(),
+        };
+        http_json_response(stream, 200, &body);
+    } else if req_line.contains("POST /api/wifi/connect") {
+        // Body shape: {"ssid": "...", "psk": "...", "hidden": false} for a new
+        // network, or {"uuid": "..."} to bring up a saved profile.
+        let body = read_http_body(&mut stream);
+        let req: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                http_response(stream, 400, &format!("invalid JSON: {}", e));
+                return;
+            }
+        };
+        let result = if let Some(uuid) = req.get("uuid").and_then(|v| v.as_str()) {
+            tracing::info!("Dashboard: connecting saved WiFi profile uuid={}", uuid);
+            crate::wifi::connect_saved(uuid)
+        } else if let Some(ssid) = req.get("ssid").and_then(|v| v.as_str()) {
+            let psk = req.get("psk").and_then(|v| v.as_str()).unwrap_or("");
+            let hidden = req.get("hidden").and_then(|v| v.as_bool()).unwrap_or(false);
+            tracing::info!("Dashboard: connecting new WiFi ssid={} hidden={}", ssid, hidden);
+            crate::wifi::connect_new(ssid, psk, hidden)
+        } else {
+            http_response(stream, 400, "missing uuid or ssid");
+            return;
+        };
+        let body = match result {
+            Ok(_) => serde_json::to_string(&serde_json::json!({"ok": true})).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&serde_json::json!({"ok": false, "error": e})).unwrap_or_default(),
+        };
+        http_json_response(stream, 200, &body);
+    } else if req_line.contains("POST /api/wifi/disconnect") {
+        drain_http_headers(&mut stream);
+        // Find the wireless device name and disconnect it. The body is empty.
+        let iface = match crate::wifi::status() {
+            Ok(s) if s.device_present => "wlan0".to_string(), // nmcli accepts any wifi dev name; wlan0 covers RPi
+            _ => {
+                http_response(stream, 400, "no wifi device");
+                return;
+            }
+        };
+        tracing::info!("Dashboard: disconnecting WiFi iface={}", iface);
+        let body = match crate::wifi::disconnect(&iface) {
+            Ok(_) => serde_json::to_string(&serde_json::json!({"ok": true})).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&serde_json::json!({"ok": false, "error": e})).unwrap_or_default(),
+        };
+        http_json_response(stream, 200, &body);
+    } else if req_line.contains("POST /api/wifi/forget") {
+        // Body: {"uuid": "..."}
+        let body = read_http_body(&mut stream);
+        let req: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => { http_response(stream, 400, &format!("invalid JSON: {}", e)); return; }
+        };
+        let uuid = match req.get("uuid").and_then(|v| v.as_str()) {
+            Some(u) => u,
+            None => { http_response(stream, 400, "missing uuid"); return; }
+        };
+        tracing::info!("Dashboard: forgetting WiFi profile uuid={}", uuid);
+        let body = match crate::wifi::forget(uuid) {
+            Ok(_) => serde_json::to_string(&serde_json::json!({"ok": true})).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&serde_json::json!({"ok": false, "error": e})).unwrap_or_default(),
+        };
+        http_json_response(stream, 200, &body);
+    } else if req_line.contains("POST /api/wifi/radio") {
+        // Body: {"enabled": true|false}
+        let body = read_http_body(&mut stream);
+        let req: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => { http_response(stream, 400, &format!("invalid JSON: {}", e)); return; }
+        };
+        let enabled = req.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+        tracing::info!("Dashboard: setting WiFi radio enabled={}", enabled);
+        let body = match crate::wifi::set_radio(enabled) {
+            Ok(_) => serde_json::to_string(&serde_json::json!({"ok": true})).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&serde_json::json!({"ok": false, "error": e})).unwrap_or_default(),
+        };
+        http_json_response(stream, 200, &body);
+    } else if req_line.contains("GET /api/wifi/available") {
+        // Cheap probe used by the dashboard to decide whether to even show
+        // the WiFi tab. Returns {"available": true|false}.
+        drain_http_headers(&mut stream);
+        let body = serde_json::to_string(&serde_json::json!({
+            "available": crate::wifi::available()
+        })).unwrap_or_default();
+        http_json_response(stream, 200, &body);
     } else {
         let mut buf = BufReader::new(stream);
         loop {
@@ -1523,10 +1631,17 @@ fn serve_system_info(mut stream: TcpStream, config_path: &str) {
     let soapy_info = (|| -> String {
         let candidates = ["SoapySDRUtil", "/usr/bin/SoapySDRUtil", "/usr/local/bin/SoapySDRUtil"];
         for bin in &candidates {
-            // First: does the binary respond to --version at all? That's the
-            // canonical "is it installed?" check and doesn't depend on hardware.
+            // First: does the binary respond to --info at all? That's the canonical
+            // "is it installed?" check (`--info` is in every SoapySDR release and
+            // returns the module summary regardless of attached hardware). We used
+            // `--version` previously but on some SoapySDR builds it isn't a
+            // recognised option, so the binary printed its help text with exit 0
+            // and we misread that as "installed" → subsequently `--find` failed
+            // and the user saw a confusing "SoapySDRUtil --find failed" with the
+            // full help dump pasted in front of it. Thanks @shawnchain for the
+            // PR comment.
             let probe = std::process::Command::new(bin)
-                .arg("--version")
+                .arg("--info")
                 .output();
             if let Ok(out) = probe {
                 if out.status.success() {
@@ -1538,7 +1653,19 @@ fn serve_system_info(mut stream: TcpStream, config_path: &str) {
                         .ok()
                         .filter(|o| o.status.success())
                         .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
-                    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    // Keep only the first few lines of --info (banner + API/ABI
+                    // version + module path). Beyond that it dumps a long module
+                    // listing that isn't useful in the dashboard card.
+                    let info = String::from_utf8_lossy(&out.stdout);
+                    let info_summary: String = info.lines()
+                        .filter(|l| {
+                            let ll = l.to_lowercase();
+                            ll.contains("lib version") || ll.contains("api version")
+                            || ll.contains("abi version") || ll.contains("install root")
+                        })
+                        .take(4)
+                        .collect::<Vec<&str>>()
+                        .join("\n");
                     return match find {
                         Some(text) if text.lines().any(|l| l.to_lowercase().contains("found device")) => {
                             // Keep only the useful per-device lines (driver/serial/label) to
@@ -1552,16 +1679,16 @@ fn serve_system_info(mut stream: TcpStream, config_path: &str) {
                                 })
                                 .take(20)
                                 .collect();
-                            format!("{}\n{}", version, lines.join("\n"))
+                            format!("{}\n{}", info_summary, lines.join("\n"))
                         }
-                        Some(_) => format!("{}\nNo SDR device detected.", version),
-                        None    => format!("{}\nSoapySDRUtil --find failed.", version),
+                        Some(_) => format!("{}\nNo SDR device detected.", info_summary),
+                        None    => format!("{}\nSoapySDRUtil --find failed.", info_summary),
                     };
                 }
             }
         }
         // Falling through the loop without returning means no candidate path
-        // successfully ran `--version` — the binary is genuinely missing.
+        // successfully ran `--info` — the binary is genuinely missing.
         "SoapySDRUtil not installed (apt install soapysdr-tools).".to_string()
     })();
 
@@ -1732,6 +1859,67 @@ fn http_response(mut stream: TcpStream, code: u16, body: &str) {
         code, status, body.len(), body
     );
     let _ = stream.write_all(resp.as_bytes());
+}
+
+/// Like `http_response` but serves JSON. Used by the WiFi management endpoints
+/// which all return structured `{"ok": ..., ...}` payloads.
+fn http_json_response(mut stream: TcpStream, code: u16, body: &str) {
+    let status = if code == 200 { "OK" } else { "Error" };
+    let resp = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        code, status, body.len(), body
+    );
+    let _ = stream.write_all(resp.as_bytes());
+}
+
+/// Consume and discard HTTP request headers up to the blank line. Use this
+/// for GET-style endpoints that don't read a body — we still need to clear
+/// the headers off the stream before responding, otherwise some clients
+/// reuse the connection and get confused.
+fn drain_http_headers(stream: &mut TcpStream) {
+    // We read byte-by-byte to find the \r\n\r\n delimiter. This is slower
+    // than BufReader-line reads but doesn't consume bytes past the headers,
+    // which matters for POST handlers that need to keep reading the body.
+    let mut prev3 = [0u8; 3];
+    let mut byte = [0u8; 1];
+    loop {
+        if stream.read(&mut byte).unwrap_or(0) == 0 { break; }
+        // Detect "\r\n\r\n" by sliding a 4-byte window.
+        if prev3 == [b'\r', b'\n', b'\r'] && byte[0] == b'\n' { break; }
+        prev3 = [prev3[1], prev3[2], byte[0]];
+    }
+}
+
+/// Read an HTTP request body from the stream. Returns the body bytes.
+/// We read headers first to extract Content-Length, then read exactly that
+/// many bytes. Returns an empty vec if Content-Length is missing or 0.
+fn read_http_body(stream: &mut TcpStream) -> Vec<u8> {
+    // Read headers line-by-line. We can't use BufReader here because we'd
+    // lose buffered bytes when we drop it; instead read one byte at a time
+    // until we hit the header/body separator, accumulating into a String we
+    // can scan for Content-Length.
+    let mut header_buf = Vec::with_capacity(512);
+    let mut byte = [0u8; 1];
+    let mut prev3 = [0u8; 3];
+    loop {
+        if stream.read(&mut byte).unwrap_or(0) == 0 { return Vec::new(); }
+        header_buf.push(byte[0]);
+        if prev3 == [b'\r', b'\n', b'\r'] && byte[0] == b'\n' { break; }
+        prev3 = [prev3[1], prev3[2], byte[0]];
+    }
+    let header_str = String::from_utf8_lossy(&header_buf);
+    let mut content_length = 0usize;
+    for line in header_str.lines() {
+        let lower = line.to_lowercase();
+        if let Some(rest) = lower.strip_prefix("content-length:") {
+            content_length = rest.trim().parse().unwrap_or(0);
+            break;
+        }
+    }
+    if content_length == 0 { return Vec::new(); }
+    let mut body = vec![0u8; content_length];
+    let _ = stream.read_exact(&mut body);
+    body
 }
 
 // ── Login UI / session helpers ──────────────────────────────────────────────

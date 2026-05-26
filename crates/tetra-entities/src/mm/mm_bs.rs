@@ -733,28 +733,36 @@ impl MmBs {
             }
         }
 
-        // Try to attach to requested groups, and retrieve list of accepted GroupIdentityDownlink elements
-        // We can unwrap since we did compat check earlier
-        let mut accepted_gid = self.try_attach_detach_groups(queue, issi, &pdu.group_identity_uplink.unwrap());
-
         // ETSI EN 300 392-2 §16.9.2.2: the ACK PDU travels in a single TM-SDU
         // and there is no MM-level segmentation. Empirically MXP600 and MTP3550
         // start losing the ACK around 12-15 GroupIdentityDownlink entries — the
         // PDU exceeds what fits in a FACCH/SACCH burst, the MS times out, and on
         // subsequent retries it eventually de-registers ("Unit not attached").
         //
-        // Cap the response list at MAX_GROUPS_PER_ACK. The MS keeps requesting
-        // groups it didn't see in the ACK until they are all confirmed (this is
-        // how the MS-initiated attach loop works in clause 16.4.3), so capping
-        // is safe and self-healing — just slightly slower for very large GSSI sets.
-        const MAX_GROUPS_PER_ACK: usize = 12;
-        if accepted_gid.len() > MAX_GROUPS_PER_ACK {
+        // We have to cap the request *before* affiliating on the BS side. A previous
+        // version of this code affiliated everything and then truncated only the ACK
+        // response — that desynced the MS and the BS: the BS thought N groups were
+        // active, but the MS only saw confirmations for the first 12. Inbound calls
+        // on the un-confirmed groups would deliver to the BS but never notify the MS
+        // (FH-BUG-022 reopened, FH-BUG-025). Now the BS only affiliates what it can
+        // confirm; the MS will keep re-requesting the remaining groups in subsequent
+        // attach cycles per ETSI clause 16.4.3.
+        const MAX_GROUPS_PER_ATTACH: usize = 12;
+        let giu = pdu.group_identity_uplink.unwrap();
+        let (giu_clamped, dropped) = if giu.len() > MAX_GROUPS_PER_ATTACH {
             tracing::warn!(
-                "ISSI {} requested attach to {} groups; ACK capped at {} per ETSI PDU size limit. MS will retry remaining.",
-                issi, accepted_gid.len(), MAX_GROUPS_PER_ACK
+                "ISSI {} requested attach/detach for {} groups; capped at {} per ETSI PDU size limit. MS will retry remaining in next cycle.",
+                issi, giu.len(), MAX_GROUPS_PER_ATTACH
             );
-            accepted_gid.truncate(MAX_GROUPS_PER_ACK);
-        }
+            let (head, _tail) = giu.split_at(MAX_GROUPS_PER_ATTACH);
+            (head.to_vec(), giu.len() - MAX_GROUPS_PER_ATTACH)
+        } else {
+            (giu, 0)
+        };
+        let _ = dropped; // silence unused warning if logging is compiled out
+
+        // Try to attach to requested groups, and retrieve list of accepted GroupIdentityDownlink elements
+        let accepted_gid = self.try_attach_detach_groups(queue, issi, &giu_clamped);
 
         // Build reply PDU
         let pdu_response = DAttachDetachGroupIdentityAcknowledgement {

@@ -331,6 +331,10 @@ struct TxDsp {
     initial_time: i64,
     modulators: Vec<ModulatorChannel>,
     monitor: Option<TxSignalMonitor>,
+    /// Scratch buffer reused for cloning the fcfb output when the TX monitor
+    /// wants to inspect it. Kept on the struct so we don't allocate on every
+    /// monitored block; capacity grows once to fcfb output_block_size and stays.
+    tx_signal_scratch: Vec<ComplexSample>,
 }
 
 impl TxDsp {
@@ -360,6 +364,7 @@ impl TxDsp {
             initial_time: 0, // TODO: get it from RX
             modulators,
             monitor,
+            tx_signal_scratch: Vec::new(),
         }
     }
 
@@ -411,29 +416,45 @@ impl TxDsp {
             }
         }
 
-        // tx_signal is borrowed from self.fcfb. We need to also touch self.monitor
-        // (different field), but Rust can't see through methods to split borrows.
-        // We copy into a small local Vec — the buffer is one fcfb output block
-        // (typically a few hundred ComplexSamples = a few KB), so the copy cost
-        // is negligible compared to the FFT we're about to do.
-        let tx_signal_vec: Vec<ComplexSample> = self.fcfb.process().to_vec();
+        // Cheap upfront check: if the TX monitor isn't due to emit yet, skip the
+        // whole observation path including the Vec clone. Without this guard we
+        // were allocating ~5 KB per TX block (≈600 blocks/sec at 600 kHz sample
+        // rate) just to feed an observer that only fires every 200 ms — pure
+        // waste, and on slower hosts (RPi 4) it was the difference between
+        // keeping up with the TX timeline and hitting "Too late to produce TX
+        // block N" warnings every few seconds. See FH-BUG (ES4TIX) for the
+        // v0.2.2 regression report.
+        let want_monitor = self.monitor.as_ref().map(|m| m.should_emit()).unwrap_or(false);
 
-        // Live TX monitor: spectrum + IQ constellation snapshot. Internal-rate-limited
-        // to ~1 snapshot/sec so it doesn't flood the WebSocket.
-        if let Some(monitor) = self.monitor.as_mut() {
-            monitor.observe(&tx_signal_vec, tx_slot, self.block_count);
+        // Compute sample count using the (still-current) block_count before we
+        // bump it, otherwise sdr.transmit gets a count that's one block ahead.
+        let block_count_now = self.block_count;
+
+        // fcfb.process() is NOT idempotent — calling it twice on the same block
+        // yields zeros the second time (it transitions Output → Clear). So we
+        // call it exactly once. When the monitor is active, we copy into the
+        // scratch buffer (reused across blocks, allocates once); otherwise we
+        // hand the &[ComplexSample] straight to sdr.transmit.
+        if want_monitor {
+            self.tx_signal_scratch.clear();
+            self.tx_signal_scratch.extend_from_slice(self.fcfb.process());
+            if let Some(monitor) = self.monitor.as_mut() {
+                monitor.observe(&self.tx_signal_scratch, tx_slot, self.block_count);
+            }
         }
-
-        let tx_signal: &[ComplexSample] = &tx_signal_vec;
-
-        // TODO: compensate for delay of SDR
-        let sdr_sample_count = tx_signal.len() as SampleCount * self.block_count;
 
         // Increment block count before calling sdr.transmit with ?,
         // so we do not end up producing the same block again even if transmit fails.
         self.block_count += 1;
 
-        sdr.transmit(tx_signal, Some(sdr_sample_count))?;
+        if want_monitor {
+            let sdr_sample_count = self.tx_signal_scratch.len() as SampleCount * block_count_now;
+            sdr.transmit(&self.tx_signal_scratch, Some(sdr_sample_count))?;
+        } else {
+            let tx_signal = self.fcfb.process();
+            let sdr_sample_count = tx_signal.len() as SampleCount * block_count_now;
+            sdr.transmit(tx_signal, Some(sdr_sample_count))?;
+        }
 
         // tracing::trace!("Produced transmit block {} ({} samples in future)",
         //     self.block_count - 1,
@@ -610,6 +631,14 @@ impl TxSignalMonitor {
             visual_interval: std::time::Duration::from_millis(200),
             quality_interval: std::time::Duration::from_millis(1000),
         }
+    }
+
+    /// Cheap predicate: would a call to `observe()` actually emit anything
+    /// right now? Used by the hot TX path to skip an expensive Vec clone when
+    /// no telemetry is due.
+    fn should_emit(&self) -> bool {
+        let now = std::time::Instant::now();
+        now >= self.next_visual_emit || now >= self.next_quality_emit
     }
 
     fn observe(&mut self, samples: &[ComplexSample], _tx_slots: &[TxSlotBits], _block_count: fcfb::BlockCount) {
