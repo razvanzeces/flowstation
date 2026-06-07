@@ -1,3 +1,4 @@
+pub mod callsign;
 pub mod html;
 pub mod server;
 pub mod state;

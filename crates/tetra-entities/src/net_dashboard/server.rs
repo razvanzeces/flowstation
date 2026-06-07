@@ -426,6 +426,8 @@ pub struct DashboardServer {
     sessions: SharedSessionStore,
     /// Last time a ts_voice WS message was broadcast per TS (indexed 0..3 for TS1..TS4)
     ts_last_broadcast: std::sync::Mutex<[std::time::Instant; 4]>,
+    /// RadioID callsign database — resolves ISSI → amateur callsign.
+    callsign_db: crate::net_dashboard::callsign::CallsignDb,
 }
 
 impl DashboardServer {
@@ -434,7 +436,7 @@ impl DashboardServer {
         Self {
             state: Arc::new(RwLock::new(DashboardStateInner::new(config_path.clone()))),
             clients: Arc::new(Mutex::new(Vec::new())),
-            config_path,
+            config_path: config_path.clone(),
             shared_config: None,
             cmd_tx: None,
             update_state: Arc::new(Mutex::new(UpdateState::new())),
@@ -442,6 +444,13 @@ impl DashboardServer {
             auth: None,
             sessions: Arc::new(Mutex::new(SessionStore::new())),
             ts_last_broadcast: std::sync::Mutex::new([now; 4]),
+            callsign_db: {
+                let data_dir = std::path::Path::new(&config_path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf();
+                crate::net_dashboard::callsign::CallsignDb::new(&data_dir)
+            },
         }
     }
 
@@ -484,6 +493,7 @@ impl DashboardServer {
         let auth = self.auth.clone();
         let shared_config = self.shared_config.clone();
         let sessions = Arc::clone(&self.sessions);
+        let callsign_db = self.callsign_db.clone();
 
         std::thread::Builder::new()
             .name("dashboard-server".into())
@@ -503,9 +513,10 @@ impl DashboardServer {
                     let auth = auth.clone();
                     let shared_config = shared_config.clone();
                     let sessions = Arc::clone(&sessions);
+                    let callsign_db = callsign_db.clone();
                     std::thread::Builder::new()
                         .name("dashboard-conn".into())
-                        .spawn(move || handle_connection(stream, state, clients, config_path, cmd_tx, update_state, source_dir_override, auth, shared_config, sessions))
+                        .spawn(move || handle_connection(stream, state, clients, config_path, cmd_tx, update_state, source_dir_override, auth, shared_config, sessions, callsign_db))
                         .ok();
                 }
             })
@@ -880,6 +891,7 @@ fn handle_connection(
     auth: Option<(String, String)>,
     shared_config: Option<tetra_config::bluestation::SharedConfig>,
     sessions: SharedSessionStore,
+    callsign_db: crate::net_dashboard::callsign::CallsignDb,
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
 
@@ -1312,6 +1324,15 @@ fn handle_connection(
     // All paths under /api/wifi/* are GET (read) or POST (mutate). We keep
     // the handlers small and delegate to the `wifi` module — see that for
     // docs on what each operation does. Responses are JSON.
+    } else if req_line.contains("GET /api/callsign") {
+        // GET /api/callsign?issi=<n>  — resolve ISSI to amateur callsign via RadioID.
+        let mut buf = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            let _ = buf.read_line(&mut line);
+            if line == "\r\n" || line.is_empty() || line == "\n" { break; }
+        }
+        serve_callsign(buf.into_inner(), &req_line, &callsign_db);
     } else if req_line.contains("GET /api/wifi/status") {
         drain_http_headers(&mut stream);
         let body = match crate::wifi::status() {
@@ -2120,6 +2141,59 @@ fn activate_config_profile(config_path: &str, profile_name: &str) -> Result<(), 
     std::fs::copy(&profile_path, config_path)
         .map(|_| ())
         .map_err(|e| format!("failed to copy profile: {}", e))
+}
+
+/// GET /api/callsign?issi=<n>
+///
+/// Resolves an ISSI to an amateur radio callsign using the RadioID database.
+/// Returns JSON: `{"issi":12345,"callsign":"M0XYZ"}` on success,
+/// or `{"issi":12345,"callsign":null}` when the ISSI is not found.
+///
+/// The lookup is backed by a local dmrids.dat bulk cache (refreshed every 24 h)
+/// with a per-ISSI REST API fallback, so most requests are served from memory.
+fn serve_callsign(
+    mut stream: TcpStream,
+    req_line: &str,
+    db: &crate::net_dashboard::callsign::CallsignDb,
+) {
+    // Parse issi= query parameter from the request line.
+    // Request line format: "GET /api/callsign?issi=12345 HTTP/1.1"
+    let issi: Option<u32> = req_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|path| path.split('?').nth(1))
+        .and_then(|qs| {
+            qs.split('&').find_map(|kv| {
+                let mut parts = kv.splitn(2, '=');
+                if parts.next() == Some("issi") {
+                    parts.next().and_then(|v| v.parse().ok())
+                } else {
+                    None
+                }
+            })
+        });
+
+    let body = match issi {
+        None => r#"{"error":"missing issi parameter"}"#.to_string(),
+        Some(id) => {
+            match db.lookup(id) {
+                Some(cs) => format!(r#"{{"issi":{},"callsign":"{}"}}"#, id, cs),
+                None     => format!(r#"{{"issi":{},"callsign":null}}"#, id),
+            }
+        }
+    };
+
+    let header = format!(
+        "HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+",
+        body.len()
+    );
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(body.as_bytes());
 }
 
 fn serve_html(mut stream: TcpStream) {

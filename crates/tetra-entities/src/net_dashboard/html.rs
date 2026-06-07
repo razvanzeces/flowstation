@@ -1291,6 +1291,7 @@ td code{
             <table>
               <thead><tr>
                 <th data-i18n="th_issi">ISSI</th>
+                <th data-i18n="th_callsign">Callsign</th>
                 <th data-i18n="th_groups">Groups</th>
                 <th class="col-mobile-hide" data-i18n="th_ee">EE</th>
                 <th data-i18n="th_signal">Signal</th>
@@ -1318,6 +1319,7 @@ td code{
                 <th class="col-mobile-hide" data-i18n="th_id">ID</th>
                 <th data-i18n="th_type">Type</th>
                 <th data-i18n="th_caller">Caller</th>
+                <th data-i18n="th_callsign">Callsign</th>
                 <th data-i18n="th_dest">Destination</th>
                 <th data-i18n="th_speaker">Speaker</th>
                 <th data-i18n="th_duration">Duration</th>
@@ -1344,6 +1346,7 @@ td code{
               <thead><tr>
                 <th data-i18n="th_time">Time</th>
                 <th data-i18n="th_issi">ISSI</th>
+                <th data-i18n="th_callsign">Callsign</th>
                 <th data-i18n="th_activity">Activity</th>
                 <th data-i18n="th_dest">Destination</th>
               </tr></thead>
@@ -1935,7 +1938,7 @@ const LANGS={
     live_sds_sent:'sent',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
     fallback_title:'⚠ FALLBACK CONFIG ACTIVE — Primary config failed to load',
     sds_msg_label:'Message',cancel:'Cancel',send:'Send',
-    th_issi:'ISSI',th_groups:'Groups',th_ee:'EE',th_signal:'Signal',
+    th_issi:'ISSI',th_callsign:'Callsign',th_groups:'Groups',th_ee:'EE',th_signal:'Signal',
     tg_selected:'Selected talkgroup (last keyed up)',tg_scan_hint:'Scanned/affiliated talkgroups — selected one is marked ▶',
     tg_affiliated_short:'affiliated',tg_affiliated_hint:'Other talkgroups this radio is affiliated to (kept attached on the BS even when scan is off on the device)',
     th_status:'Status',th_last_seen:'Last seen',th_actions:'Actions',
@@ -2006,7 +2009,7 @@ const LANGS={
     fallback_title:'⚠ CONFIG DE REZERVĂ ACTIV — Config principal nu a putut fi încărcat',
     sds_title:'⬡ Trimite Mesaj SDS',sds_dest:'ISSI Destinatar',
     sds_msg_label:'Mesaj',cancel:'Anulează',send:'Trimite',
-    th_issi:'ISSI',th_groups:'Grupuri',th_ee:'EE',th_signal:'Semnal',
+    th_issi:'ISSI',th_callsign:'Callsign',th_groups:'Grupuri',th_ee:'EE',th_signal:'Semnal',
     tg_selected:'Grup selectat (ultima transmisie)',tg_scan_hint:'Grupuri scanate/afiliate — cel selectat este marcat cu ▶',
     tg_affiliated_short:'afiliate',tg_affiliated_hint:'Alte grupuri la care radio-ul este afiliat (rămân atașate la BS chiar și când scan e oprit din statie)',
     th_status:'Status',th_last_seen:'Văzut',th_actions:'Acțiuni',
@@ -2076,7 +2079,7 @@ const LANGS={
     fallback_title:'⚠ FALLBACK-KONFIGURATION AKTIV — Primäre Konfiguration konnte nicht geladen werden',
     sds_title:'⬡ SDS-Nachricht senden',sds_dest:'Ziel-ISSI',
     sds_msg_label:'Nachricht',cancel:'Abbrechen',send:'Senden',
-    th_issi:'ISSI',th_groups:'Gruppen',th_ee:'EE',th_signal:'Signal',
+    th_issi:'ISSI',th_callsign:'Callsign',th_groups:'Gruppen',th_ee:'EE',th_signal:'Signal',
     th_status:'Status',th_last_seen:'Zuletzt',th_actions:'Aktionen',
     th_id:'ID',th_type:'Typ',th_caller:'Anrufer',
     th_dest:'Ziel',th_speaker:'Sprecher',th_duration:'Dauer',
@@ -2144,7 +2147,7 @@ const LANGS={
     fallback_title:'⚠ CONFIGURACIÓN DE RESERVA ACTIVA — No se pudo cargar la configuración principal',
     sds_title:'⬡ Enviar Mensaje SDS',sds_dest:'ISSI Destino',
     sds_msg_label:'Mensaje',cancel:'Cancelar',send:'Enviar',
-    th_issi:'ISSI',th_groups:'Grupos',th_ee:'EE',th_signal:'Señal',
+    th_issi:'ISSI',th_callsign:'Callsign',th_groups:'Grupos',th_ee:'EE',th_signal:'Señal',
     th_status:'Estado',th_last_seen:'Visto',th_actions:'Acciones',
     th_id:'ID',th_type:'Tipo',th_caller:'Llamante',
     th_dest:'Destino',th_speaker:'Hablante',th_duration:'Duración',
@@ -2207,7 +2210,7 @@ const LANGS={
     wx_periodic_interval:'Időköz (másodperc)',wx_interval_hint:'Legalább 300 mp (5 perc), hogy ne terhelje túl az időjárás API-t.',wx_periodic_incomplete:'Add meg az állomás ICAO-t és a célt az időszakos módhoz.',
     sds_title:'⬡ SDS üzenet küldése',sds_dest:'Cél ISSI',
     sds_msg_label:'Üzenet',cancel:'Mégse',send:'Küldés',
-    th_issi:'ISSI',th_groups:'Csoportok',th_ee:'EE',th_signal:'Jelerősség',
+    th_issi:'ISSI',th_callsign:'Callsign',th_groups:'Csoportok',th_ee:'EE',th_signal:'Jelerősség',
     th_status:'Állapot',th_last_seen:'Utoljára látva',th_actions:'Műveletek',
     th_id:'ID',th_type:'Típus',th_caller:'Hívó',
     th_dest:'Cél',th_speaker:'Beszélő',th_duration:'Időtartam',
@@ -2272,7 +2275,7 @@ const LANGS={
     live_sds_sent:'已发送',live_sds_times:'次',live_sds_forever:'∞',live_sds_delete:'删除',
     fallback_title:'⚠ 正在使用后备配置 — 主配置加载失败',
     sds_msg_label:'消息内容',cancel:'取消',send:'发送',
-    th_issi:'ISSI',th_groups:'群组',th_ee:'EE',th_signal:'信号',
+    th_issi:'ISSI',th_callsign:'Callsign',th_groups:'群组',th_ee:'EE',th_signal:'信号',
     th_status:'状态',th_last_seen:'最后在线',th_actions:'操作',
     th_id:'ID',th_type:'类型',th_caller:'主叫',
     th_dest:'被叫',th_speaker:'讲话者',th_duration:'时长',
@@ -2969,6 +2972,25 @@ function tsVoice(ts){
 }
 setInterval(updateTsBlocks, 150); // refresh to catch voice decay + duration tick
 
+// ── RadioID callsign cache ─────────────────────────────────────────────────
+const callsignCache={};
+const callsignPending=new Set();
+function fetchCallsign(issi,cb){
+  if(callsignCache[issi]){cb(callsignCache[issi]);return;}
+  if(callsignPending.has(issi))return;
+  callsignPending.add(issi);
+  fetch(`/api/callsign?issi=${issi}`,{credentials:'same-origin'})
+    .then(r=>r.json())
+    .then(d=>{
+      const cs=d.callsign||'—';
+      callsignCache[issi]=cs;
+      callsignPending.delete(issi);
+      cb(cs);
+      document.querySelectorAll(`td.cs-cell[data-issi="${issi}"]`).forEach(el=>el.textContent=cs);
+    })
+    .catch(()=>{callsignCache[issi]='?';callsignPending.delete(issi);});
+}
+
 function renderStations(){
   const ms=Object.values(state.ms);
   const msCount=ms.length,callCount=Object.keys(state.calls).length;
@@ -2978,7 +3000,7 @@ function renderStations(){
   const bc=document.getElementById('badge-calls');
   if(bc){bc.textContent=callCount;bc.style.display=callCount?'flex':'none';}
   const tb=document.getElementById('ms-tbody');
-  if(!ms.length){tb.innerHTML=`<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📡</div><div class="empty-text">${t('no_terminals')}</div></div></td></tr>`;return;}
+  if(!ms.length){tb.innerHTML=`<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📡</div><div class="empty-text">${t('no_terminals')}</div></div></td></tr>`;return;}
   tb.innerHTML=ms.sort((a,b)=>a.issi-b.issi).map(m=>{
     const r=m.rssi_dbfs,rL=r!=null?`${r.toFixed(1)} dBFS`:'—',pct=rssiPct(r),col=rssiColor(r);
     let grps;
@@ -3014,8 +3036,12 @@ function renderStations(){
       grps='<span class="badge badge-dim">—</span>';
     }
     const ls=m._last_seen_ts?Math.floor((Date.now()-m._last_seen_ts)/1000):m.last_seen_secs_ago;
+    const mcs=callsignCache[m.issi]||'…';
+    if(!callsignCache[m.issi])fetchCallsign(m.issi,()=>{});
     return`<tr>
-      <td><code>${m.issi}</code></td><td>${grps}</td>
+      <td><code>${m.issi}</code></td>
+      <td class="cs-cell" data-issi="${m.issi}" style="font-family:var(--mono);font-size:12px;color:var(--accent2)">${mcs}</td>
+      <td>${grps}</td>
       <td class="col-mobile-hide" style="text-align:center">${eeLabel(m.energy_saving_mode||0)}</td>
       <td><div class="rssi-bar"><div class="rssi-track"><div class="rssi-fill" style="width:${pct}%;background:${col}"></div></div><span class="rssi-val" style="color:${col}">${rL}</span></div></td>
       <td><span class="badge badge-green">${t('online_badge')}</span></td>
@@ -3028,7 +3054,7 @@ function renderStations(){
 function renderCalls(){
   document.getElementById('stat-calls').textContent=Object.keys(state.calls).length;
   const tb=document.getElementById('calls-tbody'),calls=Object.values(state.calls);
-  if(!calls.length){tb.innerHTML=`<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">☎</div><div class="empty-text">${t('no_calls')}</div></div></td></tr>`;return;}
+  if(!calls.length){tb.innerHTML=`<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">☎</div><div class="empty-text">${t('no_calls')}</div></div></td></tr>`;return;}
   tb.innerHTML=calls.map(c=>{
     const dur=Math.floor((Date.now()-(c.started_at||Date.now()))/1000);
     const mm=String(Math.floor(dur/60)).padStart(2,'0'),ss=String(dur%60).padStart(2,'0');
@@ -3036,21 +3062,29 @@ function renderCalls(){
     const label=c.call_type==='group'?t('call_group'):(c.simplex?t('call_p2p_s'):t('call_p2p_d'));
     const to=c.call_type==='group'?`GSSI ${c.gssi}`:`ISSI ${c.called_issi}`;
     const spk=c.active_speaker?`<code>${c.active_speaker}</code>`:'<span style="color:var(--text3)">—</span>';
-    return`<tr><td class="col-mobile-hide"><code>${c.call_id}</code></td><td><span class="badge ${badge}">${label}</span></td><td>${c.caller_issi?`<code>${c.caller_issi}</code>`:'—'}</td><td>${to}</td><td>${spk}</td><td style="font-family:var(--mono);font-size:12px;color:var(--accent2);font-weight:600">${mm}:${ss}</td></tr>`;
+    const ccs=c.caller_issi?(callsignCache[c.caller_issi]||'…'):'—';
+    if(c.caller_issi&&!callsignCache[c.caller_issi])fetchCallsign(c.caller_issi,()=>{});
+    return`<tr><td class="col-mobile-hide"><code>${c.call_id}</code></td><td><span class="badge ${badge}">${label}</span></td><td>${c.caller_issi?`<code>${c.caller_issi}</code>`:'—'}</td><td class="cs-cell" data-issi="${c.caller_issi}" style="font-family:var(--mono);font-size:12px;color:var(--accent2)">${ccs}</td><td>${to}</td><td>${spk}</td><td style="font-family:var(--mono);font-size:12px;color:var(--accent2);font-weight:600">${mm}:${ss}</td></tr>`;
   }).join('');
 }
 
 function renderLastHeard(){
   const tb=document.getElementById('lastheard-tbody');
   if(!tb)return;
-  if(!state.lastHeard.length){tb.innerHTML=`<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🎙</div><div class="empty-text">${t('no_activity')}</div></div></td></tr>`;return;}
+  if(!state.lastHeard.length){tb.innerHTML=`<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">🎙</div><div class="empty-text">${t('no_activity')}</div></div></td></tr>`;return;}
   tb.innerHTML=state.lastHeard.map(e=>{
     const destStr=e.dest?`<code>${e.dest}</code>`:'<span style="color:var(--text3)">—</span>';
     const isOnline=!!state.ms[e.issi];
     const issiHtml=`<code>${e.issi}</code>${isOnline?` <span class="badge badge-green" style="font-size:9px">${t('online_badge')}</span>`:''}`;
+    const lcs=callsignCache[e.issi]||'…';
+    if(!callsignCache[e.issi])fetchCallsign(e.issi,()=>{
+      document.querySelectorAll(`td.cs-cell[data-issi="${e.issi}"]`).forEach(el=>el.textContent=callsignCache[e.issi]||'—');
+    });
     return`<tr>
       <td style="font-family:var(--mono);font-size:11px;color:var(--text2)">${e.ts}</td>
-      <td>${issiHtml}</td><td>${activityBadge(e.activity)}</td><td>${destStr}</td>
+      <td>${issiHtml}</td>
+      <td class="cs-cell" data-issi="${e.issi}" style="font-family:var(--mono);font-size:12px;color:var(--accent2)">${lcs}</td>
+      <td>${activityBadge(e.activity)}</td><td>${destStr}</td>
     </tr>`;
   }).join('');
 }
