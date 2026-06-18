@@ -252,6 +252,14 @@ impl CcBsSubentity {
             .active_calls
             .iter()
             .filter(|(_, call)| call.dest_gssi == gssi)
+            // Never tear down a network-originated group call while it still has an active
+            // speaker (FH-BUG-044). A remote party may be mid-transmission: the network owns
+            // the call and ends it via NetworkCallEnd / call_timeout, not a per-subscriber
+            // affiliation change. Dropping it here just because the last *local* listener
+            // deaffiliated — e.g. a transient T351 re-registration of a radio that is actually
+            // present and re-registers a second later — would both cut off the live speaker and
+            // send a spurious NetworkCallEnd to Brew, ending the call network-wide.
+            .filter(|(_, call)| !(matches!(call.origin, CallOrigin::Network { .. }) && call.is_tx_active()))
             .map(|(call_id, call)| (*call_id, call.origin.clone()))
             .collect();
 

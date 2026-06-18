@@ -433,6 +433,12 @@ impl MmBs {
 
         let was_pending = self.client_mgr.is_pending_command(issi);
         let is_new = !self.client_mgr.client_is_known(issi);
+        // A client still known to client_mgr but absent from the subscriber registry was dropped by
+        // a T351 confirmed-gone expiry (we keep the client to preserve its groups). On its return
+        // we must re-add it to the registry + dashboard + Brew, or it stays invisible and SDS to it
+        // is misrouted as non-local. Sampled before the coverage-return re-affiliation below, whose
+        // affiliate() would otherwise recreate the registry entry and mask the drop.
+        let was_dropped = !is_new && !self.config.state_read().subscribers.is_registered(issi);
         if !is_new {
             // MS is re-registering while already known. Three cases:
             //
@@ -480,8 +486,10 @@ impl MmBs {
                 false
             };
 
-            // needs_cleanup: Roaming = MS rebooted, need CMCE reset
-            // was_pending: T351 expired, we already sent Deregister to Brew — just re-register
+            // needs_cleanup: Roaming = MS rebooted, need full CMCE/Brew reset (deregister+register).
+            // was_pending: the MS is answering our T351 COMMAND — Brew still holds the subscriber
+            // (teardown is deferred to the confirmed-gone second expiry, which this answer prevents),
+            // so no Brew action is needed; CMCE is re-affiliated via the coverage-return path below.
             if needs_cleanup {
                 let old_groups: Vec<u32> = self.client_mgr
                     .get_client_by_issi(issi)
@@ -493,21 +501,22 @@ impl MmBs {
                 self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
                 self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
             } else if was_pending {
-                // T351 re-registration: Brew already got Deregister — just re-register
-                // CMCE gets a fresh affiliate when groups are processed below
-                tracing::info!("MM: ISSI {} re-registered after T351 COMMAND", issi);
+                tracing::info!("MM: ISSI {} re-registered after T351 COMMAND (Brew already holds it)", issi);
             }
             // Always reset the registration timer on any re-registration
             self.client_mgr.reset_registration_timer(issi);
         }
-        // Determine if we need to emit Register toward Brew.
-        // We do this when:
+        // Determine if we need to emit Register toward Brew. Only when Brew was actually torn down
+        // (or never had this ISSI):
         //   A) Terminal is genuinely new (never seen before).
         //   B) Terminal is known but re-attaching via ItsiAttach — migrated from another network.
-        //   C) Terminal is known but had pending_command_sent=true — T351 expired, we sent COMMAND
-        //      and deregistered from Brew. Now terminal is back, re-register.
+        //   C) Terminal was dropped from Brew at a T351 confirmed-gone (second) expiry and is now
+        //      back (was_dropped); the re-add path above already restored it locally.
+        // A plain T351 re-registration (was_pending) is deliberately NOT here: teardown no longer
+        // happens at first expiry, so Brew still holds the subscriber — re-registering would be a
+        // needless REGISTER every interval (the Brew flap this avoids).
         let is_itsi_attach = pdu.location_update_type == LocationUpdateType::ItsiAttach;
-        let needs_brew_register = is_new || (!is_new && is_itsi_attach) || (!is_new && was_pending);
+        let needs_brew_register = is_new || (!is_new && is_itsi_attach) || was_dropped;
 
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
@@ -523,8 +532,20 @@ impl MmBs {
             tracing::warn!("Failed updating roaming MS {}: {:?}", issi, e);
             return;
         }
+        // Re-add a radio that had been dropped by a T351 confirmed-gone expiry. The client never
+        // left client_mgr (PTT keeps working), but the subscriber registry and the dashboard were
+        // torn down at the drop; restore both so SDS routing and the dashboard reflect reality.
+        // register() resets attached_groups — the group-identity processing / coverage-return
+        // re-affiliation below rebuilds them, so this must run before either.
+        if was_dropped {
+            self.config.state_write().subscribers.register(issi);
+            if let Some(sink) = &self.telemetry {
+                sink.send(crate::net_telemetry::TelemetryEvent::MsRegistration { issi });
+            }
+            tracing::info!("MM: ISSI {} re-appeared after T351 drop — re-registered in dashboard + subscriber registry", issi);
+        }
         if needs_brew_register {
-            if !is_new {
+            if !is_new && is_itsi_attach {
                 tracing::info!("MM: ISSI {} re-attaching via ItsiAttach (returned from another network) — re-registering in Brew", issi);
             }
             self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
@@ -618,7 +639,13 @@ impl MmBs {
                         state.subscribers.affiliate(issi, gssi);
                     }
                 }
-                self.emit_subscriber_update(queue, issi, stored_groups, BrewSubscriberAction::Affiliate);
+                self.emit_subscriber_update(queue, issi, stored_groups.clone(), BrewSubscriberAction::Affiliate);
+                // Refresh the dashboard's group list for this MS. It may have just been re-added
+                // with an empty entry by the T351-drop recovery above, and coverage-return emits no
+                // per-group telemetry otherwise, so the radio would show with no groups.
+                if let Some(sink) = &self.telemetry {
+                    sink.send(crate::net_telemetry::TelemetryEvent::MsGroupsSnapshot { issi, gssis: stored_groups });
+                }
             }
         }
 
@@ -1602,14 +1629,65 @@ impl TetraEntityTrait for MmBs {
                     issi
                 );
                 Self::send_d_location_update_command(queue, issi, 0);
+                // Confirmed gone: the terminal ignored the first COMMAND through the whole grace
+                // period. NOW tear it down everywhere — Brew backhaul, the dashboard, and the local
+                // subscriber registry — but keep it in client_mgr so its groups survive for
+                // coverage-return re-affiliation if it ever comes back. The guard makes this fire
+                // once, on the registered→gone transition: this branch re-runs every interval for a
+                // radio that stays away. The client is NOT removed, so MsDeregistration is never
+                // emitted; MsTimeoutDrop is the sole drop signal here.
+                // Presence guard (FH-BUG-044 — present stations vanishing from the dashboard at
+                // the T351 interval): only tear a radio down if it is genuinely gone. A radio we
+                // have heard transmitting within the re-registration interval is demonstrably
+                // present even if it never answered the unsolicited COMMAND — e.g. an
+                // energy-economy radio that was asleep when the (un-gated) COMMAND was sent on the
+                // MCCH. Dropping it here would make a live station disappear from the dashboard
+                // every interval. Keep it (the reset_registration_timer below re-arms the clock);
+                // only a radio with NO sign of life on the air for a whole interval is torn down.
+                let interval = std::time::Duration::from_secs(interval_secs as u64);
+                let heard_on_air = self.client_mgr.heard_on_air_within(issi, interval);
+                let still_registered = self.config.state_read().subscribers.is_registered(issi);
+                if still_registered && heard_on_air {
+                    tracing::info!(
+                        "MM: ISSI {} ignored the T351 COMMAND but was heard on air within {}s — keeping it (present, not dropping from dashboard)",
+                        issi, interval_secs
+                    );
+                }
+                if still_registered && !heard_on_air {
+                    // Tell Brew to stop routing calls/SDS to this terminal until it re-registers.
+                    // Deferred to here (not first expiry) so a healthy radio that answers the
+                    // COMMAND within grace never flaps Brew; only a genuinely-gone radio is torn
+                    // down, exactly once.
+                    let groups: Vec<u32> = self.client_mgr
+                        .get_client_by_issi(issi)
+                        .map(|c| c.groups.iter().copied().collect())
+                        .unwrap_or_default();
+                    if !groups.is_empty() {
+                        self.emit_subscriber_update(queue, issi, groups, BrewSubscriberAction::Deaffiliate);
+                    }
+                    self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
+                    // Drop from the local subscriber registry + dashboard.
+                    self.config.state_write().subscribers.deregister(issi);
+                    if let Some(sink) = &self.telemetry {
+                        sink.send(crate::net_telemetry::TelemetryEvent::MsTimeoutDrop { issi });
+                    }
+                }
                 self.client_mgr.reset_registration_timer(issi);
                 self.recovery_mark_dirty();
                 continue;
             }
-            // First expiry — send COMMAND and wait grace period (60s) for response.
-            // Do NOT remove_client here: keeping the client in registry preserves ESM
-            // and group state so the terminal re-registers cleanly without losing EE mode.
-            // Only notify Brew so it stops routing calls to this terminal until it re-registers.
+            // First expiry — send the COMMAND and arm the 60s grace, nothing else. Emit NO teardown
+            // (Brew, dashboard, or local registry). The terminal almost always answers within grace
+            // and re-registers (MTM800/MXP600/MTM5400 rely on BS initiative — see above), so any
+            // teardown here is a flap: it stayed registered on the air (PTT kept working) but, when
+            // it answered, the re-registration path took the `is_new == false` branch and never
+            // re-added it — so it vanished from the dashboard forever, SDS to it was misrouted as
+            // non-local, and Brew was needlessly deregistered+reregistered every interval. All
+            // teardown is deferred to the confirmed-gone second expiry above, which fires only if
+            // the grace elapses with no answer.
+            //
+            // Do NOT remove_client here either: keeping the client in registry preserves ESM and
+            // group state so the terminal re-registers cleanly without losing EE mode.
             //
             // handle = 0: the L2 handle is inert (MLE addresses downlink MM PDUs by ISSI; see
             // mle_bs.rs rx_lmm_mle_unitdata_req + uplink ind hardcoded handle 0). The COMMAND
@@ -1617,26 +1695,20 @@ impl TetraEntityTrait for MmBs {
             // longer removes the client or sends REJECT, so the terminal's groups survive an
             // unanswered COMMAND and are restored by coverage-return re-affiliation on its return
             // (FH-BUG-031 fix).
-            Self::send_d_location_update_command(queue, issi, 0);
-            self.client_mgr.set_pending_command(issi, 60);
-            let groups: Vec<u32> = self.client_mgr
-                .get_client_by_issi(issi)
-                .map(|c| c.groups.iter().copied().collect())
-                .unwrap_or_default();
-            if !groups.is_empty() {
-                self.emit_subscriber_update(queue, issi, groups, BrewSubscriberAction::Deaffiliate);
-            }
-            self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
-            // Mark as detached in state but keep in client_mgr (preserves ESM + groups)
-            self.config.state_write().subscribers.deregister(issi);
-            // Tell telemetry consumers the radio dropped for not answering T351. This is the
-            // edge: first-expiry fires once (subsequent ticks hit the re-attract branch above),
-            // so it is the right place to signal a drop. The client stays in client_mgr by
-            // design (groups preserved), so remove_client — and thus MsDeregistration — is NOT
-            // emitted here; this dedicated event is the only drop signal for this path. It also
-            // lets the dashboard drop the stale station from its list.
-            if let Some(sink) = &self.telemetry {
-                sink.send(crate::net_telemetry::TelemetryEvent::MsTimeoutDrop { issi });
+            //
+            // EE gating (FH-BUG-044 follow-up — present energy-economy radios vanishing from the
+            // dashboard): a sleeping EE MS only listens to the downlink during its monitoring
+            // window, so an un-gated COMMAND sent while it sleeps is missed; it then never answers
+            // and is dropped at the second expiry. Send the COMMAND only when the MS is reachable
+            // (StayAlive always; EE on its wake window), retrying on later ticks until the window
+            // opens. A bounded fallback (interval + T351_EE_WINDOW_WAIT_SECS) sends it blind so a
+            // stale/incorrect window can never suppress the probe forever. The grace clock only
+            // starts once the COMMAND is actually sent, so a deferred wake-window send still gets
+            // the full grace to answer.
+            const T351_EE_WINDOW_WAIT_SECS: u64 = 6;
+            if self.client_mgr.should_send_t351_command_now(issi, ts, interval_secs, T351_EE_WINDOW_WAIT_SECS) {
+                Self::send_d_location_update_command(queue, issi, 0);
+                self.client_mgr.set_pending_command(issi, 60);
             }
         }
 
