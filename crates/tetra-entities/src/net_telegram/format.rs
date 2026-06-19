@@ -68,22 +68,22 @@ fn frame(emoji: &str, title: &str, lines: &[String], station: &StationInfo) -> S
 
 /// A radio attached to the cell.
 pub fn connect(station: &StationInfo, issi: u32) -> String {
-    frame("🟢", "Radio conectat", &[format!("ISSI: <code>{issi}</code>")], station)
+    frame("🟢", "Radio connected", &[format!("ISSI: <code>{issi}</code>")], station)
 }
 
 /// A radio detached / deregistered.
 pub fn disconnect(station: &StationInfo, issi: u32) -> String {
-    frame("🔴", "Radio deconectat", &[format!("ISSI: <code>{issi}</code>")], station)
+    frame("🔴", "Radio disconnected", &[format!("ISSI: <code>{issi}</code>")], station)
 }
 
 /// A radio was dropped for not answering the periodic registration (T351).
 pub fn t351_drop(station: &StationInfo, issi: u32) -> String {
     frame(
         "📴",
-        "Radio căzut (fără răspuns la T351)",
+        "Radio dropped (no T351 response)",
         &[
             format!("ISSI: <code>{issi}</code>"),
-            "Motiv: nu a răspuns la cererea periodică de re-înregistrare.".to_string(),
+            "Reason: did not answer the periodic re-registration request.".to_string(),
         ],
         station,
     )
@@ -93,17 +93,17 @@ pub fn t351_drop(station: &StationInfo, issi: u32) -> String {
 /// empty for binary LIP payloads).
 pub fn lip_beacon(station: &StationInfo, source_issi: u32, dest_issi: u32, text: &str) -> String {
     let mut lines = vec![
-        format!("De la ISSI: <code>{source_issi}</code>"),
-        format!("Către: <code>{dest_issi}</code>"),
+        format!("From ISSI: <code>{source_issi}</code>"),
+        format!("To: <code>{dest_issi}</code>"),
     ];
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        lines.push("Poziție: payload LIP binar (nedecodat).".to_string());
+        lines.push("Position: binary LIP payload (undecoded).".to_string());
     } else {
         let body = truncate_chars(trimmed, 200);
-        lines.push(format!("Poziție: {}", escape_html(&body)));
+        lines.push(format!("Position: {}", escape_html(&body)));
     }
-    frame("📍", "Baliză poziție LIP/APRS", &lines, station)
+    frame("📍", "LIP/APRS position beacon", &lines, station)
 }
 
 /// The Brew/TetraPack backhaul connected or disconnected.
@@ -111,15 +111,15 @@ pub fn backhaul(station: &StationInfo, connected: bool, server_version: u8) -> S
     if connected {
         frame(
             "🛰️",
-            "Backhaul Brew conectat",
-            &[format!("Versiune server: v{server_version}")],
+            "Brew backhaul connected",
+            &[format!("Server version: v{server_version}")],
             station,
         )
     } else {
         frame(
             "🛰️",
-            "Backhaul Brew deconectat",
-            &["Stația funcționează în mod fallback (local).".to_string()],
+            "Brew backhaul disconnected",
+            &["Station running in fallback mode (local).".to_string()],
             station,
         )
     }
@@ -129,9 +129,9 @@ pub fn backhaul(station: &StationInfo, connected: bool, server_version: u8) -> S
 /// were dropped beyond the ones shown.
 pub fn critical_logs(station: &StationInfo, lines: &[(String, String)], extra: usize) -> String {
     let title = if lines.iter().any(|(lvl, _)| lvl == "ERROR") {
-        "Eroare în stație"
+        "Station error"
     } else {
-        "Avertisment în stație"
+        "Station warning"
     };
     let mut body: Vec<String> = lines
         .iter()
@@ -142,7 +142,7 @@ pub fn critical_logs(station: &StationInfo, lines: &[(String, String)], extra: u
         })
         .collect();
     if extra > 0 {
-        body.push(format!("… și încă {extra} mesaj(e).", ));
+        body.push(format!("… and {extra} more message(s)."));
     }
     frame("🚨", title, &body, station)
 }
@@ -151,8 +151,8 @@ pub fn critical_logs(station: &StationInfo, lines: &[(String, String)], extra: u
 pub fn test_message(station: &StationInfo) -> String {
     frame(
         "✅",
-        "Test alerte Telegram",
-        &["Alertele FlowStation sunt configurate corect. Vei primi notificări aici.".to_string()],
+        "Telegram alert test",
+        &["FlowStation alerts are configured correctly. You'll receive notifications here.".to_string()],
         station,
     )
 }
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn connect_has_title_issi_and_footer() {
         let m = connect(&station(), 2260571);
-        assert!(m.contains("<b>Radio conectat</b>"));
+        assert!(m.contains("<b>Radio connected</b>"));
         assert!(m.contains("<code>2260571</code>"));
         assert!(m.contains("MCC 901"));
         assert!(m.starts_with("🟢"));
@@ -189,14 +189,14 @@ mod tests {
             ("ERROR".to_string(), "e1".to_string()),
         ];
         let m = critical_logs(&station(), &lines, 3);
-        assert!(m.contains("<b>Eroare în stație</b>"));
-        assert!(m.contains("și încă 3"));
+        assert!(m.contains("<b>Station error</b>"));
+        assert!(m.contains("and 3 more"));
     }
 
     #[test]
     fn lip_handles_empty_and_textual_payload() {
         let empty = lip_beacon(&station(), 1, 2, "");
-        assert!(empty.contains("binar"));
+        assert!(empty.contains("binary"));
         let textual = lip_beacon(&station(), 1, 2, "4426.12N 02606.55E");
         assert!(textual.contains("4426.12N"));
     }

@@ -669,8 +669,14 @@ impl Llc {
 
             // Not submitted; check if blocked
             if ssi_blocked.contains(&ack.addr.ssi) {
-                // SSI already has another message waiting for ack, so we cannot submit this one yet
-                tracing::debug!(
+                // This SSI already has an unacked message in flight, so this one must wait —
+                // strict per-link ordering is normal acknowledged-mode flow control
+                // (ETSI EN 300 392-2 §22.3.2.3). Logged at trace, NOT debug: when a radio goes
+                // away with several queued acknowledged SDS, this branch fires on every tick for
+                // every queued message until the backlog drains, which floods the log
+                // (FH-BUG-042 — one departed radio produced 3403 of 4149 lines). The queue still
+                // drains correctly; only the per-tick noise was the defect.
+                tracing::trace!(
                     "SSI {} N(S) {} still blocked by previous message, cannot submit next message",
                     ack.addr.ssi,
                     ack.ns

@@ -630,9 +630,25 @@ impl DashboardServer {
         std::thread::Builder::new()
             .name("dashboard-server".into())
             .spawn(move || {
-                let listener = match TcpListener::bind(&addr) {
-                    Ok(l) => { tracing::info!("Dashboard listening on http://{}", addr); l }
-                    Err(e) => { tracing::error!("Dashboard failed to bind {}: {}", addr, e); return; }
+                // Retry the bind instead of giving up after a single failure (FH-BUG-043).
+                // On a cold boot the configured bind address may not be assigned yet — DHCP
+                // lease still pending, or a VPN/wg/tun interface that comes up after the
+                // service — so the first bind can fail with EADDRNOTAVAIL even with
+                // After=network-online.target. Previously the thread logged once and exited,
+                // leaving the dashboard permanently down (while the RF stack ran fine) until a
+                // manual stop/start. Retrying lets it self-heal once the address appears. This
+                // loop runs only on the dashboard thread, so it can never block the PHY/main loop.
+                let listener = loop {
+                    match TcpListener::bind(&addr) {
+                        Ok(l) => { tracing::info!("Dashboard listening on http://{}", addr); break l; }
+                        Err(e) => {
+                            tracing::error!(
+                                "Dashboard failed to bind {}: {} — retrying in 5s (interface/IP may not be ready yet)",
+                                addr, e
+                            );
+                            std::thread::sleep(std::time::Duration::from_secs(5));
+                        }
+                    }
                 };
                 for stream in listener.incoming() {
                     let Ok(stream) = stream else { continue };
@@ -2265,7 +2281,7 @@ fn serve_telegram_post(
 
     let bot_token = telegram_resolve_token(&json, shared_config);
     if !telegram_token_acceptable(&bot_token) {
-        http_response(stream, 400, "Token invalid: fără spații/caractere de control și trebuie să conțină ':'.");
+        http_response(stream, 400, "Invalid token: no spaces or control characters, and must contain ':'.");
         return;
     }
     let chat_ids = match json.get("chat_ids").and_then(|v| v.as_array()) {

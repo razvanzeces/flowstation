@@ -683,19 +683,23 @@ impl SdsBsSubentity {
 
     /// Pull the human-readable text out of an SDS user-data field. Handles the SDS-TL
     /// "simple text" wrapper (PID 0x82/0x80/0x8A, msg-type byte, message-ref, encoding,
-    /// then text) as well as raw text payloads. Returns an ASCII string (best-effort).
+    /// then text) and a bare text-coding-scheme prefix (0x01..=0x03).
+    ///
+    /// Any OTHER protocol identifier is treated as non-text and yields an empty string:
+    /// LIP/APRS position beacons (PID 0x0A), status/precoded messages, and unknown PIDs are
+    /// binary, and interpreting their bytes as ASCII produced garbage in the dashboard SDS Log
+    /// (FH-BUG-045 — e.g. a LIP payload `[10, 48, ..]` decoded to the stray text "0"). Returning
+    /// empty lets the dashboard fall back to the protocol-id label (e.g. "[LIP position]")
+    /// instead of showing mojibake. Returns an ASCII string (best-effort).
     fn extract_sds_text(data: &SdsUserData) -> String {
         let bytes = data.to_arr();
-        if bytes.is_empty() {
-            return String::new();
-        }
         // SDS-TL text messaging PIDs: 0x82 (text), 0x80/0x8A (text w/ variants). When the
-        // first byte looks like one of these and there is a 4-byte header, skip it.
+        // first byte is one of these and there is a 4-byte header, skip it. A bare text-coding-
+        // scheme byte (0x01..=0x03) is followed directly by text. Everything else is binary.
         let payload: &[u8] = match bytes.first() {
             Some(0x82) | Some(0x80) | Some(0x8A) if bytes.len() > 4 => &bytes[4..],
-            // Some terminals send a bare text-coding-scheme byte (0x01..=0x03) then text.
             Some(0x01..=0x03) if bytes.len() > 1 => &bytes[1..],
-            _ => &bytes[..],
+            _ => return String::new(),
         };
         payload
             .iter()

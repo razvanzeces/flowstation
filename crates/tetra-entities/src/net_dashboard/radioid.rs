@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Per-ID lookup endpoint. radioid.net answers `{"count":N,"results":[{"id":..,"callsign":..}]}`.
-const API_URL_PREFIX: &str = "https://radioid.net/api/dmr/user/?id=";
+const API_URL_PREFIX:      &str = "https://radioid.net/api/dmr/user/?id=";
+const RPTR_API_URL_PREFIX: &str = "https://radioid.net/api/dmr/repeater/?id=";
 /// Politeness delay between successive API calls (each ID is fetched only once, ever).
 const FETCH_THROTTLE: Duration = Duration::from_millis(1100);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
@@ -128,9 +129,23 @@ fn worker_loop(rx: crossbeam_channel::Receiver<u32>, inner: Arc<Mutex<Inner>>) {
 }
 
 /// Fetch one ID. `Ok(Some(callsign))` = found, `Ok(None)` = confirmed absent, `Err` = transient.
+///
+/// Tries the user database first. If the ID is not found there, tries the repeater database.
+/// This covers both individual operators (7-digit IDs) and repeaters/gateways (6-digit IDs),
+/// without hard-coding a digit-count heuristic that may not hold universally.
 fn fetch_callsign(client: &reqwest::blocking::Client, issi: u32) -> Result<Option<String>, String> {
-    let url = format!("{API_URL_PREFIX}{issi}");
-    let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+    // Try user database first.
+    if let Some(cs) = query_radioid(client, &format!("{API_URL_PREFIX}{issi}"))? {
+        return Ok(Some(cs));
+    }
+    // Fall back to repeater database.
+    query_radioid(client, &format!("{RPTR_API_URL_PREFIX}{issi}"))
+}
+
+/// Query a RadioID API endpoint and extract the callsign from `results[0].callsign`.
+/// Returns `Ok(Some(callsign))` = found, `Ok(None)` = confirmed absent, `Err` = transient.
+fn query_radioid(client: &reqwest::blocking::Client, url: &str) -> Result<Option<String>, String> {
+    let resp = client.get(url).send().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }

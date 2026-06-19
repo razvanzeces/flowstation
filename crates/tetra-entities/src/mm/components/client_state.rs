@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::net_telemetry::{TelemetryEvent, channel::TelemetrySink};
+use tetra_core::TdmaTime;
 use tetra_pdus::mm::enums::energy_saving_mode::EnergySavingMode;
 use tetra_pdus::mm::fields::class_of_ms::ClassOfMs;
 
@@ -51,6 +52,14 @@ pub struct MmClientProperties {
     /// Updated on every UL burst received from this ISSI.
     /// None until first burst received after registration.
     pub last_rssi: Option<f32>,
+    /// Monotonic timestamp of the last uplink burst heard from this MS (updated on every RSSI
+    /// measurement — i.e. whenever the MS is observed transmitting). Distinct from
+    /// `last_registration_time`: a present MS keeps transmitting (PTT / SDS / signalling bursts)
+    /// without necessarily re-registering, so this is the authoritative "still on the air"
+    /// signal. Used at T351 expiry to avoid dropping a radio that is demonstrably present but
+    /// did not answer an unsolicited D-LOCATION-UPDATE-COMMAND (e.g. an energy-economy radio
+    /// asleep when the COMMAND was sent) — which made present stations vanish from the dashboard.
+    pub last_uplink_time: std::time::Instant,
     /// Timestamp (system time) when this MS last registered or re-registered.
     /// Used to enforce periodic registration expiry (T351).
     pub last_registration_time: std::time::Instant,
@@ -81,6 +90,7 @@ impl MmClientProperties {
             monitoring_frame: None,
             monitoring_multiframe: None,
             last_rssi: None,
+            last_uplink_time: std::time::Instant::now(),
             pending_command_sent: false,
             grace_expires_at: None,
             last_registration_time: std::time::Instant::now(),
@@ -168,6 +178,8 @@ impl MmClientMgr {
     /// Update RSSI for a known MS. Silently ignored if MS is not registered.
     pub fn update_client_rssi(&mut self, issi: u32, rssi_dbfs: f32) {
         if let Some(client) = self.clients.get_mut(&issi) {
+            // Every RSSI measurement is an uplink burst we just heard → the MS is on the air now.
+            client.last_uplink_time = std::time::Instant::now();
             let should_log = match client.last_rssi {
                 None => true, // First measurement
                 Some(prev) => (rssi_dbfs - prev).abs() >= 3.0, // Log on >=3dB change
@@ -177,6 +189,17 @@ impl MmClientMgr {
                 tracing::info!("RSSI: ISSI {} = {:.1} dBFS", issi, rssi_dbfs);
             }
         }
+    }
+
+    /// True if an uplink burst from this MS was heard within `within` — a direct sign the radio
+    /// is still on the air, independent of whether it answered an unsolicited
+    /// D-LOCATION-UPDATE-COMMAND. Used to keep a present radio from being torn down at T351
+    /// expiry (it may be an energy-economy radio that was asleep when the COMMAND was sent).
+    pub fn heard_on_air_within(&self, issi: u32, within: std::time::Duration) -> bool {
+        self.clients
+            .get(&issi)
+            .map(|c| c.last_uplink_time.elapsed() < within)
+            .unwrap_or(false)
     }
 
     /// Reset the periodic registration timer for a MS (called on each U-LOCATION-UPDATING-DEMAND).
@@ -229,6 +252,38 @@ impl MmClientMgr {
             })
             .map(|(&issi, _)| issi)
             .collect()
+    }
+
+    /// Decide whether the T351 D-LOCATION-UPDATE-COMMAND for `issi` should be sent on this tick.
+    ///
+    /// The COMMAND is an unsolicited downlink PDU. An energy-economy MS only listens to the
+    /// downlink during its monitoring window, so a COMMAND sent while it sleeps is missed — it
+    /// then never answers and is torn down at the second expiry, making a present radio vanish
+    /// from the dashboard. So:
+    ///   - StayAlive MS (always listening) or an EE MS whose monitoring window is not yet known
+    ///     → send now (`true`);
+    ///   - EE MS during its monitoring window → send now (`true`);
+    ///   - EE MS asleep outside its window → defer (`false`) so the caller retries next tick and
+    ///     sends in the wake window — UNLESS it is overdue by more than `window_wait_secs` beyond
+    ///     the interval, in which case send blind (`true`) so a stale/incorrect window can never
+    ///     suppress the probe forever.
+    pub fn should_send_t351_command_now(&self, issi: u32, ts: TdmaTime, interval_secs: u32, window_wait_secs: u64) -> bool {
+        let Some(c) = self.clients.get(&issi) else {
+            // Unknown client — let the caller proceed; the send is addressed by ISSI and harmless.
+            return true;
+        };
+        let reachable_now = match ee_cycle_frames(c.energy_saving_mode) {
+            None => true, // StayAlive — always reachable
+            Some(cycle_len) => match (c.monitoring_frame, c.monitoring_multiframe) {
+                (Some(f), Some(mf)) => ts.in_ee_monitoring_window(f, mf, cycle_len),
+                _ => true, // EE but the window is not known yet — don't defer
+            },
+        };
+        if reachable_now {
+            return true;
+        }
+        // Sleeping EE MS outside its window: defer to a wake window, but bound the wait.
+        c.last_registration_time.elapsed().as_secs() >= interval_secs as u64 + window_wait_secs
     }
 
     pub fn set_client_class_of_ms(&mut self, issi: u32, class: Option<ClassOfMs>) -> Result<(), ClientMgrErr> {
@@ -397,5 +452,63 @@ impl MmClientMgr {
         } else {
             Err(ClientMgrErr::ClientNotFound { issi })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// The T351 presence guard: a radio heard transmitting recently is reported "on air" so it is
+    /// never torn down at expiry (FH-BUG-044 — present stations vanishing from the dashboard).
+    #[test]
+    fn heard_on_air_tracks_uplink_presence() {
+        let mut mgr = MmClientMgr::new(None);
+        mgr.try_register_client(100, true).unwrap();
+
+        // A freshly-registered MS counts as just heard on the air.
+        assert!(mgr.heard_on_air_within(100, Duration::from_secs(300)));
+        // An unknown ISSI is never "heard".
+        assert!(!mgr.heard_on_air_within(999, Duration::from_secs(300)));
+
+        // After a little real time, a very short window reports "not heard" (would fall through to
+        // the COMMAND/teardown path), while a generous window still reports "present".
+        std::thread::sleep(Duration::from_millis(15));
+        assert!(!mgr.heard_on_air_within(100, Duration::from_millis(5)));
+        assert!(mgr.heard_on_air_within(100, Duration::from_secs(300)));
+
+        // A fresh uplink burst (RSSI measurement) re-stamps the radio as heard right now.
+        std::thread::sleep(Duration::from_millis(15));
+        assert!(!mgr.heard_on_air_within(100, Duration::from_millis(5)));
+        mgr.update_client_rssi(100, -60.0);
+        assert!(mgr.heard_on_air_within(100, Duration::from_millis(5)));
+    }
+
+    /// The T351 COMMAND is gated to a sleeping EE radio's wake window so it is never missed
+    /// (FH-BUG-044 follow-up). StayAlive radios are always reachable; EE radios are sent only
+    /// in their monitoring window.
+    #[test]
+    fn t351_command_gated_to_ee_monitoring_window() {
+        let mut mgr = MmClientMgr::new(None);
+        mgr.try_register_client(100, true).unwrap();
+        let ts = TdmaTime::default();
+
+        // StayAlive: always reachable → send now.
+        assert!(mgr.should_send_t351_command_now(100, ts, 300, 6));
+        // Unknown ISSI: caller proceeds.
+        assert!(mgr.should_send_t351_command_now(999, ts, 300, 6));
+
+        // Eg1 radio (cycle 2 frames) with a known window at frame 1 / multiframe 1.
+        mgr.set_client_energy_saving_mode(100, EnergySavingMode::Eg1).unwrap();
+        mgr.set_client_monitoring_window(100, Some(1), Some(1)).unwrap();
+        // m=1,f=1 → cur_abs 0, in window (cycle 2) → send.
+        assert!(mgr.should_send_t351_command_now(100, TdmaTime { t: 1, f: 1, m: 1, h: 0 }, 300, 6));
+        // m=1,f=2 → cur_abs 1, out of window, freshly registered (not overdue) → defer.
+        assert!(!mgr.should_send_t351_command_now(100, TdmaTime { t: 1, f: 2, m: 1, h: 0 }, 300, 6));
+
+        // EE radio whose monitoring window is unknown is never deferred (sent immediately).
+        mgr.set_client_monitoring_window(100, None, None).unwrap();
+        assert!(mgr.should_send_t351_command_now(100, TdmaTime { t: 1, f: 2, m: 1, h: 0 }, 300, 6));
     }
 }
