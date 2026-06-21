@@ -3,13 +3,213 @@ mod common;
 use tetra_config::bluestation::StackMode;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, debug};
+use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
+use tetra_pdus::mm::pdus::d_attach_detach_group_identity::DAttachDetachGroupIdentity;
 use tetra_pdus::mm::pdus::d_mm_status::DMmStatus;
+use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
 use tetra_saps::lmm::LmmMleUnitdataInd;
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 
+use tetra_entities::cmce::cmce_bs::CmceBs;
 use tetra_entities::mm::mm_bs::MmBs;
+use tetra_entities::net_control::{ControlCommand, make_control_link};
 
 use crate::common::ComponentTest;
+
+/// Register a terminal in MM by submitting a minimal U-LOCATION-UPDATE-DEMAND
+/// (RoamingLocationUpdating) as if it arrived from `issi`. After this the MS is "known" and
+/// eligible for DGNA.
+fn register_terminal(test: &mut ComponentTest, issi: u32) {
+    let demand = ULocationUpdateDemand {
+        location_update_type: LocationUpdateType::RoamingLocationUpdating,
+        request_to_append_la: false,
+        cipher_control: false,
+        ciphering_parameters: None,
+        class_of_ms: None,
+        energy_saving_mode: None,
+        la_information: None,
+        ssi: Some(issi as u64),
+        address_extension: None,
+        group_identity_location_demand: None,
+        group_report_response: None,
+        authentication_uplink: None,
+        extended_capabilities: None,
+        proprietary: None,
+    };
+    let mut sdu = BitBuffer::new_autoexpand(32);
+    demand.to_bitbuf(&mut sdu).expect("serialize U-LOCATION-UPDATE-DEMAND");
+    sdu.seek(0);
+    let prim = LmmMleUnitdataInd {
+        sdu,
+        handle: 0,
+        received_address: TetraAddress { ssi_type: SsiType::Issi, ssi: issi },
+    };
+    test.submit_message(SapMsg {
+        sap: Sap::LmmSap,
+        src: TetraEntity::Mle,
+        dest: TetraEntity::Mm,
+        msg: SapMsgInner::LmmMleUnitdataInd(prim),
+    });
+    test.run_stack(Some(2));
+}
+
+/// Pull the first D-ATTACH/DETACH GROUP IDENTITY out of a batch of captured MLE messages, if any.
+fn find_attach_detach(msgs: &[SapMsg]) -> Option<(u32, DAttachDetachGroupIdentity)> {
+    for m in msgs {
+        if let SapMsgInner::LmmMleUnitdataReq(ref req) = m.msg {
+            let mut sdu = BitBuffer::from_bitstr(&req.sdu.to_bitstr());
+            if let Ok(pdu) = DAttachDetachGroupIdentity::from_bitbuf(&mut sdu) {
+                return Some((req.address.ssi, pdu));
+            }
+        }
+    }
+    None
+}
+
+/// End-to-end DGNA assign: a dashboard control command makes MM push an unsolicited
+/// D-ATTACH/DETACH GROUP IDENTITY (attach, ack requested) to the targeted terminal AND record the
+/// affiliation in the shared subscriber registry so local group calls/SDS route to it.
+#[test]
+fn test_dgna_assign_emits_attach_group_identity_and_affiliates() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260571;
+    const TEST_GSSI: u32 = 100;
+
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+    test.populate_entities(vec![], vec![TetraEntity::Mle]);
+
+    // Register our own MM wired to a control endpoint so we can drive DGNA through the dispatcher.
+    let (dispatcher, endpoint) = make_control_link();
+    let mm = MmBs::new(test.get_shared_config(), None, Some(endpoint));
+    test.register_entity(mm);
+
+    // DGNA requires a registered MS.
+    register_terminal(&mut test, TEST_ISSI);
+    let _ = test.dump_sinks(); // discard the D-LOCATION-UPDATE-ACCEPT
+
+    // Issue the DGNA assign and let MM process the control command.
+    dispatcher.send(ControlCommand::Dgna { issi: TEST_ISSI, gssi: TEST_GSSI, attach: true });
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+
+    let (addr_ssi, pdu) = find_attach_detach(&msgs)
+        .unwrap_or_else(|| panic!("expected a D-ATTACH/DETACH GROUP IDENTITY after DGNA assign, got {} msgs", msgs.len()));
+
+    assert_eq!(addr_ssi, TEST_ISSI, "DGNA PDU must be addressed to the target ISSI");
+    assert!(pdu.group_identity_acknowledgement_request, "DGNA must request an ACK");
+    assert!(!pdu.group_identity_attach_detach_mode, "DGNA must amend, not reset, the group list");
+    let gids = pdu.group_identity_downlink.expect("downlink groups present");
+    assert_eq!(gids.len(), 1);
+    assert_eq!(gids[0].gssi, Some(TEST_GSSI));
+    assert!(gids[0].group_identity_attachment.is_some(), "an assign carries a group identity attachment");
+
+    // BS-side affiliation must be reflected for local call/SDS routing.
+    assert!(
+        test.config.state_read().subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI),
+        "DGNA assign must affiliate the GSSI in the subscriber registry"
+    );
+}
+
+/// DGNA deassign of a previously-assigned group emits a detach and removes the affiliation.
+#[test]
+fn test_dgna_deassign_emits_detach_and_deaffiliates() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260572;
+    const TEST_GSSI: u32 = 101;
+
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+    test.populate_entities(vec![], vec![TetraEntity::Mle]);
+    let (dispatcher, endpoint) = make_control_link();
+    let mm = MmBs::new(test.get_shared_config(), None, Some(endpoint));
+    test.register_entity(mm);
+    register_terminal(&mut test, TEST_ISSI);
+
+    // Assign, then deassign.
+    dispatcher.send(ControlCommand::Dgna { issi: TEST_ISSI, gssi: TEST_GSSI, attach: true });
+    test.run_stack(Some(2));
+    let _ = test.dump_sinks();
+    assert!(test.config.state_read().subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI));
+
+    dispatcher.send(ControlCommand::Dgna { issi: TEST_ISSI, gssi: TEST_GSSI, attach: false });
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+
+    let (addr_ssi, pdu) = find_attach_detach(&msgs)
+        .unwrap_or_else(|| panic!("expected a D-ATTACH/DETACH GROUP IDENTITY after DGNA deassign, got {} msgs", msgs.len()));
+    assert_eq!(addr_ssi, TEST_ISSI);
+    let gids = pdu.group_identity_downlink.expect("downlink groups present");
+    assert_eq!(gids.len(), 1);
+    assert_eq!(gids[0].gssi, Some(TEST_GSSI));
+    assert!(gids[0].group_identity_attachment.is_none(), "a deassign carries no attachment");
+    assert!(gids[0].group_identity_detachment_uplink.is_some(), "a deassign carries a detachment");
+
+    assert!(
+        !test.config.state_read().subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI),
+        "DGNA deassign must remove the GSSI from the subscriber registry"
+    );
+}
+
+/// Regression for the dashboard path (FlowStation log 00:19:24 "CMCE: ignoring unsupported control
+/// command Dgna"): the dashboard's control channel terminates at CMCE, not MM. A DGNA command
+/// delivered to CMCE must be forwarded to MM, which then pushes the D-ATTACH/DETACH GROUP IDENTITY
+/// over the air — exactly the path a real dashboard click takes.
+#[test]
+fn test_dgna_from_cmce_control_reaches_mm_and_emits_pdu() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260575;
+    const TEST_GSSI: u32 = 20;
+
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+    test.populate_entities(vec![], vec![TetraEntity::Mle]);
+
+    // Real MM with NO control endpoint — it must receive DGNA via the SAP forward from CMCE.
+    let mm = MmBs::new(test.get_shared_config(), None, None);
+    test.register_entity(mm);
+
+    // Real CMCE wired to a control endpoint, exactly like the binary wires the dashboard.
+    let (cmce_dispatcher, cmce_endpoint) = make_control_link();
+    let cmce = CmceBs::new(test.get_shared_config(), None, Some(cmce_endpoint));
+    test.register_entity(cmce);
+
+    register_terminal(&mut test, TEST_ISSI);
+    let _ = test.dump_sinks();
+
+    // Send DGNA to CMCE's control endpoint (the dashboard's path), NOT to MM directly.
+    cmce_dispatcher.send(ControlCommand::Dgna { issi: TEST_ISSI, gssi: TEST_GSSI, attach: true });
+    test.run_stack(Some(4)); // CMCE drains control -> forwards MmDgnaRequest -> MM emits the PDU
+    let msgs = test.dump_sinks();
+
+    let (addr_ssi, pdu) = find_attach_detach(&msgs).unwrap_or_else(|| {
+        panic!("DGNA via CMCE must reach MM and emit a D-ATTACH/DETACH GROUP IDENTITY, got {} msgs", msgs.len())
+    });
+    assert_eq!(addr_ssi, TEST_ISSI);
+    let gids = pdu.group_identity_downlink.expect("downlink groups present");
+    assert_eq!(gids[0].gssi, Some(TEST_GSSI));
+    assert!(gids[0].group_identity_attachment.is_some());
+
+    assert!(
+        test.config.state_read().subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI),
+        "DGNA via CMCE must affiliate the GSSI in the subscriber registry"
+    );
+}
+
+/// DGNA aimed at an unregistered terminal is refused: nothing is sent over the air.
+#[test]
+fn test_dgna_to_unregistered_issi_is_refused() {
+    debug::setup_logging_verbose();
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+    test.populate_entities(vec![], vec![TetraEntity::Mle]);
+    let (dispatcher, endpoint) = make_control_link();
+    let mm = MmBs::new(test.get_shared_config(), None, Some(endpoint));
+    test.register_entity(mm);
+
+    // No registration first — the command must be dropped, emitting no group identity PDU.
+    dispatcher.send(ControlCommand::Dgna { issi: 9_999_001, gssi: 100, attach: true });
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+
+    assert!(find_attach_detach(&msgs).is_none(), "DGNA to an unregistered ISSI must not emit a group identity PDU");
+}
 
 #[test]
 fn test_u_mm_status_energy_saving() {

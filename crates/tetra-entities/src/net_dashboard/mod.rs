@@ -1,3 +1,4 @@
+pub mod callsign;
 pub mod html;
 pub mod radioid;
 pub mod server;

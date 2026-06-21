@@ -1703,6 +1703,9 @@ impl TetraEntityTrait for UmacBs {
         // Check for UL inactivity (stuck transmitter detection)
         self.check_ul_inactivity(queue);
 
+        // Feed the health monitor's Congestion domain: current downlink scheduling backlog.
+        crate::health::registry().set_dl_queue_depth(self.channel_scheduler.dl_queue_depth());
+
         // Collect/construct traffic that should be sent down to the LMAC
         // This is basically the _previous_ timeslot
         let elem = self.channel_scheduler.finalize_ts_for_tick();

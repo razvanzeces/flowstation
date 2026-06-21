@@ -9,6 +9,7 @@ use tetra_pdus::cmce::pdus::u_setup::USetup;
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 use tetra_saps::control::enums::communication_type::CommunicationType;
+use tetra_saps::control::call_control::CallControl;
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 
@@ -47,8 +48,14 @@ fn register_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
     test.dump_sinks();
 }
 
-/// Helper: build a U-SETUP SAP message for a group call.
+/// Helper: build a U-SETUP SAP message for a group call (ordinary priority 0).
 fn build_u_setup_msg(calling_issi: u32, dest_gssi: u32) -> SapMsg {
+    build_u_setup_msg_prio(calling_issi, dest_gssi, 0)
+}
+
+/// Helper: build a U-SETUP SAP message for a group call with an explicit ETSI call priority
+/// (0..=15; 15 = emergency). Used to exercise emergency / pre-emptive call handling.
+fn build_u_setup_msg_prio(calling_issi: u32, dest_gssi: u32, call_priority: u8) -> SapMsg {
     let u_setup = USetup {
         area_selection: 0,
         hook_method_selection: false,
@@ -61,7 +68,7 @@ fn build_u_setup_msg(calling_issi: u32, dest_gssi: u32) -> SapMsg {
             speech_service: Some(0),
         },
         request_to_transmit_send_data: false,
-        call_priority: 0,
+        call_priority,
         clir_control: 0,
         called_party_type_identifier: PartyTypeIdentifier::Ssi,
         called_party_ssi: Some(dest_gssi as u64),
@@ -117,6 +124,113 @@ fn count_d_setups(msgs: &[SapMsg]) -> usize {
                     if prim.chan_alloc.as_ref().is_some_and(|ca| ca.usage.is_some()))
         })
         .count()
+}
+
+/// Emergency pre-emption (ETSI EN 300 392-2 clause 14.8 "Call priority"): when every traffic
+/// channel is busy with ordinary-priority calls, an incoming emergency (priority 15) group call
+/// pre-empts the lowest-priority active call to obtain a channel. We assert the cell first fills
+/// its three traffic slots (TS2..TS4), then that the emergency set-up both tears an existing call
+/// down (`CallControl::CallEnded` toward UMAC) and opens a fresh circuit for itself
+/// (`CallControl::Open`), leaving the cell still fully utilised by the freed slot.
+#[test]
+fn test_emergency_call_preempts_when_cell_full() {
+    let config = ComponentTest::get_default_test_config(StackMode::Bs);
+    let mut test = ComponentTest::from_config(config, None);
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+
+    // Three distinct talkgroups, each with a registered listener, will fill TS2..TS4.
+    let gssis = [101u32, 102, 103];
+    for (i, &g) in gssis.iter().enumerate() {
+        register_subscriber(&mut test, 2_000_001 + i as u32, g);
+    }
+    // A fourth (emergency) talkgroup with its own listener — no free slot remains for it.
+    let emergency_gssi = 199u32;
+    register_subscriber(&mut test, 2_000_099, emergency_gssi);
+
+    // Fill the three traffic channels with ordinary-priority (priority 0) group calls.
+    for (i, &g) in gssis.iter().enumerate() {
+        test.submit_message(build_u_setup_msg_prio(3_000_001 + i as u32, g, 0));
+        test.run_stack(Some(1));
+    }
+    test.dump_sinks(); // discard the set-up traffic for the three ordinary calls
+
+    assert_eq!(
+        test.config.state_read().timeslot_alloc.free_count(),
+        0,
+        "expected the cell to be full (0 free slots) after three group calls"
+    );
+
+    // Incoming EMERGENCY group call (priority 15) on the fourth GSSI — must pre-empt to proceed.
+    test.submit_message(build_u_setup_msg_prio(3_000_099, emergency_gssi, 15));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+
+    // A victim call is torn down (CallEnded toward UMAC) and the emergency call opens its own
+    // circuit (Open). Both being present proves pre-emption happened and the emergency was admitted.
+    let call_ended = msgs
+        .iter()
+        .filter(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::CallEnded { .. })))
+        .count();
+    let opened = msgs
+        .iter()
+        .filter(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::Open(_))))
+        .count();
+
+    assert!(
+        call_ended >= 1,
+        "emergency call should have pre-empted (torn down) at least one active call; saw none"
+    );
+    assert!(
+        opened >= 1,
+        "emergency call should have opened its own traffic circuit after pre-emption"
+    );
+    // The cell remains fully utilised: the victim freed a slot, the emergency call took it.
+    assert_eq!(
+        test.config.state_read().timeslot_alloc.free_count(),
+        0,
+        "emergency call should occupy the slot freed by pre-emption"
+    );
+}
+
+/// Verify a non-pre-emptive (ordinary priority) call does NOT pre-empt when the cell is full:
+/// it is rejected with a D-RELEASE instead, and all three existing calls stay up.
+#[test]
+fn test_ordinary_call_does_not_preempt_when_cell_full() {
+    let config = ComponentTest::get_default_test_config(StackMode::Bs);
+    let mut test = ComponentTest::from_config(config, None);
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+
+    let gssis = [101u32, 102, 103];
+    for (i, &g) in gssis.iter().enumerate() {
+        register_subscriber(&mut test, 2_000_001 + i as u32, g);
+    }
+    let extra_gssi = 199u32;
+    register_subscriber(&mut test, 2_000_099, extra_gssi);
+
+    for (i, &g) in gssis.iter().enumerate() {
+        test.submit_message(build_u_setup_msg_prio(3_000_001 + i as u32, g, 0));
+        test.run_stack(Some(1));
+    }
+    test.dump_sinks();
+
+    // Ordinary-priority (priority 0) group call into a full cell — must NOT pre-empt anything.
+    test.submit_message(build_u_setup_msg_prio(3_000_099, extra_gssi, 0));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+
+    let call_ended = msgs
+        .iter()
+        .filter(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::CallEnded { .. })))
+        .count();
+    assert_eq!(call_ended, 0, "an ordinary-priority call must not pre-empt any active call");
+    // The three original calls are untouched — still no free slot.
+    assert_eq!(test.config.state_read().timeslot_alloc.free_count(), 0);
 }
 
 /// Test that late-entry D-SETUP re-sends are throttled when the previous

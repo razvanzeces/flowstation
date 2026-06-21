@@ -1,5 +1,5 @@
 use tetra_config::bluestation::{
-    CfgCellInfo, CfgNetInfo, CfgPhyIo, CfgRecovery, CfgSecurity, CfgWxService, PhyBackend, StackConfig, StackMode,
+    CfgCellInfo, CfgEmergency, CfgHealth, CfgNetInfo, CfgPhyIo, CfgRecovery, CfgSecurity, CfgWxService, PhyBackend, StackConfig, StackMode,
 };
 use tetra_core::{freqs::FreqInfo, ranges::SortedDisjointSsiRanges};
 
@@ -27,6 +27,8 @@ pub fn default_test_config_bs() -> StackConfig {
         wx_service: CfgWxService::default(),
         recovery: CfgRecovery::default(),
         telegram: None,
+        health: CfgHealth::default(),
+        emergency: CfgEmergency::default(),
     }
 }
 

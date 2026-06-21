@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::sync::{Arc, RwLock};
 use tetra_core::freqs::FreqInfo;
 
-use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, CfgRecovery, CfgSecurity, CfgWxService, PhyBackend, StackState};
+use crate::bluestation::{CfgCellInfo, CfgControl, CfgEmergency, CfgHealth, CfgNetInfo, CfgPhyIo, CfgRecovery, CfgSecurity, CfgWxService, PhyBackend, StackState};
 
 use super::sec_dashboard::CfgDashboard;
 use super::sec_brew::CfgBrew;
@@ -92,6 +92,14 @@ pub struct StackConfig {
 
     /// Telegram alerts configuration (None = no `[telegram_alerts]` section in the config file).
     pub telegram: Option<CfgTelegram>,
+
+    /// Lite stack-health monitor configuration. Always present (defaults: monitor ON, watchdog
+    /// restart OFF).
+    pub health: CfgHealth,
+
+    /// Emergency-state handling. Always present (defaults: LOCAL-only — no Brew forward,
+    /// telegram_alert ON, clear_timeout_secs 30). See [`CfgEmergency`].
+    pub emergency: CfgEmergency,
 }
 
 impl StackConfig {
@@ -290,6 +298,9 @@ impl SharedConfig {
                 alert_lip: o.alert_lip,
                 alert_backhaul: o.alert_backhaul,
                 alert_critical_logs: o.alert_critical_logs,
+                // Health alerts aren't part of the dashboard live-edit override yet — take the
+                // base config value so the field is always populated.
+                alert_health: base.alert_health,
             }
         } else {
             base

@@ -15,6 +15,8 @@ use super::sec_dashboard::{CfgDashboardDto, apply_dashboard_patch};
 use super::sec_security::{CfgSecurityDto, apply_security_patch};
 use super::sec_wx::{CfgWxServiceDto, apply_wx_service_patch};
 use super::sec_recovery::{CfgRecoveryDto, apply_recovery_patch};
+use super::sec_emergency::{CfgEmergencyDto, apply_emergency_patch};
+use super::sec_health::{CfgHealthDto, apply_health_patch};
 use super::sec_telemetry::{CfgTelemetryDto, apply_telemetry_patch};
 use super::sec_telegram::{CfgTelegramDto, apply_telegram_patch};
 use super::{PhyIoDto, phy_dto_to_cfg};
@@ -130,6 +132,18 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
             return Err(format!("Unrecognized fields in recovery config: {:?}", sorted_keys(&recovery.extra)).into());
         }
 
+    // Optional health section — reject typos so a mis-spelled watchdog/threshold key is caught.
+    if let Some(ref health) = root.health
+        && !health.extra.is_empty() {
+            return Err(format!("Unrecognized fields in health config: {:?}", sorted_keys(&health.extra)).into());
+        }
+
+    // Optional emergency section — reject typos so a mis-spelled toggle isn't silently ignored.
+    if let Some(ref emergency) = root.emergency
+        && !emergency.extra.is_empty() {
+            return Err(format!("Unrecognized fields in emergency config: {:?}", sorted_keys(&emergency.extra)).into());
+        }
+
     // Build cell config, then inject the separately-parsed neighbor cells and sds_command_control
     let mut cell_cfg = cell_dto_to_cfg(root.cell_info);
     cell_cfg.neighbor_cells_ca = neighbor_cells_ca;
@@ -166,6 +180,8 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         wx_service: apply_wx_service_patch(root.wx_service.unwrap_or_default()),
         recovery: apply_recovery_patch(root.recovery.unwrap_or_default()),
         telegram: None,
+        health: apply_health_patch(root.health.unwrap_or_default()),
+        emergency: apply_emergency_patch(root.emergency.unwrap_or_default()),
     };
 
     if let Some(brew) = root.brew {
@@ -237,6 +253,8 @@ struct TomlConfigRoot {
     recovery: Option<CfgRecoveryDto>,
     #[serde(rename = "telegram_alerts")]
     telegram_alerts: Option<CfgTelegramDto>,
+    health: Option<CfgHealthDto>,
+    emergency: Option<CfgEmergencyDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,
@@ -340,11 +358,26 @@ max_replay_attempts = 150
 replay_per_frame = 1
 debounce_secs = 5
 max_cached_issis = 1024
+
+[health]
+enabled = true
+snapshot_interval_secs = 5
+restart_on_core_stall = false
+core_stall_secs = 10
+restart_after_critical_secs = 30
+restart_cooldown_secs = 600
+radios_silent_secs = 900
+dl_queue_degraded = 64
+dl_queue_critical = 192
+sds_queue_degraded = 32
+sds_queue_critical = 128
 "#;
         let cfg = from_toml_str(toml)
             .unwrap_or_else(|e| panic!("documented optional blocks must parse when uncommented: {e}"));
         assert!(cfg.recovery.enabled);
         assert_eq!(cfg.recovery.max_replay_attempts, 150);
+        assert!(cfg.health.enabled);
+        assert_eq!(cfg.health.core_stall_secs, 10);
     }
 
     fn minimal_toml(extra_cell: &str) -> String {

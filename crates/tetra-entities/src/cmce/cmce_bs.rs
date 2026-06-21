@@ -137,6 +137,28 @@ impl CmceBs {
                 state.live_sds_queue.clear();
                 tracing::info!("CMCE: ClearLiveSds removed={}", n);
             }
+            ControlCommand::ClearEmergency { issi } => {
+                tracing::info!("CMCE: ClearEmergency issi={} (operator)", issi);
+                sds.clear_emergency_command(issi);
+            }
+            ControlCommand::Dgna { issi, gssi, attach } => {
+                // The dashboard control channel terminates at CMCE, but DGNA is a Mobility
+                // Management procedure — group attach/detach state and the D-ATTACH/DETACH GROUP
+                // IDENTITY send path both live in MM. Forward the request there.
+                use tetra_core::Sap;
+                tracing::info!(
+                    "CMCE: forwarding DGNA {} of GSSI {} on ISSI {} to MM",
+                    if attach { "assign" } else { "deassign" },
+                    gssi,
+                    issi
+                );
+                queue.push_back(tetra_saps::SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Mm,
+                    msg: SapMsgInner::MmDgnaRequest { issi, gssi, attach },
+                });
+            }
             _ => {
                 tracing::warn!("CMCE: ignoring unsupported control command {:?}", cmd);
             }

@@ -197,6 +197,9 @@ impl MessageRouter {
                 }
             }
 
+            // Health watchdog: stamp that the core loop is alive this tick (lock-free atomic).
+            crate::health::registry().note_tick();
+
             // Send tick_start event
             self.tick_start();
 

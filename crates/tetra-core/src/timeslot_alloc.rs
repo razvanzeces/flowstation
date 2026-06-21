@@ -82,4 +82,9 @@ impl TimeslotAllocator {
     pub fn is_free(&self, ts: u8) -> bool {
         self.owner(ts).is_none()
     }
+
+    /// Number of currently unallocated traffic timeslots (TS2..=TS4).
+    pub fn free_count(&self) -> usize {
+        self.owners.iter().filter(|o| o.is_none()).count()
+    }
 }

@@ -894,3 +894,76 @@ fn test_u_status_command_unauthorized_no_reply() {
         "unauthorized U-STATUS to 9999 must be ignored (no reply)"
     );
 }
+
+// ── Emergency status handling ───────────────────────────────────────────────
+// (reuses the existing `build_u_status_msg(src, dest, status: u16)` helper above; the emergency
+//  pre-coded status is raw value 0, ETSI EN 300 392-2 table 14.72.)
+
+fn brew_test_config() -> tetra_config::bluestation::StackConfig {
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.brew = Some(CfgBrew {
+        host: "test.local".into(),
+        port: 3000,
+        tls: false,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_secs(1),
+        jitter_initial_latency_frames: 0,
+        feature_sds_enabled: true,
+        feature_rssi_export: false,
+        whitelisted_ssis: None,
+    });
+    config
+}
+
+/// By default (forward_to_brew = false) an emergency status is LOCAL-only: it must NOT be
+/// forwarded to Brew even with Brew active and the destination not locally registered. A
+/// subsequent NON-emergency status from the same ISSI clears the session and forwards normally,
+/// proving the gate only affects emergency and the normal status path is intact.
+#[test]
+fn test_emergency_status_not_forwarded_to_brew_by_default() {
+    debug::setup_logging_verbose();
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let config = brew_test_config();
+    assert!(!config.emergency.forward_to_brew, "default must be LOCAL-only");
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Brew]);
+
+    // Emergency status (pre-coded status 0) to an unregistered dest (ISSI 9, the emergency address).
+    test.submit_message(build_u_status_msg(1000001, 9, 0));
+    test.run_stack(Some(1));
+    let after_emergency = test.dump_sinks();
+    assert_eq!(
+        count_brew_sds(&after_emergency), 0,
+        "emergency status must NOT be forwarded to Brew when forward_to_brew is false (LOCAL-only)"
+    );
+
+    // A non-emergency status (Network/User-Specific) from the same ISSI clears the session and
+    // forwards normally.
+    test.submit_message(build_u_status_msg(1000001, 9, 0x8001));
+    test.run_stack(Some(1));
+    let after_normal = test.dump_sinks();
+    assert!(
+        count_brew_sds(&after_normal) > 0,
+        "a non-emergency status to an unregistered dest must still forward to Brew"
+    );
+}
+
+/// With forward_to_brew = true the operator opts the emergency status back into Brew forwarding.
+#[test]
+fn test_emergency_status_forwarded_to_brew_when_opted_in() {
+    debug::setup_logging_verbose();
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = brew_test_config();
+    config.emergency.forward_to_brew = true;
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Brew]);
+
+    test.submit_message(build_u_status_msg(1000001, 9, 0));
+    test.run_stack(Some(1));
+    let after = test.dump_sinks();
+    assert!(
+        count_brew_sds(&after) > 0,
+        "emergency status must be forwarded to Brew when forward_to_brew is true"
+    );
+}

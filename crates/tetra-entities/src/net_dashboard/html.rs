@@ -792,6 +792,12 @@ td code{
 .badge-yellow{background:rgba(255,178,36,0.1);color:var(--warn);border-color:rgba(255,178,36,0.3);}
 .badge-dim{background:rgba(100,130,160,0.08);color:var(--text2);border-color:var(--border);}
 .badge-red{background:rgba(255,77,109,0.1);color:var(--danger);border-color:rgba(255,77,109,0.3);}
+/* Emergency call (ETSI call priority 15): solid danger fill + pulsing halo for high visibility. */
+.badge-emergency{background:var(--danger);color:#fff;border-color:var(--danger);font-weight:700;letter-spacing:0.06em;animation:badge-emergency-pulse 1s ease-in-out infinite;}
+@keyframes badge-emergency-pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,77,109,0.55);}50%{box-shadow:0 0 0 4px rgba(255,77,109,0);}}
+/* Active-calls table: tint an emergency call's row and mark it with a danger accent bar. */
+tr.row-emergency td{background:rgba(255,77,109,0.07);}
+tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 
 /* ── Buttons ── */
 .btn{
@@ -1168,6 +1174,14 @@ td code{
   box-shadow:0 0 18px rgba(255,60,80,0.25);
 }
 .ts-block.voice .ts-flash{animation:ts-flash-in 0.08s ease-out;}
+/* Emergency call (ETSI priority 15): danger ring + pulse, on top of the call/voice state. */
+.ts-block.emergency{
+  border-color:var(--danger);
+  box-shadow:0 0 0 1px var(--danger),0 0 18px rgba(255,60,80,0.35);
+  animation:ts-emergency-pulse 1.1s ease-in-out infinite;
+}
+.ts-block.emergency .ts-label,.ts-block.emergency .ts-num{color:var(--danger);}
+@keyframes ts-emergency-pulse{0%,100%{box-shadow:0 0 0 1px var(--danger),0 0 10px rgba(255,60,80,0.2);}50%{box-shadow:0 0 0 1px var(--danger),0 0 22px rgba(255,60,80,0.5);}}
 
 /* number badge top-left */
 .ts-num{
@@ -1704,6 +1718,18 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </span>
         <span class="hw-live" aria-hidden="true"><span class="hw-live-dot"></span></span>
       </div>
+      <div id="health-badge" class="hw-row" style="display:none" title="Station health">
+        <span class="hw-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12h4l2 5 4-12 2 7h2l2-3"/>
+          </svg>
+        </span>
+        <span class="hw-meta">
+          <span class="hw-key">HEALTH</span>
+          <span class="hw-val" id="health-badge-label">—</span>
+        </span>
+      </div>
       <div id="pwr-badge" class="hw-row hw-row--pwr" style="display:none" title="Host system power draw">
         <span class="hw-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -1749,6 +1775,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
     <div class="nav-item" onclick="showPage('rf',this)" id="nav-rf">
       <span class="nav-icon">⚡</span>
       <span class="nav-label" data-i18n="rf">RF</span>
+    </div>
+    <div class="nav-item" onclick="showPage('health',this)" id="nav-health">
+      <span class="nav-icon">🩺</span>
+      <span class="nav-label">HEALTH</span>
     </div>
 
     <div class="nav-section-label" data-i18n-section="manage">MANAGE</div>
@@ -1886,6 +1916,13 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <div data-i18n="fallback_title">FALLBACK CONFIG ACTIVE — Primary config failed to load</div>
       <div id="fallback-reason" style="font-size:11px;font-weight:400;opacity:0.85;margin-top:2px"></div>
     </div>
+  </div>
+
+  <!-- Emergency banner — persistent while >=1 ISSI is in active emergency; populated by JS. -->
+  <div id="emergency-banner" style="display:none;background:var(--danger);color:#fff;padding:10px 18px;font-size:13px;font-weight:700;align-items:center;gap:12px;flex-shrink:0;animation:badge-emergency-pulse 1.2s ease-in-out infinite">
+    <span style="font-size:18px">🆘</span>
+    <span data-i18n="emg_banner_title">EMERGENCY ACTIVE</span>
+    <div id="emergency-banner-list" style="display:flex;flex-wrap:wrap;gap:8px"></div>
   </div>
 
   <!-- Content -->
@@ -2585,6 +2622,28 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
     </div>
 
     <!-- ── SYSTEM ── -->
+    <div class="page" id="page-health">
+      <div style="max-width:1100px">
+        <div id="health-hero" style="display:flex;align-items:center;gap:16px;padding:18px 20px;border-radius:14px;border:1px solid var(--border,#2a2f3a);background:var(--bg2,#161a22);margin-bottom:18px">
+          <div id="health-hero-dot" style="width:44px;height:44px;border-radius:50%;flex:0 0 auto;background:#3a3f4a"></div>
+          <div style="flex:1;min-width:0">
+            <div id="health-hero-title" style="font-size:22px;font-weight:700;color:var(--text)">Station health</div>
+            <div id="health-hero-sub" style="font-size:14px;color:var(--text2,#9aa4b2);margin-top:3px">Waiting for the first health snapshot…</div>
+          </div>
+          <div style="text-align:right;color:var(--text2,#9aa4b2);font-size:13px;flex:0 0 auto">
+            <div id="health-uptime">—</div>
+            <div id="health-action" style="margin-top:4px"></div>
+          </div>
+        </div>
+        <div id="health-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px"></div>
+        <div style="margin-top:16px;font-size:12px;color:var(--text2,#9aa4b2);line-height:1.6">
+          Auto-refreshes every few seconds. Levels:
+          <b style="color:#3fb950">OK</b> · <b style="color:var(--warn)">DEGRADED</b> · <b style="color:var(--danger)">CRITICAL</b>.
+          The software watchdog (auto-restart when the core loop stalls) is configured in the <code>[health]</code> section.
+        </div>
+      </div>
+    </div>
+
     <div class="page" id="page-system">
       <!-- BTS + Brew status -->
       <div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
@@ -2772,6 +2831,30 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   </div>
 </div>
 
+<!-- ── DGNA Modal (Dynamic Group Number Assignment) ── -->
+<div class="modal-overlay" id="dgna-modal">
+  <div class="modal">
+    <div class="modal-title" data-i18n="dgna_modal_title">⬡ Dynamic Group Assignment</div>
+    <div class="form-row">
+      <label class="form-label" data-i18n="dgna_issi">Terminal ISSI</label>
+      <input type="number" id="dgna-issi" class="form-input" readonly>
+    </div>
+    <div class="form-row">
+      <label class="form-label" data-i18n="dgna_current">Current groups</label>
+      <div id="dgna-current" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;align-items:center">—</div>
+    </div>
+    <div class="form-row">
+      <label class="form-label" data-i18n="dgna_gssi">Group (GSSI)</label>
+      <input type="number" id="dgna-gssi" class="form-input" placeholder="e.g. 100" min="1">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeDgnaModal()" data-i18n="cancel">Cancel</button>
+      <button class="btn btn-danger" onclick="sendDgna(false)" data-i18n="dgna_deassign">Deassign</button>
+      <button class="btn btn-primary" onclick="sendDgna(true)" data-i18n="dgna_assign">Assign</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Update Modal ── -->
 <div class="modal-overlay" id="update-modal">
   <div class="modal">
@@ -2839,8 +2922,10 @@ const LANGS={
     last_heard_title:'Last Heard',no_activity:'No activity yet',
     act_call_group:'Group Call',act_call_individual:'P2P Call',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
-    call_group:'GROUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
+    call_group:'GROUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'EMERGENCY',
+    emg_banner_title:'EMERGENCY ACTIVE',emg_clear:'Clear',confirm_clear_emergency:'Clear emergency for ISSI {issi}?',
     confirm_kick:'Kick ISSI {issi}?\nTerminal will be deregistered and forced to re-attach.',
+    dgna:'DGNA',dgna_title:'Dynamic group assignment',dgna_modal_title:'⬡ Dynamic Group Assignment',dgna_issi:'Terminal ISSI',dgna_current:'Current groups',dgna_gssi:'Group (GSSI)',dgna_assign:'Assign',dgna_deassign:'Deassign',
     confirm_restart:'Restart FlowStation?\nAll active calls will be dropped.',
     confirm_shutdown:'Shutdown FlowStation?\nThe service will stop and must be restarted manually.',
     confirm_logout:'Log out?',
@@ -2937,8 +3022,10 @@ const LANGS={
     last_heard_title:'Ultima Activitate',no_activity:'Nicio activitate încă',
     act_call_group:'Apel Grup',act_call_individual:'Apel P2P',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
-    call_group:'GRUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
+    call_group:'GRUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'URGENȚĂ',
+    emg_banner_title:'URGENȚĂ ACTIVĂ',emg_clear:'Anulează',confirm_clear_emergency:'Anulezi urgența pentru ISSI {issi}?',
     confirm_kick:'Kick ISSI {issi}?\nTerminalul va fi deînregistrat și forțat să se reconecteze.',
+    dgna:'DGNA',dgna_title:'Atribuire dinamică de grup',dgna_modal_title:'⬡ Atribuire dinamică de grup',dgna_issi:'ISSI terminal',dgna_current:'Grupuri curente',dgna_gssi:'Grup (GSSI)',dgna_assign:'Atribuie',dgna_deassign:'Retrage',
     confirm_restart:'Repornire FlowStation?\nToate apelurile active vor fi întrerupte.',
     confirm_shutdown:'Oprire FlowStation?\nServiciul se va opri și trebuie repornit manual.',
     confirm_logout:'Deconectare?',
@@ -3028,8 +3115,10 @@ const LANGS={
     last_heard_title:'Zuletzt Gehört',no_activity:'Noch keine Aktivität',
     act_call_group:'Gruppenruf',act_call_individual:'P2P-Ruf',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Entfernen',sds:'SDS',
-    call_group:'GRUPPE',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
+    call_group:'GRUPPE',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'NOTRUF',
+    emg_banner_title:'NOTFALL AKTIV',emg_clear:'Löschen',confirm_clear_emergency:'Notfall für ISSI {issi} löschen?',
     confirm_kick:'ISSI {issi} entfernen?\nDas Terminal wird abgemeldet und zur Neuanmeldung gezwungen.',
+    dgna:'DGNA',dgna_title:'Dynamische Gruppenzuweisung',dgna_modal_title:'⬡ Dynamische Gruppenzuweisung',dgna_issi:'Terminal-ISSI',dgna_current:'Aktuelle Gruppen',dgna_gssi:'Gruppe (GSSI)',dgna_assign:'Zuweisen',dgna_deassign:'Entfernen',
     confirm_restart:'FlowStation neu starten?\nAlle aktiven Anrufe werden beendet.',
     confirm_shutdown:'FlowStation herunterfahren?\nDer Dienst wird gestoppt und muss manuell neu gestartet werden.',
     confirm_logout:'Abmelden?',
@@ -3097,8 +3186,10 @@ const LANGS={
     last_heard_title:'Última Actividad',no_activity:'Sin actividad aún',
     act_call_group:'Llamada Grupo',act_call_individual:'Llamada P2P',act_sds:'SDS',
     online_badge:'EN LÍNEA',kick:'Expulsar',sds:'SDS',
-    call_group:'GRUPO',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
+    call_group:'GRUPO',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'EMERGENCIA',
+    emg_banner_title:'EMERGENCIA ACTIVA',emg_clear:'Borrar',confirm_clear_emergency:'¿Borrar emergencia para ISSI {issi}?',
     confirm_kick:'¿Expulsar ISSI {issi}?\nEl terminal será desregistrado y forzado a reconectarse.',
+    dgna:'DGNA',dgna_title:'Asignación dinámica de grupo',dgna_modal_title:'⬡ Asignación dinámica de grupo',dgna_issi:'ISSI del terminal',dgna_current:'Grupos actuales',dgna_gssi:'Grupo (GSSI)',dgna_assign:'Asignar',dgna_deassign:'Quitar',
     confirm_restart:'¿Reiniciar FlowStation?\nTodas las llamadas activas se interrumpirán.',
     confirm_shutdown:'¿Apagar FlowStation?\nEl servicio se detendrá y deberá reiniciarse manualmente.',
     confirm_logout:'¿Cerrar sesión?',
@@ -3161,8 +3252,10 @@ const LANGS={
     last_heard_title:'Utoljára hallott',no_activity:'Még nincs tevékenység',
     act_call_group:'Csoportos hívás',act_call_individual:'P2P hívás',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kizárás',sds:'SDS',
-    call_group:'CSOPORT',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
+    call_group:'CSOPORT',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'VÉSZHÍVÁS',
+    emg_banner_title:'VÉSZHELYZET AKTÍV',emg_clear:'Törlés',confirm_clear_emergency:'Vészhelyzet törlése ISSI {issi}?',
     confirm_kick:'ISSI {issi} kizárása?\nA terminál törlésre kerül és újra kell csatlakoznia.',
+    dgna:'DGNA',dgna_title:'Dinamikus csoport-hozzárendelés',dgna_modal_title:'⬡ Dinamikus csoport-hozzárendelés',dgna_issi:'Terminál ISSI',dgna_current:'Jelenlegi csoportok',dgna_gssi:'Csoport (GSSI)',dgna_assign:'Hozzárendel',dgna_deassign:'Eltávolít',
     confirm_restart:'Újraindítja a FlowStation-t?\nAz összes aktív hívás megszakad.',
     confirm_shutdown:'Leállítja a FlowStation-t?\nA szolgáltatást kézzel kell újraindítani.',
     confirm_logout:'Kijelentkezik?',
@@ -3227,8 +3320,10 @@ const LANGS={
     last_heard_title:'最近通话记录',no_activity:'暂无活动记录',
     act_call_group:'组呼',act_call_individual:'点对点',act_sds:'SDS',
     online_badge:'在线',kick:'踢下线',sds:'SDS',
-    call_group:'组呼',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',
+    call_group:'组呼',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'紧急呼叫',
+    emg_banner_title:'紧急状态激活',emg_clear:'清除',confirm_clear_emergency:'清除 ISSI {issi} 的紧急状态？',
     confirm_kick:'确定踢下 ISSI {issi}？\n终端将被注销并强制重新注册。',
+    dgna:'DGNA',dgna_title:'动态组分配',dgna_modal_title:'⬡ 动态组分配',dgna_issi:'终端 ISSI',dgna_current:'当前组',dgna_gssi:'组 (GSSI)',dgna_assign:'分配',dgna_deassign:'移除',
     confirm_restart:'确定重启 FlowStation？\n所有正在进行的通话将被中断。',
     confirm_shutdown:'确定关闭 FlowStation？\n服务将停止，需要手动重启。',
     confirm_logout:'确定注销吗？',
@@ -3262,7 +3357,7 @@ function applyLang(){
     const el=document.querySelector(`#nav-${p} .nav-label`);
     if(el)el.textContent=t(p);
   });
-  renderStations();renderCalls();renderLastHeard();
+  renderStations();renderCalls();renderLastHeard();renderEmergencyBanner();
 }
 function setLang(l,btn){
   currentLang=l;localStorage.setItem('fs_lang',l);
@@ -3677,14 +3772,15 @@ async function wifiCall(url, body){
 function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
 
 // ── State + WS ────────────────────────────────────────────────────────────
-let ws=null,state={ms:{},calls:{},lastHeard:[],sdsLog:[],brewOnline:false,brewVer:0},sdsDest=0;
+let ws=null,state={ms:{},calls:{},emergencies:{},lastHeard:[],sdsLog:[],brewOnline:false,brewVer:0},sdsDest=0;
 
 // ── RadioID callsigns (indicativ) ──────────────────────────────────────────────
-// issi -> "CALLSIGN" (found) | "" (looked up, none). A missing key means unresolved.
+// issi -> {cs:"CALLSIGN", fl:"🇷🇴"} (found; fl is the country flag emoji from the prefix, or "")
+//       | "" (looked up, none). A missing key means unresolved.
 let callsigns={};
 let _csInflight=false;
-// Render an ISSI with its RadioID callsign appended, when known.
-function idCell(issi){const cs=callsigns[issi];return cs?`<code>${issi}</code> <span class="callsign">${cs}</span>`:`<code>${issi}</code>`;}
+// Render an ISSI with its RadioID callsign (and country flag, when known) appended.
+function idCell(issi){const c=callsigns[issi];if(!c||!c.cs)return `<code>${issi}</code>`;const fl=c.fl?c.fl+' ':'';return `<code>${issi}</code> <span class="callsign">${fl}${c.cs}</span>`;}
 // Resolve callsigns for every ISSI currently on screen we have not looked up yet. On-demand: the
 // server fetches unknowns from RadioID in the background and caches them locally; pending IDs are
 // omitted from the response and retried on the next tick. Found/absent results are cached here.
@@ -3695,12 +3791,13 @@ function refreshCallsigns(){
   Object.values(state.calls).forEach(c=>{if(c.caller_issi)ids.add(c.caller_issi);if(c.called_issi&&c.call_type!=='group')ids.add(c.called_issi);if(c.active_speaker)ids.add(c.active_speaker);});
   state.lastHeard.forEach(e=>{if(e.issi)ids.add(e.issi);});
   (state.sdsLog||[]).forEach(e=>{if(e.source_issi)ids.add(e.source_issi);if(e.dest_issi&&!e.is_group)ids.add(e.dest_issi);});
+  Object.values(state.emergencies||{}).forEach(e=>{if(e.issi)ids.add(e.issi);});
   const unknown=[...ids].filter(id=>id&&callsigns[id]===undefined).slice(0,256);
   if(!unknown.length)return;
   _csInflight=true;
   fetch('/api/callsigns?ids='+unknown.join(','))
     .then(r=>r.ok?r.json():{})
-    .then(d=>{let changed=false;for(const k in d){if(callsigns[k]!==d[k]){callsigns[k]=d[k];changed=true;}}if(changed){renderStations();renderCalls();renderLastHeard();renderSdsLog();}})
+    .then(d=>{let changed=false;for(const k in d){if(callsigns[k]!==d[k]){callsigns[k]=d[k];changed=true;}}if(changed){renderStations();renderCalls();renderLastHeard();renderSdsLog();renderEmergencyBanner();}})
     .catch(()=>{})
     .finally(()=>{_csInflight=false;});
 }
@@ -3716,6 +3813,26 @@ function showFallbackBanner(reason){
   const reasonEl=document.getElementById('fallback-reason');
   if(reasonEl)reasonEl.textContent=reason;
 }
+
+// Persistent emergency banner — shown while >=1 ISSI is in active emergency. Each active ISSI
+// gets a chip with a Clear button (operator clear). Driven by state.emergencies.
+function renderEmergencyBanner(){
+  const b=document.getElementById('emergency-banner'),list=document.getElementById('emergency-banner-list');
+  if(!b||!list)return;
+  const titleEl=b.querySelector('[data-i18n="emg_banner_title"]');
+  if(titleEl)titleEl.textContent=t('emg_banner_title');
+  const arr=Object.values(state.emergencies||{});
+  if(!arr.length){b.style.display='none';list.innerHTML='';return;}
+  b.style.display='flex';
+  list.innerHTML=arr.sort((a,b)=>a.issi-b.issi).map(e=>{
+    // callsigns[issi] is an object {cs, fl} (see idCell/tsIssiText), not a string.
+    const c=callsigns[e.issi];
+    const fl=(c&&c.fl)?c.fl+' ':'';
+    const who=(c&&c.cs)?(e.issi+' · '+fl+c.cs):(''+e.issi);
+    return `<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.18);border-radius:4px;padding:2px 8px"><code style="color:#fff">${who}</code><button onclick="clearEmergency(${e.issi})" style="padding:1px 7px;background:#fff;color:var(--danger);border:none;border-radius:3px;font-weight:600;cursor:pointer;font-size:11px">${t('emg_clear')}</button></span>`;
+  }).join('');
+}
+function clearEmergency(issi){if(!confirm(t('confirm_clear_emergency',{issi})))return;wsSend({type:'emergency_clear',issi});}
 
 function setBrewStatus(online,version){
   state.brewOnline=online;state.brewVer=version||0;
@@ -3766,7 +3883,8 @@ function connect(){
 function handleMsg(msg){
   switch(msg.type){
     case 'snapshot':
-      state.ms={};state.calls={};state.lastHeard=msg.last_heard||[];
+      state.ms={};state.calls={};state.emergencies={};state.lastHeard=msg.last_heard||[];
+      (msg.emergencies||[]).forEach(e=>{state.emergencies[e.issi]={...e};});
       (msg.ms||[]).forEach(m=>{state.ms[m.issi]={...m,_last_seen_ts:Date.now()-(m.last_seen_secs_ago||0)*1000,energy_saving_mode:m.energy_saving_mode||0};});
       (msg.calls||[]).forEach(c=>{
         state.calls[c.call_id]={...c,started_at:Date.now()-(c.started_secs_ago||0)*1000};
@@ -3784,7 +3902,8 @@ function handleMsg(msg){
       if(msg.last_tx_quality){handleTxQuality(msg.last_tx_quality);}
       if(msg.last_sdr_health){handleSdrHealth(msg.last_sdr_health);}
       if(msg.last_sys_health){handleSysHealth(msg.last_sys_health);}
-      renderAll();refreshCallsigns();break;
+      if(msg.health){handleHealth(msg.health);}
+      renderAll();renderEmergencyBanner();refreshCallsigns();break;
     case 'brew_status':
       setBrewStatus(!!msg.connected,msg.brew_version||0);break;
     case 'ms_registered':
@@ -3862,6 +3981,13 @@ function handleMsg(msg){
     case 'tx_quality':handleTxQuality(msg);break;
     case 'sdr_health':handleSdrHealth(msg);break;
     case 'sys_health':handleSysHealth(msg);break;
+    case 'emergency_added':
+      state.emergencies[msg.issi]={issi:msg.issi,dest_ssi:msg.dest_ssi,started_secs_ago:0};
+      renderEmergencyBanner();renderStations();break;
+    case 'emergency_removed':
+      delete state.emergencies[msg.issi];
+      renderEmergencyBanner();renderStations();break;
+    case 'health':handleHealth(msg);break;
   }
 }
 
@@ -3967,6 +4093,8 @@ function updateTsBlocks(){
       block.className='ts-block call';
       sub.textContent=lines.bottom||(st.sub||'Alloc');
     }
+    // Emergency call (ETSI priority 15): overlay the danger ring on the call/voice state.
+    if((st.priority||0)>=15)block.classList.add('emergency');
     if(timer){
       const elapsed=Math.floor((now-(st.started_at||now))/1000);
       timer.textContent=elapsed>0?formatDur(elapsed):'';
@@ -3989,8 +4117,10 @@ function formatDur(s){
 // Render an ISSI + its RadioID callsign (indicativ) compactly for the TS sub-line.
 function tsIssiText(issi){
   if(!issi)return '';
-  const cs=callsigns[issi];
-  return cs?(issi+' · '+cs):(''+issi);
+  const c=callsigns[issi];
+  if(!c||!c.cs)return ''+issi;
+  const fl=c.fl?c.fl+' ':'';
+  return issi+' · '+fl+c.cs;
 }
 // Compute the two text lines for an active timeslot from its call state:
 //   top    → GSSI (talkgroup number) for group calls, else the called ISSI / P2P
@@ -4011,7 +4141,7 @@ function tsSetCall(ts, call){
     call_id:call.call_id, call_type:call.call_type,
     gssi:call.gssi, called_issi:call.called_issi, caller_issi:call.caller_issi,
     speaker_issi:call.active_speaker||call.speaker_issi||call.caller_issi,
-    simplex:call.simplex, sub:call.sub,
+    simplex:call.simplex, sub:call.sub, priority:call.priority||0,
     voice_ts:null, started_at:Date.now()
   };
 }
@@ -4078,13 +4208,14 @@ function renderStations(){
       grps='<span class="badge badge-dim">—</span>';
     }
     const ls=m._last_seen_ts?Math.floor((Date.now()-m._last_seen_ts)/1000):m.last_seen_secs_ago;
-    return`<tr>
-      <td>${idCell(m.issi)}</td><td>${grps}</td>
+    const emg=!!state.emergencies[m.issi];
+    return`<tr${emg?' class="row-emergency"':''}>
+      <td>${emg?'<span class="badge badge-emergency">'+t('call_emergency')+'</span> ':''}${idCell(m.issi)}</td><td>${grps}</td>
       <td class="col-mobile-hide">${eeLabel(m.energy_saving_mode||0)}</td>
       <td><div class="rssi-bar"><div class="rssi-track"><div class="rssi-fill" style="width:${pct}%;background:${col}"></div></div><span class="rssi-val" style="color:${col}">${rL}</span></div></td>
       <td><span class="badge badge-green">${t('online_badge')}</span></td>
       <td class="col-mobile-hide">${lastSeenLabel(ls)}</td>
-      <td><button class="btn btn-sm" onclick="openSds(${m.issi})">${t('sds')}</button> <button class="btn btn-sm btn-danger" onclick="kickMs(${m.issi})">${t('kick')}</button></td>
+      <td><button class="btn btn-sm" onclick="openSds(${m.issi})">${t('sds')}</button> <button class="btn btn-sm" onclick="openDgna(${m.issi})" title="${t('dgna_title')}">${t('dgna')}</button> <button class="btn btn-sm btn-danger" onclick="kickMs(${m.issi})">${t('kick')}</button>${emg?` <button class="btn btn-sm btn-danger" onclick="clearEmergency(${m.issi})">${t('emg_clear')}</button>`:''}</td>
     </tr>`;
   }).join('');
 }
@@ -4100,7 +4231,10 @@ function renderCalls(){
     const label=c.call_type==='group'?t('call_group'):(c.simplex?t('call_p2p_s'):t('call_p2p_d'));
     const to=c.call_type==='group'?`GSSI ${c.gssi}`:idCell(c.called_issi);
     const spk=c.active_speaker?idCell(c.active_speaker):'<span style="color:var(--text3)">—</span>';
-    return`<tr><td class="col-mobile-hide"><code>${c.call_id}</code></td><td><span class="badge ${badge}">${label}</span></td><td>${c.caller_issi?idCell(c.caller_issi):'—'}</td><td>${to}</td><td>${spk}</td><td style="font-family:var(--mono);font-size:12px;color:var(--accent2);font-weight:600">${mm}:${ss}</td></tr>`;
+    // Emergency call = ETSI call priority 15 (terminal emergency button). Flag it prominently.
+    const emg=(c.priority||0)>=15;
+    const emgBadge=emg?`<span class="badge badge-emergency">${t('call_emergency')}</span> `:'';
+    return`<tr${emg?' class="row-emergency"':''}><td class="col-mobile-hide"><code>${c.call_id}</code></td><td>${emgBadge}<span class="badge ${badge}">${label}</span></td><td>${c.caller_issi?idCell(c.caller_issi):'—'}</td><td>${to}</td><td>${spk}</td><td style="font-family:var(--mono);font-size:12px;color:var(--accent2);font-weight:600">${mm}:${ss}</td></tr>`;
   }).join('');
 }
 
@@ -4387,6 +4521,9 @@ function kickMs(issi){if(!confirm(t('confirm_kick',{issi})))return;wsSend({type:
 function openSds(issi){sdsDest=issi;document.getElementById('sds-dest').value=issi;document.getElementById('sds-msg').value='';document.getElementById('sds-modal').classList.add('open');}
 function closeSdsModal(){document.getElementById('sds-modal').classList.remove('open');}
 function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value),msg=document.getElementById('sds-msg').value.trim();if(!dest||!msg)return;wsSend({type:'sds',dest_issi:dest,message:msg});closeSdsModal();}
+function openDgna(issi){document.getElementById('dgna-issi').value=issi;document.getElementById('dgna-gssi').value='';const cur=document.getElementById('dgna-current');const gl=(state.ms[issi]&&state.ms[issi].groups)||[];cur.innerHTML=gl.length?gl.slice().sort((a,b)=>a-b).map(g=>`<span class="badge badge-blue" style="font-size:10px">${g}</span>`).join(''):'<span class="badge badge-dim">—</span>';document.getElementById('dgna-modal').classList.add('open');}
+function closeDgnaModal(){document.getElementById('dgna-modal').classList.remove('open');}
+function sendDgna(attach){const issi=parseInt(document.getElementById('dgna-issi').value),gssi=parseInt(document.getElementById('dgna-gssi').value);if(!issi||!gssi)return;wsSend({type:'dgna',issi,gssi,attach});closeDgnaModal();}
 
 // ── OTA Update ────────────────────────────────────────────────────────────
 let updatePollTimer=null;
@@ -4946,6 +5083,118 @@ function renderGainList(id, gains){
 // Drives two UI surfaces:
 //   1. The violet PWR badge in the topbar (only shown when total_power_w is known).
 //   2. A sensor grid on the System tab (shown when any sensors are present).
+
+// Plain-English diagnosis + remediation per (domain, level) — the "Looking Glass" advice.
+const HEALTH_ADVICE = {
+  service: {
+    ok: { why: 'The TETRA core loop is processing TDMA frames in real time.', do: [] },
+    degraded: { why: 'Time between TDMA ticks is higher than expected — the SDR/USB link or the CPU is lagging behind real time. Calls still work but timing is tight.',
+      do: ['Check CPU load & temperature on the System tab (or `top`).',
+           'Look for "Too late to produce TX block" / SDR underrun lines in the Log.',
+           'Make sure no other heavy process is starving the BTS (it runs at FIFO priority).'] },
+    critical: { why: 'The stack stopped processing TDMA frames. Calls and SDS will fail and radios may drop. This is the most serious state.',
+      do: ['Check the Log for a panic or repeated SDR errors.',
+           'Restart the service: `systemctl restart <unit>`.',
+           'Enable the software watchdog so this auto-recovers: `[health] restart_on_core_stall = true`.'] },
+  },
+  backhaul: {
+    ok: { why: 'The Brew/TetraPack interconnect is up — calls/SDS route to other cells & BrandMeister.', do: [] },
+    degraded: { why: 'The Brew/TetraPack backhaul is DOWN. The cell still works locally, but calls and SDS to/from other cells or BrandMeister will not route.',
+      do: ['Check network/internet connectivity from the Pi to the Brew server.',
+           'Verify the [brew] host / port / credentials on the Config tab.',
+           'Confirm the Brew server is reachable. The station auto-reconnects when it comes back.'] },
+  },
+  radios: {
+    ok: { why: 'Attached radios are being heard on the air.', do: [] },
+    degraded: { why: 'Registered radios have not transmitted for a while. They may have left coverage without de-registering, or RX has degraded.',
+      do: ['Check the antenna / feedline and the RX gain.',
+           'Confirm the radios are actually in range and powered on.',
+           'Truly-gone radios are pruned automatically at the T351 interval.'] },
+  },
+  congestion: {
+    ok: { why: 'Downlink (MCCH) and SDS queues are draining normally.', do: [] },
+    degraded: { why: 'The downlink or SDS queue is filling faster than it drains — too much signalling/SDS, a flapping radio, or the SDR dropping TX blocks.',
+      do: ['Check the SDS Log for a radio spamming retransmits or a flood of broadcasts.',
+           'Reduce Home-Mode-Display / broadcast-SDS rate if it is heavy.',
+           'Check SDR TX health on the RF tab for dropped blocks.'] },
+    critical: { why: 'The downlink/SDS backlog is severe — grants, signalling and messages will be delayed or dropped.',
+      do: ['Act urgently: identify and kick a misbehaving radio from the Radios tab.',
+           'Check the Log for "Too late to produce TX block" (the SDR can\'t keep up).',
+           'Reduce broadcast/SDS load until the queues drain.'] },
+  },
+};
+function healthColor(lvl){ return lvl==='critical' ? 'var(--danger)' : (lvl==='degraded' ? 'var(--warn)' : '#3fb950'); }
+function healthDomainLabel(d){ return ({service:'Core loop',backhaul:'Backhaul (Brew)',radios:'Radios',congestion:'Congestion'})[d] || d; }
+function healthDomainIcon(d){ return ({service:'🔄',backhaul:'🛰️',radios:'📻',congestion:'📊'})[d] || '•'; }
+function healthDur(s){ s=Math.max(0,Math.floor(s||0)); const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);
+  return d>0 ? (d+'d '+h+'h') : (h>0 ? (h+'h '+m+'m') : (m+'m')); }
+
+function renderHealthTab(h){
+  const grid = document.getElementById('health-grid');
+  if(!grid) return;
+  const overall = h.overall || 'ok';
+  const dot   = document.getElementById('health-hero-dot');
+  const title = document.getElementById('health-hero-title');
+  const sub   = document.getElementById('health-hero-sub');
+  const up    = document.getElementById('health-uptime');
+  const act   = document.getElementById('health-action');
+  if(dot)   dot.style.background = healthColor(overall);
+  if(title) title.textContent = 'Station health: ' + overall.toUpperCase();
+  const bad = (h.domains||[]).filter(function(d){return d.level!=='ok';});
+  if(sub) sub.textContent = bad.length
+      ? (bad.length+' domain(s) need attention: '+bad.map(function(d){return healthDomainLabel(d.domain);}).join(', '))
+      : 'All systems nominal.';
+  if(up)  up.textContent  = (typeof h.uptime_secs==='number') ? ('Uptime '+healthDur(h.uptime_secs)) : '';
+  if(act) act.textContent = h.last_action ? ('Last action: '+h.last_action) : '';
+
+  grid.innerHTML = '';
+  (h.domains||[]).forEach(function(d){
+    const branch = HEALTH_ADVICE[d.domain] || {};
+    const adv = branch[d.level] || branch.degraded || { why:'', do:[] };
+    const col = healthColor(d.level);
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--border,#2a2f3a);border-left:4px solid '+col+';border-radius:12px;padding:14px 16px;background:var(--bg2,#161a22)';
+    let doHtml = '';
+    if(d.level!=='ok' && adv.do && adv.do.length){
+      doHtml = '<div style="margin-top:10px;font-size:13px;color:var(--text)"><b>What to do</b>'
+             + '<ul style="margin:6px 0 0 18px;padding:0;color:var(--text2,#9aa4b2);line-height:1.55">'
+             + adv.do.map(function(x){return '<li>'+escHtml(x)+'</li>';}).join('')
+             + '</ul></div>';
+    }
+    card.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px">'
+        + '<span style="font-size:18px">'+healthDomainIcon(d.domain)+'</span>'
+        + '<span style="font-weight:700;color:var(--text);flex:1">'+escHtml(healthDomainLabel(d.domain))+'</span>'
+        + '<span style="font-size:11px;font-weight:700;letter-spacing:.5px;color:'+col+';border:1px solid '+col+';border-radius:6px;padding:2px 8px">'+(d.level||'').toUpperCase()+'</span>'
+      + '</div>'
+      + '<div style="margin-top:8px;font-size:13px;color:var(--text2,#9aa4b2)"><span style="opacity:.6">Status:</span> '+escHtml(d.detail||'')+'</div>'
+      + (adv.why ? '<div style="margin-top:6px;font-size:13px;color:var(--text2,#9aa4b2);line-height:1.5">'+escHtml(adv.why)+'</div>' : '')
+      + doHtml;
+    grid.appendChild(card);
+  });
+}
+
+function handleHealth(h){
+  // Topbar station-health badge: colour + label by overall level, details in the tooltip.
+  const badge = document.getElementById('health-badge');
+  const lbl   = document.getElementById('health-badge-label');
+  if(!badge || !lbl) return;
+  if(!h || !h.overall){ badge.style.display='none'; return; }
+  const lvl = h.overall; // "ok" | "degraded" | "critical"
+  const color = lvl==='critical' ? 'var(--danger)' : (lvl==='degraded' ? 'var(--warn)' : '#3fb950');
+  lbl.textContent = lvl.toUpperCase();
+  lbl.style.color = color;
+  badge.style.display = 'flex';
+  const bad = (h.domains||[]).filter(function(d){return d.level!=='ok';})
+                             .map(function(d){return '• '+d.domain+': '+d.level+' ('+d.detail+')';});
+  let tip = 'Station health: '+lvl.toUpperCase();
+  tip += bad.length ? '\n'+bad.join('\n') : '\nAll domains nominal';
+  if(h.last_action) tip += '\nAction: '+h.last_action;
+  if(typeof h.uptime_secs==='number') tip += '\nUptime: '+h.uptime_secs+'s';
+  badge.title = tip;
+  // Also refresh the full Health "Looking Glass" tab.
+  renderHealthTab(h);
+}
 
 function handleSysHealth(msg){
   // Topbar badge

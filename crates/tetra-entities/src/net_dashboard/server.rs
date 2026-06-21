@@ -673,6 +673,10 @@ impl DashboardServer {
 
     pub fn handle_telemetry(&self, event: TelemetryEvent) {
         let msg = event_to_ws_msg(&event);
+        // Emergency banner add/remove broadcasts are transition-gated (only on enter/clear, not on
+        // every re-send), so they can't ride the generic `event_to_ws_msg` path. Collect them under
+        // the state lock, then flush after it drops.
+        let mut extra_broadcasts: Vec<String> = Vec::new();
         {
             let mut s = self.state.write().unwrap();
             match &event {
@@ -735,18 +739,26 @@ impl DashboardServer {
                         e.energy_saving_mode = *mode;
                     }
                 }
-                TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi, ts } => {
+                TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi, ts, priority } => {
                     s.calls.insert(*call_id, CallEntry {
                         call_id: *call_id, is_group: true, gssi: *gssi,
                         caller_issi: *caller_issi, called_issi: 0,
                         speaker_issi: Some(*caller_issi), started_at: Instant::now(), simplex: false, ts: *ts,
+                        priority: *priority,
                     });
                     // The caller keyed up on this GSSI, so it's their actively-selected TG (vs the
                     // other scanned/affiliated groups). The browser derives the same thing from the
                     // call_started message; this keeps the snapshot sent to new clients in sync.
                     if let Some(e) = s.ms_map.get_mut(caller_issi) { e.selected_group = Some(*gssi); }
                     s.push_last_heard(*caller_issi, "call_group", *gssi);
-                    s.push_log("INFO", format!("Group call {} started: {} -> GSSI {}", call_id, caller_issi, gssi));
+                    // priority 15 = emergency (ETSI clause 14.8). Flag it in the live log. (The
+                    // persistent emergency banner + Telegram are driven by the emergency-status
+                    // alarm; an emergency-priority CALL is surfaced in the Active Calls table.)
+                    if *priority >= 15 {
+                        s.push_log("WARN", format!("EMERGENCY group call {} started: {} -> GSSI {} (priority {})", call_id, caller_issi, gssi, priority));
+                    } else {
+                        s.push_log("INFO", format!("Group call {} started: {} -> GSSI {}", call_id, caller_issi, gssi));
+                    }
                 }
                 TelemetryEvent::GroupCallEnded { call_id, gssi: _ } => {
                     s.calls.remove(call_id);
@@ -758,14 +770,22 @@ impl DashboardServer {
                     if let Some(e) = s.ms_map.get_mut(speaker_issi) { e.selected_group = Some(*gssi); }
                     s.push_last_heard(*speaker_issi, "call_group", *gssi);
                 }
-                TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex, ts } => {
+                TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex, ts, priority } => {
                     s.calls.insert(*call_id, CallEntry {
                         call_id: *call_id, is_group: false, gssi: 0,
                         caller_issi: *calling_issi, called_issi: *called_issi,
                         speaker_issi: None, started_at: Instant::now(), simplex: *simplex, ts: *ts,
+                        priority: *priority,
                     });
                     s.push_last_heard(*calling_issi, "call_individual", *called_issi);
-                    s.push_log("INFO", format!("P2P call {} started: {} -> {}", call_id, calling_issi, called_issi));
+                    // priority 15 = emergency (ETSI clause 14.8). Flag it in the live log. (The
+                    // persistent emergency banner + Telegram are driven by the emergency-status
+                    // alarm; an emergency-priority CALL is surfaced in the Active Calls table.)
+                    if *priority >= 15 {
+                        s.push_log("WARN", format!("EMERGENCY P2P call {} started: {} -> {} (priority {})", call_id, calling_issi, called_issi, priority));
+                    } else {
+                        s.push_log("INFO", format!("P2P call {} started: {} -> {}", call_id, calling_issi, called_issi));
+                    }
                 }
                 TelemetryEvent::IndividualCallEnded { call_id } => {
                     s.calls.remove(call_id);
@@ -834,9 +854,36 @@ impl DashboardServer {
                         sensors: sensors.clone(),
                     });
                 }
+                TelemetryEvent::HealthSnapshot(h) => {
+                    // Log only when the overall level changes — not on every periodic sample.
+                    if s.last_health.as_ref().map(|p| p.overall) != Some(h.overall) {
+                        s.push_log("INFO", format!("Health: overall {}", h.overall.as_str()));
+                    }
+                    s.last_health = Some(h.clone());
+                }
+                TelemetryEvent::EmergencyAlarm { source_issi, dest_ssi } => {
+                    // ENTER only — re-sends return false and produce no log/broadcast.
+                    if s.emergency_enter(*source_issi, *dest_ssi) {
+                        s.push_log("WARN", format!("EMERGENCY raised by ISSI {} (dest {})", source_issi, dest_ssi));
+                        if let Ok(j) = serde_json::to_string(&serde_json::json!({"type":"emergency_added","issi":source_issi,"dest_ssi":dest_ssi,"started_secs_ago":0})) {
+                            extra_broadcasts.push(j);
+                        }
+                    }
+                }
+                TelemetryEvent::EmergencyCancel { source_issi } => {
+                    if s.emergency_clear(*source_issi) {
+                        s.push_log("WARN", format!("EMERGENCY cleared for ISSI {}", source_issi));
+                        if let Ok(j) = serde_json::to_string(&serde_json::json!({"type":"emergency_removed","issi":source_issi})) {
+                            extra_broadcasts.push(j);
+                        }
+                    }
+                }
             }
         }
         if let Some(json) = msg {
+            self.broadcast(&json);
+        }
+        for json in extra_broadcasts {
             self.broadcast(&json);
         }
         // TsVoiceActivity: rate-limit broadcasts to max 4/sec per TS (250ms cooldown)
@@ -894,14 +941,14 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             serde_json::json!({"type":"ms_rssi","issi":issi,"rssi_dbfs":rssi_dbfs}),
         TelemetryEvent::MsEnergySaving { issi, mode } =>
             serde_json::json!({"type":"ms_energy_saving","issi":issi,"mode":mode}),
-        TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi, ts } =>
-            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"group","gssi":gssi,"caller_issi":caller_issi,"ts":ts,"last_heard":{"issi":caller_issi,"activity":"call_group","dest":gssi}}),
+        TelemetryEvent::GroupCallStarted { call_id, gssi, caller_issi, ts, priority } =>
+            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"group","gssi":gssi,"caller_issi":caller_issi,"ts":ts,"priority":priority,"last_heard":{"issi":caller_issi,"activity":"call_group","dest":gssi}}),
         TelemetryEvent::GroupCallEnded { call_id, gssi: _ } =>
             serde_json::json!({"type":"call_ended","call_id":call_id}),
         TelemetryEvent::GroupCallSpeakerChanged { call_id, gssi, speaker_issi } =>
             serde_json::json!({"type":"speaker_changed","call_id":call_id,"speaker_issi":speaker_issi,"last_heard":{"issi":speaker_issi,"activity":"call_group","dest":gssi}}),
-        TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex, ts } =>
-            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"individual","caller_issi":calling_issi,"called_issi":called_issi,"simplex":simplex,"ts":ts,"last_heard":{"issi":calling_issi,"activity":"call_individual","dest":called_issi}}),
+        TelemetryEvent::IndividualCallStarted { call_id, calling_issi, called_issi, simplex, ts, priority } =>
+            serde_json::json!({"type":"call_started","call_id":call_id,"call_type":"individual","caller_issi":calling_issi,"called_issi":called_issi,"simplex":simplex,"ts":ts,"priority":priority,"last_heard":{"issi":calling_issi,"activity":"call_individual","dest":called_issi}}),
         TelemetryEvent::IndividualCallEnded { call_id } =>
             serde_json::json!({"type":"call_ended","call_id":call_id}),
         TelemetryEvent::BrewConnected { connected, server_version } =>
@@ -950,6 +997,16 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             "total_power_w": total_power_w,
             "sensors": sensors,
         }),
+        TelemetryEvent::HealthSnapshot(h) => serde_json::json!({
+            "type": "health",
+            "overall": h.overall,
+            "domains": h.domains,
+            "last_action": h.last_action,
+            "uptime_secs": h.uptime_secs,
+        }),
+        // Emergency add/remove are broadcast explicitly (transition-gated) from handle_telemetry,
+        // so the generic path stays silent — otherwise every periodic re-send would re-broadcast.
+        TelemetryEvent::EmergencyAlarm { .. } | TelemetryEvent::EmergencyCancel { .. } => return None,
     };
     serde_json::to_string(&v).ok()
 }
@@ -1733,6 +1790,7 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
         let s = state.read().unwrap();
         let ms = s.snapshot_ms();
         let calls = s.snapshot_calls();
+        let emergencies = s.snapshot_emergencies();
         let logs: Vec<_> = s.log_ring.iter().cloned().collect();
         let last_heard: Vec<_> = s.last_heard.iter().cloned().collect();
         let brew_online = s.brew_online;
@@ -1743,15 +1801,17 @@ fn handle_ws(stream: TcpStream, state: DashboardState, clients: WsClients,
         let last_tx_quality = s.last_tx_quality.clone();
         let last_sdr_health = s.last_sdr_health.clone();
         let last_sys_health = s.last_sys_health.clone();
+        let last_health = s.last_health.clone();
         drop(s);
         if let Ok(json) = serde_json::to_string(&serde_json::json!({
-            "type": "snapshot", "ms": ms, "calls": calls, "log": logs,
+            "type": "snapshot", "ms": ms, "calls": calls, "emergencies": emergencies, "log": logs,
             "brew_online": brew_online, "brew_version": brew_version, "last_heard": last_heard,
             "fallback_config_active": fallback_active, "fallback_config_reason": fallback_reason,
             "last_tx_visual": last_tx_visual,
             "last_tx_quality": last_tx_quality,
             "last_sdr_health": last_sdr_health,
             "last_sys_health": last_sys_health,
+            "health": last_health,
         })) {
             let _ = ws.send(Message::Text(json));
         }
@@ -1864,6 +1924,33 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
             let mut s = state.write().unwrap();
             s.push_log("INFO", format!("SDS sent to {}: {}", dest, msg_text));
         }
+        Some("dgna") => {
+            let issi = v.get("issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let gssi = v.get("gssi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let attach = v.get("attach").and_then(|a| a.as_bool()).unwrap_or(true);
+            if issi == 0 || gssi == 0 { return; }
+            let verb = if attach { "assign" } else { "deassign" };
+            tracing::info!("Dashboard: DGNA {} GSSI {} on ISSI {}", verb, gssi, issi);
+            if !send_cmd(ControlCommand::Dgna { issi, gssi, attach }) {
+                tracing::warn!("Dashboard: no control dispatcher for DGNA");
+            }
+            let mut s = state.write().unwrap();
+            s.push_log("INFO", format!("DGNA {} requested: GSSI {} {} ISSI {}",
+                verb, gssi, if attach { "to" } else { "from" }, issi));
+        }
+        Some("emergency_clear") => {
+            let issi = v.get("issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            if issi == 0 { return; }
+            tracing::info!("Dashboard: operator clearing emergency for ISSI {}", issi);
+            // Route to CMCE: it clears the source SDS session (so the emergency does not re-arm on
+            // the radio's next status re-send) and emits EmergencyCancel, which clears the banner
+            // for EVERY connected client via the telemetry round-trip. We deliberately do NOT mutate
+            // dashboard state here — otherwise the round-trip would find nothing to clear and skip
+            // the broadcast to other browsers.
+            if !send_cmd(ControlCommand::ClearEmergency { issi }) {
+                tracing::warn!("Dashboard: no control dispatcher for emergency_clear");
+            }
+        }
         _ => {}
     }
 }
@@ -1898,9 +1985,10 @@ fn serve_update_status(mut stream: TcpStream, update_state: &SharedUpdateState) 
 /// version than the running build exists. Best-effort; on any failure returns
 /// check_failed=true so the dashboard simply hides the badge.
 /// GET /api/callsigns?ids=1,2,3 — resolve ISSIs to RadioID callsigns ("indicative"). Returns a JSON
-/// object `{ "<id>": "CALLSIGN" }` for resolved IDs and `{ "<id>": "" }` for IDs confirmed absent
-/// from RadioID. IDs still being fetched in the background are OMITTED, so the client retries them
-/// on a later poll. Lookups are non-blocking — unknown IDs are queued for background resolution.
+/// object `{ "<id>": {"cs":"CALLSIGN","fl":"🇷🇴"} }` for resolved IDs (`fl` is the country flag emoji
+/// derived from the call-sign prefix, or empty if unknown) and `{ "<id>": "" }` for IDs confirmed
+/// absent from RadioID. IDs still being fetched in the background are OMITTED, so the client retries
+/// them on a later poll. Lookups are non-blocking — unknown IDs are queued for background resolution.
 fn serve_callsigns(
     stream: TcpStream,
     radioid: &crate::net_dashboard::radioid::RadioIdCache,
@@ -1927,7 +2015,11 @@ fn serve_callsigns(
     for id in ids {
         match radioid.get(id) {
             Lookup::Found(cs) => {
-                map.insert(id.to_string(), serde_json::Value::String(cs));
+                let flag = crate::net_dashboard::callsign::callsign_flag(&cs).unwrap_or_default();
+                let mut entry = serde_json::Map::new();
+                entry.insert("cs".to_string(), serde_json::Value::String(cs));
+                entry.insert("fl".to_string(), serde_json::Value::String(flag));
+                map.insert(id.to_string(), serde_json::Value::Object(entry));
             }
             Lookup::NotFound => {
                 map.insert(id.to_string(), serde_json::Value::String(String::new()));

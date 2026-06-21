@@ -30,6 +30,16 @@ pub struct CallState {
     pub started_secs_ago: u64,
     pub simplex: bool,
     pub ts: u8,
+    /// ETSI call priority (0..=15). 15 = emergency call; 12..=15 = pre-emptive priority.
+    pub priority: u8,
+}
+
+/// Active emergency state sent to the dashboard (wire form of `EmergencyEntry`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EmergencyState {
+    pub issi: u32,
+    pub dest_ssi: u32,
+    pub started_secs_ago: u64,
 }
 
 /// Log entry
@@ -67,6 +77,9 @@ pub struct SdsLogEntry {
 pub struct DashboardStateInner {
     pub ms_map: HashMap<u32, MsEntry>,
     pub calls: HashMap<u16, CallEntry>,
+    /// Active emergencies keyed by originating ISSI. Non-empty drives the dashboard emergency
+    /// banner. Populated from the EmergencyAlarm / EmergencyCancel telemetry (emergency status).
+    pub emergencies: HashMap<u32, EmergencyEntry>,
     pub log_ring: std::collections::VecDeque<LogEntry>,
     pub last_heard: std::collections::VecDeque<LastHeardEntry>,
     /// SDS Log ring (chronological, oldest at the front). Backed by an on-disk JSON file.
@@ -89,6 +102,9 @@ pub struct DashboardStateInner {
     pub last_sdr_health: Option<SdrHealthSnapshot>,
     /// Most recent host system health snapshot (temps, voltages, power).
     pub last_sys_health: Option<SysHealthSnapshot>,
+    /// Most recent lite stack-health roll-up (Service/Backhaul/Radios/Congestion). Sent on init
+    /// so the System Health tile paints immediately on connect.
+    pub last_health: Option<crate::health::HealthSnapshot>,
 }
 
 /// Fast-path visual snapshot — spectrum + IQ + RMS/peak. Refreshed several times
@@ -162,6 +178,17 @@ pub struct CallEntry {
     pub started_at: Instant,
     pub simplex: bool,
     pub ts: u8,
+    /// ETSI call priority (0..=15); 15 = emergency. Mirrored from the call-started telemetry.
+    pub priority: u8,
+}
+
+/// One active emergency in the dashboard's live view (keyed by ISSI in `emergencies`). Raised by
+/// an emergency status (U-STATUS) via EmergencyAlarm/EmergencyCancel telemetry.
+#[derive(Debug, Clone)]
+pub struct EmergencyEntry {
+    pub issi: u32,
+    pub dest_ssi: u32,
+    pub started_at: Instant,
 }
 
 pub type DashboardState = Arc<RwLock<DashboardStateInner>>;
@@ -180,6 +207,7 @@ impl DashboardStateInner {
         Self {
             ms_map: HashMap::new(),
             calls: HashMap::new(),
+            emergencies: HashMap::new(),
             log_ring: std::collections::VecDeque::with_capacity(500),
             last_heard: std::collections::VecDeque::with_capacity(LAST_HEARD_MAX + 1),
             sds_log,
@@ -193,6 +221,7 @@ impl DashboardStateInner {
             last_tx_quality: None,
             last_sdr_health: None,
             last_sys_health: None,
+            last_health: None,
         }
     }
 
@@ -277,7 +306,38 @@ impl DashboardStateInner {
             started_secs_ago: c.started_at.elapsed().as_secs(),
             simplex: c.simplex,
             ts: c.ts,
+            priority: c.priority,
         }).collect()
+    }
+
+    pub fn snapshot_emergencies(&self) -> Vec<EmergencyState> {
+        self.emergencies.values().map(|e| EmergencyState {
+            issi: e.issi,
+            dest_ssi: e.dest_ssi,
+            started_secs_ago: e.started_at.elapsed().as_secs(),
+        }).collect()
+    }
+
+    /// Raise (or refresh) an emergency for `issi`. Returns true only on the idle→emergency
+    /// transition, so the caller broadcasts `emergency_added` + logs only once per session.
+    pub fn emergency_enter(&mut self, issi: u32, dest_ssi: u32) -> bool {
+        match self.emergencies.get_mut(&issi) {
+            Some(e) => {
+                if dest_ssi != 0 { e.dest_ssi = dest_ssi; }
+                false
+            }
+            None => {
+                self.emergencies.insert(issi, EmergencyEntry {
+                    issi, dest_ssi, started_at: Instant::now(),
+                });
+                true
+            }
+        }
+    }
+
+    /// Clear an emergency for `issi`. Returns true if one was present (caller broadcasts removal).
+    pub fn emergency_clear(&mut self, issi: u32) -> bool {
+        self.emergencies.remove(&issi).is_some()
     }
 }
 

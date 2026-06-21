@@ -187,6 +187,7 @@ impl CcBsSubentity {
                 calling_usage: usage,
                 called_usage: usage,
                 simplex_duplex,
+                priority: call.priority,
                 state: IndividualCallState::IncomingSetupPending,
                 setup_timer_started: Some(self.dltime),
                 setup_timeout: Some(CallTimeoutSetupPhase::T60s),
@@ -588,17 +589,17 @@ impl CcBsSubentity {
             .map(|(id, c)| (*id, c.source_issi))
         {
             // If a local MS currently holds the floor, protect it against network preemption
-            // unless the incoming call has strictly higher priority (lower numeric value = higher priority).
+            // unless the incoming network call has STRICTLY higher priority.
             // ETSI EN 300 392-2 §14.8: priority 0 is lowest, 15 is highest (emergency).
             if let Some(call) = self.active_calls.get(&call_id) {
                 if call.tx_active && matches!(call.origin, crate::cmce::subentities::cc_bs::call::CallOrigin::Local { .. }) {
-                    // call_priority field doesn't exist on ActiveCall — use 0 as default (normal).
-                    // Incoming network call must have STRICTLY higher priority to preempt a local MS.
-                    if priority == 0 {
+                    // Incoming network speaker must out-rank the local floor-holder to take over.
+                    // Equal or lower priority keeps the local MS on the floor.
+                    if priority <= call.priority {
                         tracing::info!(
                             "CMCE: ignoring network speaker change gssi={} src={} — \
-                             local MS {} holds floor at equal/higher priority (incoming prio={})",
-                            dest_gssi, source_issi, call.source_issi, priority
+                             local MS {} holds floor at equal/higher priority (held={}, incoming={})",
+                            dest_gssi, source_issi, call.source_issi, call.priority, priority
                         );
                         queue.push_back(SapMsg {
                             sap: Sap::Control,
@@ -698,7 +699,7 @@ impl CcBsSubentity {
             },
             transmission_grant: TransmissionGrant::GrantedToOtherUser,
             transmission_request_permission: false,
-            call_priority: 0,
+            call_priority: priority,
             notification_indicator: None,
             temporary_address: None,
             calling_party_address_ssi: Some(source_issi),
@@ -767,7 +768,7 @@ impl CcBsSubentity {
 
         self.active_calls.insert(
             call_id,
-            ActiveCall::new_network(brew_uuid, dest_gssi, source_issi, ts, usage, self.dltime, self.config_call_timeout()),
+            ActiveCall::new_network(brew_uuid, dest_gssi, source_issi, ts, usage, self.dltime, self.config_call_timeout(), priority),
         );
 
         // Emit telemetry so dashboard shows Brew-initiated calls
@@ -776,6 +777,7 @@ impl CcBsSubentity {
             gssi: dest_gssi,
             caller_issi: source_issi,
             ts,
+            priority,
         });
 
         queue.push_back(SapMsg {

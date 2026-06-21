@@ -65,6 +65,14 @@ pub struct TelegramAlerter {
     log_dropped: usize,
     /// When the current (non-empty) log buffer started accumulating.
     log_window_start: Option<Instant>,
+
+    /// Last observed overall health level; `None` until the first snapshot. Used to alert only on
+    /// level transitions (the monitor samples every few seconds, but most samples don't change).
+    last_health: Option<crate::health::HealthLevel>,
+
+    /// ISSIs currently in active emergency — alert only on the idle→emergency transition so the
+    /// radio's periodic emergency re-sends don't re-fire the alert.
+    emergency_issis: HashSet<u32>,
 }
 
 impl TelegramAlerter {
@@ -83,6 +91,8 @@ impl TelegramAlerter {
             log_buffer: Vec::new(),
             log_dropped: 0,
             log_window_start: None,
+            last_health: None,
+            emergency_issis: HashSet::new(),
         }
     }
 
@@ -157,6 +167,31 @@ impl TelegramAlerter {
                         self.send_all(&tg, &html);
                     }
                 }
+            }
+            // Station-health level change. Alert only on transitions; the first observation is
+            // silent unless it's already not-Ok (so a healthy boot doesn't spam an alert).
+            TelemetryEvent::HealthSnapshot(snap) => {
+                let first = self.last_health.is_none();
+                let changed = self.last_health != Some(snap.overall);
+                self.last_health = Some(snap.overall);
+                let healthy = matches!(snap.overall, crate::health::HealthLevel::Ok);
+                if changed && (!first || !healthy) && tg.alert_health && tg.is_deliverable() {
+                    let html = format::health(&self.station, &snap);
+                    self.send_all(&tg, &html);
+                }
+            }
+            // Emergency raised by a radio (emergency status PDU or emergency-priority call).
+            // Alert only on the idle→emergency transition; gated by the [emergency] telegram_alert
+            // toggle (read live), so the radio's periodic re-sends don't spam.
+            TelemetryEvent::EmergencyAlarm { source_issi, dest_ssi } => {
+                let is_new = self.emergency_issis.insert(source_issi);
+                if is_new && self.cfg.config().emergency.telegram_alert && tg.is_deliverable() {
+                    let html = format::emergency(&self.station, source_issi, dest_ssi);
+                    self.send_all(&tg, &html);
+                }
+            }
+            TelemetryEvent::EmergencyCancel { source_issi } => {
+                self.emergency_issis.remove(&source_issi);
             }
             _ => {}
         }

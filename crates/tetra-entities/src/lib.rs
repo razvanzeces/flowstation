@@ -20,6 +20,7 @@ pub mod net_telegram;
 pub mod net_telemetry;
 
 pub mod backlight;
+pub mod health;
 pub mod service_control;
 pub mod sys_telemetry;
 pub mod wifi;

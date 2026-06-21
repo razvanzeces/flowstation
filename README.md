@@ -39,7 +39,7 @@ Built in Rust on top of [tetra-bluestation](https://github.com/MidnightBlueLabs/
 | UL inactivity detection (forced TX-CEASED) | ✅ |
 | Echo service (local loopback, ISSI 999) | ✅ |
 | Coordinated handover | 🔜 |
-| Emergency calls | 🔜 |
+| Emergency call pre-emption (priority calls pre-empt a lower-priority call when the cell is full) | ✅ |
 
 ### Messaging
 | Feature | Status |
@@ -48,6 +48,7 @@ Built in Rust on top of [tetra-bluestation](https://github.com/MidnightBlueLabs/
 | Live SDS broadcast queue (send to all radios, with repeat) | ✅ |
 | Home Mode Display (PID 220 callsign on radio screen) | ✅ |
 | Supplemental SDS broadcast (custom PID) | ✅ |
+| Emergency status alarm (U-STATUS) — persistent dashboard banner + Telegram alert, LOCAL-only | ✅ |
 
 ### Network & Interconnect
 | Feature | Status |
@@ -73,6 +74,7 @@ Built in Rust on top of [tetra-bluestation](https://github.com/MidnightBlueLabs/
 | HTTP Basic Auth on dashboard | ✅ |
 | Live timeslot visualizer (TS2–TS4 state, call/voice indicator) | ✅ |
 | Kick terminal / send SDS from dashboard | ✅ |
+| Dynamic Group Number Assignment (DGNA) — assign/remove a talkgroup on a radio over the air from the dashboard | ✅ |
 | Config editor with save, backup, restore | ✅ |
 | Multiple config profiles — activate and edit inactive profiles | ✅ |
 | Fallback config on bad edit (with dashboard error banner) | ✅ |

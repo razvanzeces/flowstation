@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
 use crate::mm::components::recovery_cache::{RecoveryCache, TerminalRecord};
-use crate::net_control::ControlEndpoint;
+use crate::net_control::{ControlCommand, ControlEndpoint};
 use crate::net_telemetry::channel::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait, net_brew};
 use tetra_config::bluestation::SharedConfig;
@@ -25,7 +25,9 @@ use tetra_pdus::mm::fields::group_identity_attachment::GroupIdentityAttachment;
 use tetra_pdus::mm::fields::group_identity_downlink::GroupIdentityDownlink;
 use tetra_pdus::mm::fields::group_identity_location_accept::GroupIdentityLocationAccept;
 use tetra_pdus::mm::fields::group_identity_uplink::GroupIdentityUplink;
+use tetra_pdus::mm::pdus::d_attach_detach_group_identity::DAttachDetachGroupIdentity;
 use tetra_pdus::mm::pdus::d_attach_detach_group_identity_acknowledgement::DAttachDetachGroupIdentityAcknowledgement;
+use tetra_pdus::mm::pdus::u_attach_detach_group_identity_acknowledgement::UAttachDetachGroupIdentityAcknowledgement;
 use tetra_pdus::mm::pdus::d_location_update_accept::DLocationUpdateAccept;
 use tetra_pdus::mm::pdus::d_location_update_command::DLocationUpdateCommand;
 use tetra_pdus::mm::pdus::d_location_update_reject::DLocationUpdateReject;
@@ -496,10 +498,28 @@ impl MmBs {
                     .map(|c| c.groups.iter().copied().collect())
                     .unwrap_or_default();
                 if !old_groups.is_empty() {
-                    self.emit_subscriber_update(queue, issi, old_groups, BrewSubscriberAction::Deaffiliate);
+                    self.emit_subscriber_update(queue, issi, old_groups.clone(), BrewSubscriberAction::Deaffiliate);
                 }
                 self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister);
                 self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
+                // The Deregister above wipes this subscriber's group affiliations in CMCE/Brew, but
+                // client_mgr still holds them. A roaming MS with persistent attachment
+                // (attachment_lifetime=0) re-reports its groups with group_identity_attach_detach_mode=0
+                // — which is a no-op in client_mgr (the group is already present), so
+                // try_attach_detach_groups emits NO Affiliate and CMCE is left with zero listeners.
+                // The next group PTT is then rejected "no listeners" and inbound group calls are dropped
+                // (observed for a Motorola MTP on RoamingLocationUpdating). Re-affiliate the stored
+                // groups now so CMCE/Brew stay in sync with client_mgr across the reset; the
+                // group-identity processing below then only needs to add genuinely new groups.
+                if !old_groups.is_empty() {
+                    {
+                        let mut state = self.config.state_write();
+                        for &gssi in &old_groups {
+                            state.subscribers.affiliate(issi, gssi);
+                        }
+                    }
+                    self.emit_subscriber_update(queue, issi, old_groups, BrewSubscriberAction::Affiliate);
+                }
             } else if was_pending {
                 tracing::info!("MM: ISSI {} re-registered after T351 COMMAND (Brew already holds it)", issi);
             }
@@ -1115,7 +1135,7 @@ impl MmBs {
             MmPduTypeUl::UOtar => unimplemented_log!("UOtar"),
             MmPduTypeUl::UInformationProvide => unimplemented_log!("UInformationProvide"),
             MmPduTypeUl::UAttachDetachGroupIdentity => self.rx_u_attach_detach_group_identity(queue, message),
-            MmPduTypeUl::UAttachDetachGroupIdentityAcknowledgement => unimplemented_log!("UAttachDetachGroupIdentityAcknowledgement"),
+            MmPduTypeUl::UAttachDetachGroupIdentityAcknowledgement => self.rx_u_attach_detach_group_identity_ack(queue, message),
             MmPduTypeUl::UTeiProvide => self.rx_u_tei_provide(queue, message),
             MmPduTypeUl::UDisableStatus => unimplemented_log!("UDisableStatus"),
             MmPduTypeUl::MmPduFunctionNotSupported => unimplemented_log!("MmPduFunctionNotSupported"),
@@ -1320,6 +1340,156 @@ impl MmBs {
                     tx_reporter: None,
                 }),
             });
+        }
+    }
+
+    /// Class of usage advertised in DGNA group attachments. 4 mirrors the value the normal
+    /// affiliation ACK path (`send_d_attach_detach_ack`) already sends, so DGNA-assigned groups
+    /// behave identically to ones the radio affiliated itself.
+    const DGNA_CLASS_OF_USAGE: u8 = 4;
+
+    /// DGNA (Dynamic Group Number Assignment) — BS-initiated group attach/detach for one terminal,
+    /// driven from the dashboard. ETSI EN 300 392-2 §16 (SS-DGNA).
+    ///
+    /// Local-only: updates the BS-side affiliation (so local group calls and group SDS route to the
+    /// terminal) and pushes an unsolicited D-ATTACH/DETACH GROUP IDENTITY to the radio so it adds or
+    /// removes the group in its own list. Brew is intentionally not involved.
+    ///
+    /// Returns `true` if the command was accepted and a PDU was sent to the terminal.
+    fn do_dgna(&mut self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) -> bool {
+        let verb = if attach { "assign" } else { "deassign" };
+
+        // The terminal must be registered on the cell — we cannot regroup a radio that is not here.
+        if !self.client_mgr.client_is_known(issi) {
+            tracing::warn!("DGNA: ISSI {} is not registered on this cell — ignoring {} of GSSI {}", issi, verb, gssi);
+            return false;
+        }
+
+        // Apply to the MM client registry. client_group_attach also validates the GSSI is a legal
+        // group address (range + is_group + may_attach); an invalid GSSI returns an error here.
+        match self.client_mgr.client_group_attach(issi, gssi, attach) {
+            Ok(_changed) => {
+                // Mirror into the shared subscriber state used for local call/SDS routing and notify
+                // CMCE. Done unconditionally on success so DGNA stays authoritative even if the BS
+                // believed the affiliation already matched (no desync window — FH-BUG-022/025).
+                if attach {
+                    self.config.state_write().subscribers.affiliate(issi, gssi);
+                    self.emit_subscriber_update(queue, issi, vec![gssi], BrewSubscriberAction::Affiliate);
+                } else {
+                    self.config.state_write().subscribers.deaffiliate(issi, gssi);
+                    self.emit_subscriber_update(queue, issi, vec![gssi], BrewSubscriberAction::Deaffiliate);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("DGNA: cannot {} GSSI {} on ISSI {}: {:?}", verb, gssi, issi, e);
+                return false;
+            }
+        }
+
+        // Push the unsolicited D-ATTACH/DETACH GROUP IDENTITY to the terminal.
+        self.send_d_attach_detach_group_identity(queue, issi, gssi, attach);
+
+        // Persist for restart recovery (debounced) and refresh the dashboard with the full group set.
+        self.recovery_mark_dirty();
+        let all_groups: Vec<u32> = self
+            .client_mgr
+            .get_client_by_issi(issi)
+            .map(|c| c.groups.iter().copied().collect())
+            .unwrap_or_default();
+        if let Some(sink) = &self.telemetry {
+            sink.send(crate::net_telemetry::TelemetryEvent::MsGroupsSnapshot { issi, gssis: all_groups });
+        }
+
+        tracing::info!(
+            "DGNA: {} GSSI {} {} ISSI {}",
+            if attach { "assigned" } else { "deassigned" },
+            gssi,
+            if attach { "to" } else { "from" },
+            issi
+        );
+        true
+    }
+
+    /// Build and queue an unsolicited D-ATTACH/DETACH GROUP IDENTITY for a single GSSI, addressed to
+    /// `issi`, requesting an acknowledgement. `attach == true` carries a (persistent) group identity
+    /// attachment; `false` carries a detachment. Used by [`Self::do_dgna`].
+    fn send_d_attach_detach_group_identity(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) {
+        let gid = GroupIdentityDownlink {
+            group_identity_attachment: attach.then_some(GroupIdentityAttachment {
+                // 0 = "attachment not needed" → persistent on the MS until an explicit detach.
+                // Matches the affiliation-ACK path; see try_attach_detach_groups for why lifetime=0
+                // (not 1) is correct for scan-list-heavy Motorola radios (FH-BUG-022).
+                group_identity_attachment_lifetime: 0,
+                class_of_usage: Self::DGNA_CLASS_OF_USAGE,
+            }),
+            // 2-bit group identity detachment field; 0 = unknown/default. The attach/detach type
+            // identifier plus the GSSI are what make the MS drop the group.
+            group_identity_detachment_uplink: (!attach).then_some(0u8),
+            gssi: Some(gssi),
+            address_extension: None,
+            vgssi: None,
+        };
+        let pdu = DAttachDetachGroupIdentity {
+            group_identity_report: false,
+            group_identity_acknowledgement_request: true,
+            // false = amend the existing list (do NOT detach everything else first). DGNA touches one
+            // group at a time and must leave the radio's other affiliations intact.
+            group_identity_attach_detach_mode: false,
+            proprietary: None,
+            group_report_response: None,
+            group_identity_downlink: Some(vec![gid]),
+            group_identity_security_related_information: None,
+        };
+
+        let mut sdu = BitBuffer::new_autoexpand(32);
+        if pdu.to_bitbuf(&mut sdu).is_err() {
+            tracing::error!("DGNA: failed serializing D-ATTACH/DETACH GROUP IDENTITY for ISSI {}", issi);
+            return;
+        }
+        sdu.seek(0);
+        tracing::debug!(
+            "-> DAttachDetachGroupIdentity (DGNA {}) gssi={} issi={} sdu {}",
+            if attach { "attach" } else { "detach" },
+            gssi,
+            issi,
+            sdu.dump_bin()
+        );
+
+        queue.push_back(SapMsg {
+            sap: Sap::LmmSap,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
+                sdu,
+                handle: 0, // unsolicited, BS-initiated — no inbound L2 handle to echo
+                address: TetraAddress::issi(issi),
+                layer2service: Layer2Service::Acknowledged,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                encryption_flag: false,
+                is_null_pdu: false,
+                tx_reporter: None,
+            }),
+        });
+    }
+
+    /// Handle U-ATTACH/DETACH GROUP IDENTITY ACKNOWLEDGEMENT — the terminal's reply to a BS-initiated
+    /// D-ATTACH/DETACH GROUP IDENTITY (DGNA). BS-side group state is committed optimistically when the
+    /// DGNA is issued, so this is confirmation/telemetry only: log the outcome.
+    fn rx_u_attach_detach_group_identity_ack(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
+        let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
+        let issi = prim.received_address.ssi;
+        match UAttachDetachGroupIdentityAcknowledgement::from_bitbuf(&mut prim.sdu) {
+            Ok(pdu) => tracing::info!("DGNA: ISSI {} acknowledged group identity change: {:?}", issi, pdu),
+            Err(e) => tracing::warn!(
+                "DGNA: failed parsing U-ATTACH/DETACH GROUP IDENTITY ACK from {}: {:?} {}",
+                issi,
+                e,
+                prim.sdu.dump_bin()
+            ),
         }
     }
 
@@ -1563,9 +1733,21 @@ impl TetraEntityTrait for MmBs {
     }
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
-        if let Some(cep) = &self.control {
-            while let Some(cmd) = cep.try_recv() {
+        // Drain control commands addressed to the MM entity. We collect into a Vec first so the
+        // immutable borrow on `self.control` is released before the handlers run — DGNA needs
+        // `&mut self` (client registry, subscriber state, telemetry).
+        if self.control.is_some() {
+            let mut cmds = Vec::new();
+            if let Some(cep) = &self.control {
+                while let Some(cmd) = cep.try_recv() {
+                    cmds.push(cmd);
+                }
+            }
+            for cmd in cmds {
                 match cmd {
+                    ControlCommand::Dgna { issi, gssi, attach } => {
+                        self.do_dgna(queue, issi, gssi, attach);
+                    }
                     _ => {
                         tracing::warn!("MM: ignoring unsupported control command {:?}", cmd);
                     }
@@ -1790,6 +1972,11 @@ impl TetraEntityTrait for MmBs {
                             self.config.state_write().subscribers.deregister(issi);
                             self.recovery_mark_dirty();
                         }
+                    }
+                    SapMsgInner::MmDgnaRequest { issi, gssi, attach } => {
+                        // Dashboard-originated DGNA, forwarded by CMCE (the dashboard control channel
+                        // terminates there). The group machinery lives here in MM.
+                        self.do_dgna(queue, issi, gssi, attach);
                     }
                     _ => {
                         tracing::warn!("mm_bs: unexpected Control message from {:?}", message.src);

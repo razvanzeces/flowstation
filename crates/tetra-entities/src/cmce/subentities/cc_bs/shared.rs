@@ -1,5 +1,23 @@
 use super::*;
 
+/// A call selected for pre-emption — released to free a traffic channel for a higher-priority
+/// (typically emergency) call. Carries which call table the victim lives in so the correct
+/// teardown path is taken. See [`CcBsSubentity::preempt_for_priority`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreemptVictim {
+    Group(u16),
+    Individual(u16),
+}
+
+impl PreemptVictim {
+    #[inline]
+    fn call_id(self) -> u16 {
+        match self {
+            PreemptVictim::Group(id) | PreemptVictim::Individual(id) => id,
+        }
+    }
+}
+
 impl CcBsSubentity {
     pub fn new(config: SharedConfig) -> Self {
         CcBsSubentity {
@@ -766,6 +784,75 @@ impl CcBsSubentity {
         // DL-only on group FACCH: signalling to all members, no UL expected here.
         let msg = Self::build_sapmsg_stealing_ul_dl(sdu, dest_addr, ts, None, UlDlAssignment::Dl);
         queue.push_back(msg);
+    }
+
+    /// Number of currently free traffic timeslots (TS2..=TS4) on this cell.
+    fn free_timeslot_count(&self) -> usize {
+        self.config.state_read().timeslot_alloc.free_count()
+    }
+
+    /// Pick the best active call to pre-empt for a higher-priority call, or `None` if none is
+    /// eligible. Only calls of *strictly lower* priority than `incoming_priority` may be
+    /// pre-empted (equal priority keeps the channel — first come, first served). Among eligible
+    /// calls the victim is chosen by: lowest priority first; then a call that is not actively
+    /// transmitting (a group call in hangtime / a P2P call still in set-up — least disruptive to
+    /// release); then the lowest call_id, purely for deterministic behaviour. `exclude` holds
+    /// call_ids already released this round so the loop always makes progress.
+    fn select_preemption_victim(&self, incoming_priority: u8, exclude: &[u16]) -> Option<PreemptVictim> {
+        let mut candidates: Vec<(u8, u8, u16, PreemptVictim)> = Vec::new();
+        for (id, call) in self.active_calls.iter() {
+            if call.priority < incoming_priority && !exclude.contains(id) {
+                candidates.push((call.priority, call.tx_active as u8, *id, PreemptVictim::Group(*id)));
+            }
+        }
+        for (id, call) in self.individual_calls.iter() {
+            if call.priority < incoming_priority && !exclude.contains(id) {
+                candidates.push((call.priority, call.is_active() as u8, *id, PreemptVictim::Individual(*id)));
+            }
+        }
+        candidates
+            .into_iter()
+            .min_by_key(|(priority, active, call_id, _)| (*priority, *active, *call_id))
+            .map(|(_, _, _, victim)| victim)
+    }
+
+    /// ETSI EN 300 392-2 clause 14.8 pre-emptive priority handling. When a call requested at a
+    /// pre-emptive priority (>= 12, e.g. an emergency call) cannot be granted a traffic channel,
+    /// the SwMI may release active calls of strictly lower priority to free up to `needed` slots.
+    /// Each round releases the lowest-priority eligible call (see [`Self::select_preemption_victim`])
+    /// with `DisconnectCause::PreEmptiveUseOfResource`. This is a no-op for non-pre-emptive
+    /// priorities, and stops as soon as enough slots are free or no lower-priority call remains
+    /// (in which case the caller's own allocation will fail and reject the call normally).
+    pub(super) fn preempt_for_priority(&mut self, queue: &mut MessageQueue, needed: usize, incoming_priority: u8) {
+        if !is_preemptive_priority(incoming_priority) {
+            return;
+        }
+        let mut attempted: Vec<u16> = Vec::new();
+        while self.free_timeslot_count() < needed {
+            let Some(victim) = self.select_preemption_victim(incoming_priority, &attempted) else {
+                tracing::info!(
+                    "CMCE: pre-emption for priority {} call cannot free enough channels ({} of {} slots free, no lower-priority call to release)",
+                    incoming_priority,
+                    self.free_timeslot_count(),
+                    needed
+                );
+                break;
+            };
+            attempted.push(victim.call_id());
+            tracing::info!(
+                "CMCE: pre-empting {:?} to free a traffic channel for an incoming priority {} call",
+                victim,
+                incoming_priority
+            );
+            match victim {
+                PreemptVictim::Group(call_id) => {
+                    self.release_group_call(queue, call_id, DisconnectCause::PreEmptiveUseOfResource)
+                }
+                PreemptVictim::Individual(call_id) => {
+                    self.release_individual_call(queue, call_id, DisconnectCause::PreEmptiveUseOfResource)
+                }
+            }
+        }
     }
 
     /// Release a group call: send D-RELEASE, close circuit, clean up state.

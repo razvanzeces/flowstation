@@ -40,5 +40,11 @@ pub use sec_telegram::*;
 pub mod sec_recovery;
 pub use sec_recovery::*;
 
+pub mod sec_emergency;
+pub use sec_emergency::*;
+
+pub mod sec_health;
+pub use sec_health::*;
+
 pub mod state;
 pub use state::*;

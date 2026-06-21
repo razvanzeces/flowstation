@@ -1,5 +1,35 @@
 use super::*;
 
+// ── Call priority & pre-emption (ETSI EN 300 392-2 clause 14.8 "Call priority") ───────────────
+//
+// The call priority is a 4-bit field (0..=15) carried in U-SETUP / D-SETUP / D-CONNECT:
+//   0        → priority not defined (treated as the lowest / normal priority)
+//   1..=11   → ordinary priority levels (increasing)
+//   12..=15  → the four *pre-emptive* priority levels
+//   15       → highest priority; what a terminal's emergency button generates
+//
+// A call requested at a pre-emptive priority (>= 12) is entitled to pre-empt an active call of
+// *strictly lower* priority when no traffic channel is free. An emergency call (priority 15) is
+// the top pre-emptive level: it is surfaced distinctly on the dashboard and always granted the
+// floor immediately on set-up.
+
+/// Highest call priority (ETSI clause 14.8) — an emergency call.
+pub(super) const CALL_PRIORITY_EMERGENCY: u8 = 15;
+/// Lowest of the four pre-emptive priority levels (12..=15).
+pub(super) const CALL_PRIORITY_PREEMPTIVE_MIN: u8 = 12;
+
+/// True when a call at this priority may pre-empt a lower-priority call (pre-emptive priority).
+#[inline]
+pub(super) fn is_preemptive_priority(priority: u8) -> bool {
+    priority >= CALL_PRIORITY_PREEMPTIVE_MIN
+}
+
+/// True when this priority denotes an emergency call (the highest priority level).
+#[inline]
+pub(super) fn is_emergency_priority(priority: u8) -> bool {
+    priority >= CALL_PRIORITY_EMERGENCY
+}
+
 // TETRA TDMA timing: one slot is 170/12 milliseconds.
 const TIMESLOT_DURATION_MS: f64 = 170.0 / 12.0;
 
@@ -79,6 +109,10 @@ pub(super) struct ActiveCall {
     pub(super) origin: CallOrigin,
     pub(super) dest_gssi: u32,
     pub(super) source_issi: u32,
+    /// ETSI call priority (0..=15) requested in the originating U-SETUP / network call start.
+    /// Retained so a later emergency / pre-emptive call can compare against it when deciding
+    /// which active call to pre-empt for a free traffic channel. See [`is_preemptive_priority`].
+    pub(super) priority: u8,
     pub(super) created_at: TdmaTime,
     pub(super) call_timeout: CallTimeout,
     pub(super) ts: u8,
@@ -106,11 +140,13 @@ impl ActiveCall {
         usage: u8,
         created_at: TdmaTime,
         call_timeout: CallTimeout,
+        priority: u8,
     ) -> Self {
         Self {
             origin: CallOrigin::Local { caller_addr },
             dest_gssi,
             source_issi,
+            priority,
             created_at,
             call_timeout,
             ts,
@@ -132,11 +168,13 @@ impl ActiveCall {
         usage: u8,
         created_at: TdmaTime,
         call_timeout: CallTimeout,
+        priority: u8,
     ) -> Self {
         Self {
             origin: CallOrigin::Network { brew_uuid },
             dest_gssi,
             source_issi,
+            priority,
             created_at,
             call_timeout,
             ts,
@@ -261,6 +299,10 @@ pub(super) struct IndividualCall {
     pub(super) called_usage: u8,
     /// true = full duplex (ETSI 14.8.17), false = simplex
     pub(super) simplex_duplex: bool,
+    /// ETSI call priority (0..=15) from the originating U-SETUP. Retained so an emergency /
+    /// pre-emptive call can pre-empt this one for a free traffic channel. See
+    /// [`is_preemptive_priority`].
+    pub(super) priority: u8,
     pub(super) state: IndividualCallState,
     /// Start instant for setup timeout (T301/T302 equivalent on BS side).
     pub(super) setup_timer_started: Option<TdmaTime>,

@@ -171,6 +171,32 @@ fn build_bs_stack(cfg: &mut SharedConfig, config_path: &str) -> (MessageRouter, 
     // (battery). Falls back gracefully if nothing is available.
     if let Some(ref sink) = tsink {
         tetra_entities::sys_telemetry::spawn_sys_health(sink.clone());
+
+        // Background lite stack-health monitor — samples the global health registry and emits a
+        // HealthSnapshot through telemetry (→ dashboard tile + Telegram alerts). Tunable via the
+        // `[health]` config section; observe-only unless `restart_on_core_stall` is enabled.
+        let hcfg = cfg.config().health.clone();
+        if hcfg.enabled {
+            use std::time::Duration;
+            tetra_entities::health::registry().set_brew_configured(cfg.config().brew.is_some());
+            tetra_entities::health::spawn_health_monitor(
+                sink.clone(),
+                tetra_entities::health::HealthMonitorConfig {
+                    snapshot_interval: Duration::from_secs(hcfg.snapshot_interval_secs),
+                    thresholds: tetra_entities::health::HealthThresholds {
+                        core_stall_critical_ms: hcfg.core_stall_secs.saturating_mul(1000),
+                        radios_silent_degraded_secs: hcfg.radios_silent_secs,
+                        dl_queue_degraded: hcfg.dl_queue_degraded as usize,
+                        dl_queue_critical: hcfg.dl_queue_critical as usize,
+                        sds_queue_degraded: hcfg.sds_queue_degraded as usize,
+                        sds_queue_critical: hcfg.sds_queue_critical as usize,
+                    },
+                    restart_on_core_stall: hcfg.restart_on_core_stall,
+                    restart_after_critical: Duration::from_secs(hcfg.restart_after_critical_secs),
+                    restart_cooldown: Duration::from_secs(hcfg.restart_cooldown_secs),
+                },
+            );
+        }
     }
 
     // Always build control links — dashboard needs them even without external control server
@@ -416,9 +442,30 @@ fn main() {
             let dash = dashboard.clone();
             let alert = alert_sink.clone();
             thread::Builder::new().name("telemetry-fanout".into()).spawn(move || {
+                use tetra_entities::health::registry as health_registry;
+                use tetra_entities::net_telemetry::TelemetryEvent;
+                // Approximate attached-radio count, maintained from registration telemetry, fed to
+                // the health registry (Radios domain). Re-registrations of an already-known radio
+                // don't emit MsRegistration, so increment/decrement stays balanced.
+                let mut radio_count: usize = 0;
                 loop {
                     match telemetry_source.recv() {
                         Some(event) => {
+                            // Feed the lite health registry (cheap, before the fan-out clones).
+                            match &event {
+                                TelemetryEvent::BrewConnected { connected, .. } => health_registry().set_brew_up(*connected),
+                                TelemetryEvent::MsRegistration { .. } => {
+                                    radio_count += 1;
+                                    health_registry().set_registered_radios(radio_count);
+                                    health_registry().note_radio_activity();
+                                }
+                                TelemetryEvent::MsDeregistration { .. } | TelemetryEvent::MsTimeoutDrop { .. } => {
+                                    radio_count = radio_count.saturating_sub(1);
+                                    health_registry().set_registered_radios(radio_count);
+                                }
+                                TelemetryEvent::MsRssi { .. } => health_registry().note_radio_activity(),
+                                _ => {}
+                            }
                             if let Some(d) = &dash { d.handle_telemetry(event.clone()); }
                             if let Some(s) = &alert { s.send_event(event.clone()); }
                             if let Some(t) = &tee_sink { t.send(event); }

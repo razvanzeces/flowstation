@@ -64,6 +64,15 @@ const SDS_DEFER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(1
 /// timeout (also "failed"), and we never deliver the message late, so the two cannot contradict.
 const SDS_TL_STATUS_UNDELIVERABLE: u8 = 0x02;
 
+/// One active status-based emergency session (keyed by source ISSI in `emergency_sessions`).
+/// The radio re-sends the emergency status periodically while active and goes silent on exit, so
+/// `last_seen` drives the clear-timeout sweep. Call-raised emergencies are NOT tracked here — the
+/// dashboard derives those from the call lifecycle.
+struct EmergencySession {
+    dest_ssi: u32,
+    last_seen: std::time::Instant,
+}
+
 pub struct SdsBsSubentity {
     config: SharedConfig,
     telemetry: Option<TelemetrySink>,
@@ -83,6 +92,11 @@ pub struct SdsBsSubentity {
     wx_cmd_tx: Option<crossbeam_channel::Sender<ControlCommand>>,
     /// Monotonic timestamp of the last periodic WX auto-send, to rate-limit the broadcast.
     last_periodic_wx: Option<std::time::Instant>,
+    /// Active status-based emergency sessions, keyed by source ISSI. Populated when a radio sends
+    /// an emergency status (U-STATUS pre-coded status Emergency); refreshed on re-sends; removed on
+    /// a non-Emergency status, clear-timeout (tick), or operator clear. Non-empty means at least one
+    /// radio is in emergency. See [`EmergencySession`].
+    emergency_sessions: std::collections::HashMap<u32, EmergencySession>,
 }
 
 impl SdsBsSubentity {
@@ -98,6 +112,7 @@ impl SdsBsSubentity {
             last_dltime: TdmaTime::default(),
             wx_cmd_tx: None,
             last_periodic_wx: None,
+            emergency_sessions: std::collections::HashMap::new(),
         }
     }
 
@@ -120,6 +135,71 @@ impl SdsBsSubentity {
     fn emit(&self, event: TelemetryEvent) {
         if let Some(sink) = &self.telemetry {
             sink.send(event);
+        }
+    }
+
+    // ── Emergency state (status-based) ──────────────────────────────────────────
+    //
+    // A radio signals emergency with a U-STATUS (pre-coded status Emergency, status 0), re-sent
+    // periodically while active; it sends nothing on exit. We raise a session on the first
+    // Emergency status from an ISSI and clear it when: (a) the ISSI sends a non-Emergency status,
+    // (b) no Emergency status arrives for `clear_timeout_secs` (the radio went silent — swept in
+    // tick), or (c) an operator clears it from the dashboard. Telemetry (EmergencyAlarm /
+    // EmergencyCancel) fires only on the enter/clear transitions, never on re-sends.
+
+    /// Raise (or refresh) a status-based emergency for `source_issi`. Emits `EmergencyAlarm` only
+    /// on the idle→emergency transition so periodic re-sends don't re-fire the alarm / Telegram.
+    fn emergency_enter(&mut self, source_issi: u32, dest_ssi: u32) {
+        let now = std::time::Instant::now();
+        match self.emergency_sessions.get_mut(&source_issi) {
+            Some(s) => {
+                // REFRESH — radio is still in emergency; keep the session alive.
+                s.last_seen = now;
+                s.dest_ssi = dest_ssi;
+            }
+            None => {
+                self.emergency_sessions.insert(source_issi, EmergencySession { dest_ssi, last_seen: now });
+                tracing::warn!("EMERGENCY: ISSI {} entered emergency (status to ISSI {})", source_issi, dest_ssi);
+                self.emit(TelemetryEvent::EmergencyAlarm { source_issi, dest_ssi });
+            }
+        }
+    }
+
+    /// Clear a status-based emergency for `source_issi` if present, emitting `EmergencyCancel`.
+    fn emergency_clear(&mut self, source_issi: u32, reason: &str) {
+        if self.emergency_sessions.remove(&source_issi).is_some() {
+            tracing::info!("EMERGENCY: ISSI {} cleared ({})", source_issi, reason);
+            self.emit(TelemetryEvent::EmergencyCancel { source_issi });
+        }
+    }
+
+    /// Operator/manual clear dispatched from the dashboard (`issi == 0` clears every session).
+    pub fn clear_emergency_command(&mut self, issi: u32) {
+        if issi == 0 {
+            let all: Vec<u32> = self.emergency_sessions.keys().copied().collect();
+            for i in all {
+                self.emergency_clear(i, "operator clear (all)");
+            }
+        } else {
+            self.emergency_clear(issi, "operator clear");
+        }
+    }
+
+    /// Sweep emergency sessions whose last emergency status is older than `clear_timeout_secs`.
+    /// The radio sends nothing on exit, so silence past the timeout is treated as "cleared".
+    fn expire_emergency_sessions(&mut self) {
+        if self.emergency_sessions.is_empty() {
+            return;
+        }
+        let timeout = std::time::Duration::from_secs(self.config.config().emergency.clear_timeout_secs);
+        let expired: Vec<u32> = self
+            .emergency_sessions
+            .iter()
+            .filter(|(_, s)| s.last_seen.elapsed() > timeout)
+            .map(|(issi, _)| *issi)
+            .collect();
+        for issi in expired {
+            self.emergency_clear(issi, "timeout");
         }
     }
 
@@ -222,8 +302,13 @@ impl SdsBsSubentity {
     /// Called every tick from CmceBs::tick_start. Fires Home Mode Display broadcast when due.
     pub fn tick_start(&mut self, queue: &mut MessageQueue, dltime: TdmaTime) {
         self.last_dltime = dltime; // record current time for the EE monitoring-window gate
+        // Auto-clear emergency sessions whose radio stopped re-sending the emergency status
+        // (the radio is silent on exit, so silence past clear_timeout_secs == cleared).
+        self.expire_emergency_sessions();
         // Flush SDS that were deferred while their destination was in a call or asleep (EE).
         self.flush_pending_sds(queue);
+        // Feed the health monitor's Congestion domain: undelivered/deferred SDS backlog.
+        crate::health::registry().set_sds_queue_depth(self.pending_sds.len());
         if let Some(hmd_tx) = self.home_mode_display_sender.tick_start(&self.config, dltime) {
             self.send_d_sds_data(queue, hmd_tx.source_issi, hmd_tx.dest_gssi, SsiType::Gssi, hmd_tx.payload);
         }
@@ -501,6 +586,19 @@ impl SdsBsSubentity {
             pdu.pre_coded_status
         );
 
+        // Emergency-state tracking. The radio re-sends pre-coded status Emergency while in
+        // emergency and is silent on exit: ENTER/REFRESH on Emergency, and a non-Emergency status
+        // from the same ISSI CLEARS its session (the "first normal status = user cancelled" signal).
+        // Skip the 9999 command channel (restart/kick_all/info statuses) so an unrelated command
+        // status from a radio currently in emergency does not double as an emergency cancellation.
+        // Local-only — evaluated before any Brew forward and gated by the [emergency] config below.
+        if dest_ssi != 9999 {
+            match pdu.pre_coded_status {
+                PreCodedStatus::Emergency => self.emergency_enter(source_ssi, dest_ssi),
+                _ => self.emergency_clear(source_ssi, "non-emergency status"),
+            }
+        }
+
         // SDS command control: U-STATUS to ISSI 9999 from an authorized ISSI triggers
         // a system action (restart, shutdown, kick_all) if the status code matches.
         if dest_ssi == 9999 {
@@ -508,11 +606,17 @@ impl SdsBsSubentity {
             return;
         }
 
+        // Emergency status is LOCAL-only by design — never forwarded to Brew unless the operator
+        // opts in via [emergency] forward_to_brew. Non-emergency statuses keep their normal routing.
+        let is_emergency = matches!(pdu.pre_coded_status, PreCodedStatus::Emergency);
+        let brew_ok = net_brew::is_active(&self.config)
+            && (!is_emergency || self.config.config().emergency.forward_to_brew);
+
         // Route: local delivery, Brew forward, or drop
         if self.config.state_read().subscribers.is_registered(dest_ssi) {
             tracing::info!("SDS-STATUS: local delivery: {} -> {}", source_ssi, dest_ssi);
             self.send_d_status(queue, source_ssi, dest_ssi, pdu.pre_coded_status);
-        } else if net_brew::is_active(&self.config) {
+        } else if brew_ok {
             // Brew forwarding only: when the pre-coded status carries an SDS-TL short report
             // (ETSI 29.4.2.3), convert it to a full SDS-TL REPORT PDU (Type4) so the
             // remote end recognizes it as a delivery confirmation. ETSI 29.3.3.4.4

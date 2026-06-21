@@ -26,6 +26,20 @@ impl CcBsSubentity {
             return;
         }
 
+        if is_emergency_priority(pdu.call_priority) {
+            tracing::info!(
+                "CMCE: EMERGENCY group call set-up from ISSI {} to GSSI {} (priority {})",
+                calling_party.ssi,
+                dest_gssi,
+                pdu.call_priority
+            );
+        }
+
+        // Emergency / pre-emptive priority: if the cell is full, free one traffic channel by
+        // releasing a lower-priority call before allocating (ETSI EN 300 392-2 clause 14.8).
+        // No-op for ordinary priority.
+        self.preempt_for_priority(queue, 1, pdu.call_priority);
+
         // Allocate circuit (DL+UL for group call)
         let circuit = match {
             let mut state = self.config.state_write();
@@ -36,18 +50,32 @@ impl CcBsSubentity {
         } {
             Ok(circuit) => circuit.clone(),
             Err(e) => {
-                tracing::error!("Failed to allocate circuit for U-SETUP: {:?}", e);
+                // No free traffic channel (and pre-emption, if any, could not free one). Tell the
+                // calling MS rather than dropping the request silently. ETSI: congestion case.
+                tracing::info!(
+                    "CMCE: rejecting U-SETUP group from ISSI {} to GSSI {} (no free channel: {:?})",
+                    calling_party.ssi,
+                    dest_gssi,
+                    e
+                );
+                if let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg {
+                    let reject_call_id = self.circuits.get_next_call_id();
+                    let sdu = Self::build_d_release(reject_call_id, DisconnectCause::CongestionInInfrastructure);
+                    let msg = Self::build_sapmsg_direct(sdu, calling_party, prim.handle, prim.link_id, prim.endpoint_id);
+                    queue.push_back(msg);
+                }
                 return;
             }
         };
 
         tracing::info!(
-            "rx_u_setup: call from ISSI {} to GSSI {} -> ts={} call_id={} usage={}",
+            "rx_u_setup: call from ISSI {} to GSSI {} -> ts={} call_id={} usage={} prio={}",
             calling_party.ssi,
             dest_gssi,
             circuit.ts,
             circuit.call_id,
-            circuit.usage
+            circuit.usage,
+            pdu.call_priority
         );
 
         // Emit telemetry event for dashboard
@@ -56,6 +84,7 @@ impl CcBsSubentity {
             gssi: dest_gssi,
             caller_issi: calling_party.ssi,
             ts: circuit.ts,
+            priority: pdu.call_priority,
         });
 
         // Signal UMAC to open DL+UL circuits.
@@ -178,6 +207,7 @@ impl CcBsSubentity {
                 circuit.usage,
                 self.dltime,
                 self.config_call_timeout(),
+                pdu.call_priority,
             ),
         );
 
@@ -266,6 +296,20 @@ impl CcBsSubentity {
             return;
         }
 
+        if is_emergency_priority(pdu.call_priority) {
+            tracing::info!(
+                "CMCE: EMERGENCY individual call set-up from ISSI {} to ISSI {} (priority {})",
+                calling_party.ssi,
+                called_addr.ssi,
+                pdu.call_priority
+            );
+        }
+
+        // Emergency / pre-emptive priority: free traffic channel(s) by pre-empting lower-priority
+        // call(s) when the cell is full (ETSI EN 300 392-2 clause 14.8). A duplex P2P call needs
+        // two timeslots (one per MS), a simplex call one. No-op for ordinary priority.
+        self.preempt_for_priority(queue, if pdu.simplex_duplex_selection { 2 } else { 1 }, pdu.call_priority);
+
         // Allocate circuit(s). Duplex uses two traffic timeslots, one per MS, with cross-routing.
         let (circuit_calling, circuit_called) = {
             let mut state = self.config.state_write();
@@ -333,14 +377,15 @@ impl CcBsSubentity {
         };
 
         tracing::info!(
-            "rx_u_setup_p2p: call from ISSI {} to ISSI {} -> call_id={} ts(call)={} usage(call)={} ts(called)={} usage(called)={}",
+            "rx_u_setup_p2p: call from ISSI {} to ISSI {} -> call_id={} ts(call)={} usage(call)={} ts(called)={} usage(called)={} prio={}",
             calling_party.ssi,
             called_addr.ssi,
             call_id,
             calling_ts,
             calling_usage,
             called_ts,
-            called_usage
+            called_usage,
+            pdu.call_priority
         );
 
         // Emit telemetry event for dashboard
@@ -350,6 +395,7 @@ impl CcBsSubentity {
             called_issi: called_addr.ssi,
             simplex: !pdu.hook_method_selection,
             ts: calling_ts,
+            priority: pdu.call_priority,
         });
 
         // Do not open traffic channel yet. Let called MS respond on MCCH.
@@ -408,6 +454,7 @@ impl CcBsSubentity {
                 calling_usage,
                 called_usage,
                 simplex_duplex: pdu.simplex_duplex_selection,
+                priority: pdu.call_priority,
                 state: IndividualCallState::CallSetupPending,
                 setup_timer_started: Some(self.dltime),
                 setup_timeout: Some(CallTimeoutSetupPhase::T60s),
@@ -611,6 +658,7 @@ impl CcBsSubentity {
                 calling_usage: usage,
                 called_usage: usage,
                 simplex_duplex: pdu.simplex_duplex_selection,
+                priority: pdu.call_priority,
                 state: IndividualCallState::CallSetupPending,
                 setup_timer_started: Some(self.dltime),
                 setup_timeout: Some(CallTimeoutSetupPhase::T60s),
@@ -772,6 +820,7 @@ impl CcBsSubentity {
             calling_usage: usage,
             called_usage: usage,
             simplex_duplex: pdu.simplex_duplex_selection,
+            priority: pdu.call_priority,
             state: crate::cmce::subentities::cc_bs::call::IndividualCallState::Active,
             setup_timer_started: None,
             setup_timeout: None,

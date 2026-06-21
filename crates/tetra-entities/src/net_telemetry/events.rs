@@ -30,14 +30,17 @@ pub enum TelemetryEvent {
     MsGroupDetach { issi: u32, gssis: Vec<u32> },
     /// RSSI measurement for a known MS (dBFS)
     MsRssi { issi: u32, rssi_dbfs: f32 },
-    /// Group call started
-    GroupCallStarted { call_id: u16, gssi: u32, caller_issi: u32, ts: u8 },
+    /// Group call started. `priority` is the ETSI call priority (0..=15) from the originating
+    /// U-SETUP / network call start; 15 denotes an emergency call (`priority` appended last so
+    /// existing leading fields stay wire-stable for the bitcode codec).
+    GroupCallStarted { call_id: u16, gssi: u32, caller_issi: u32, ts: u8, priority: u8 },
     /// Group call ended
     GroupCallEnded { call_id: u16, gssi: u32 },
     /// Speaker changed on active group call
     GroupCallSpeakerChanged { call_id: u16, gssi: u32, speaker_issi: u32 },
-    /// Individual (P2P) call started
-    IndividualCallStarted { call_id: u16, calling_issi: u32, called_issi: u32, simplex: bool, ts: u8 },
+    /// Individual (P2P) call started. `priority` is the ETSI call priority (0..=15) from the
+    /// originating U-SETUP; 15 denotes an emergency call (appended last for bitcode wire-stability).
+    IndividualCallStarted { call_id: u16, calling_issi: u32, called_issi: u32, simplex: bool, ts: u8, priority: u8 },
     /// Individual call ended
     IndividualCallEnded { call_id: u16 },
     /// Energy saving mode updated for MS (0=StayAlive, 1=Eg1..7=Eg7)
@@ -133,6 +136,20 @@ pub enum TelemetryEvent {
         /// Individual sensor readings, in display order.
         sensors: Vec<SysSensor>,
     },
+    /// Lite stack-health roll-up (Service / Backhaul / Radios / Congestion), emitted by the
+    /// health monitor every few seconds. Rendered as the dashboard "System Health" tile and used
+    /// by the Telegram alerter to notify on health-level transitions. Appended last so existing
+    /// telemetry variant indices stay wire-stable.
+    HealthSnapshot(crate::health::HealthSnapshot),
+    /// A radio ENTERED active emergency — it sent an emergency status (U-STATUS, pre-coded status
+    /// Emergency) to `dest_ssi`. Emitted once per session (on enter), not on the radio's periodic
+    /// re-sends. Drives the dashboard emergency banner + Telegram alert. Appended last for
+    /// bitcode wire-stability. (Emergency-priority CALLS are surfaced separately in the Active
+    /// Calls table via the call's `priority`, not through this event.)
+    EmergencyAlarm { source_issi: u32, dest_ssi: u32 },
+    /// A radio's emergency was CLEARED (non-emergency status, clear-timeout, or operator clear).
+    /// Appended last for bitcode wire-stability.
+    EmergencyCancel { source_issi: u32 },
 }
 
 /// A single host-system sensor reading. Kept flat for easy JSON serialisation

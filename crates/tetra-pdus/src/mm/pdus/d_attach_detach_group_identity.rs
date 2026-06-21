@@ -149,3 +149,82 @@ impl fmt::Display for DAttachDetachGroupIdentity {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mm::fields::group_identity_attachment::GroupIdentityAttachment;
+
+    /// A BS-initiated DGNA *attach* — one GSSI, persistent attachment (lifetime 0), ack requested,
+    /// amend-mode (attach/detach_mode = false) — is exactly the shape FlowStation's DGNA send path
+    /// emits. It must serialize and parse back to an identical PDU.
+    #[test]
+    fn dgna_attach_round_trips() {
+        let pdu = DAttachDetachGroupIdentity {
+            group_identity_report: false,
+            group_identity_acknowledgement_request: true,
+            group_identity_attach_detach_mode: false,
+            proprietary: None,
+            group_report_response: None,
+            group_identity_downlink: Some(vec![GroupIdentityDownlink {
+                group_identity_attachment: Some(GroupIdentityAttachment {
+                    group_identity_attachment_lifetime: 0,
+                    class_of_usage: 4,
+                }),
+                group_identity_detachment_uplink: None,
+                gssi: Some(1234567),
+                address_extension: None,
+                vgssi: None,
+            }]),
+            group_identity_security_related_information: None,
+        };
+
+        let mut buf = BitBuffer::new_autoexpand(32);
+        pdu.to_bitbuf(&mut buf).expect("serialize");
+        buf.seek(0);
+        let parsed = DAttachDetachGroupIdentity::from_bitbuf(&mut buf).expect("parse");
+
+        assert!(!parsed.group_identity_report);
+        assert!(parsed.group_identity_acknowledgement_request);
+        assert!(!parsed.group_identity_attach_detach_mode, "DGNA must amend, not reset, the group list");
+        let gids = parsed.group_identity_downlink.expect("downlink present");
+        assert_eq!(gids.len(), 1);
+        assert_eq!(gids[0].gssi, Some(1234567));
+        let att = gids[0].group_identity_attachment.as_ref().expect("attachment present");
+        assert_eq!(att.group_identity_attachment_lifetime, 0, "lifetime 0 = persistent on MS");
+        assert_eq!(att.class_of_usage, 4);
+        assert!(gids[0].group_identity_detachment_uplink.is_none());
+    }
+
+    /// A BS-initiated DGNA *detach* — one GSSI carrying a detachment field instead of an
+    /// attachment — must round-trip identically.
+    #[test]
+    fn dgna_detach_round_trips() {
+        let pdu = DAttachDetachGroupIdentity {
+            group_identity_report: false,
+            group_identity_acknowledgement_request: true,
+            group_identity_attach_detach_mode: false,
+            proprietary: None,
+            group_report_response: None,
+            group_identity_downlink: Some(vec![GroupIdentityDownlink {
+                group_identity_attachment: None,
+                group_identity_detachment_uplink: Some(0),
+                gssi: Some(7654321),
+                address_extension: None,
+                vgssi: None,
+            }]),
+            group_identity_security_related_information: None,
+        };
+
+        let mut buf = BitBuffer::new_autoexpand(32);
+        pdu.to_bitbuf(&mut buf).expect("serialize");
+        buf.seek(0);
+        let parsed = DAttachDetachGroupIdentity::from_bitbuf(&mut buf).expect("parse");
+
+        let gids = parsed.group_identity_downlink.expect("downlink present");
+        assert_eq!(gids.len(), 1);
+        assert_eq!(gids[0].gssi, Some(7654321));
+        assert!(gids[0].group_identity_attachment.is_none(), "detach carries no attachment");
+        assert_eq!(gids[0].group_identity_detachment_uplink, Some(0));
+    }
+}

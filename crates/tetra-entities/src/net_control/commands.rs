@@ -24,6 +24,20 @@ pub enum ControlCommand {
     /// Forcibly deregister a terminal from the BS
     KickMs { issi: u32 },
 
+    /// Dynamic Group Number Assignment (SS-DGNA, ETSI EN 300 392-2 §16).
+    ///
+    /// BS-initiated: attach (or detach) a single GSSI on an already-registered
+    /// terminal over the air, by sending it an unsolicited D-ATTACH/DETACH GROUP
+    /// IDENTITY. Local-only — no Brew propagation is performed for this command.
+    Dgna {
+        /// Target terminal (must be registered on the cell).
+        issi: u32,
+        /// Group to assign/remove.
+        gssi: u32,
+        /// `true` = assign/attach the group, `false` = deassign/detach it.
+        attach: bool,
+    },
+
     /// Restart the FlowStation service (systemctl restart tetra)
     RestartService,
 
@@ -46,6 +60,10 @@ pub enum ControlCommand {
 
     /// Remove all live SDS messages from the queue.
     ClearLiveSds,
+
+    /// Operator-clear an active emergency for one ISSI (`issi == 0` clears all). Local-only;
+    /// clears the source session so a subsequent emergency re-send raises a fresh alarm.
+    ClearEmergency { issi: u32 },
 
     /// Placeholder command A.
     CommandA { handle: u32, parameter: u32 },

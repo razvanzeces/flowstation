@@ -516,6 +516,12 @@ impl BsChannelScheduler {
 
     ////////// DOWNLINK SCHEDULING /////////
 
+    /// Total queued downlink scheduling elements across all timeslots plus the next-slot carry-over.
+    /// A cheap backlog gauge for the health monitor's Congestion domain (read once per tick).
+    pub fn dl_queue_depth(&self) -> usize {
+        self.dltx_queues.iter().map(|q| q.len()).sum::<usize>() + self.dltx_next_slot_queue.len()
+    }
+
     /// Registers that we should transmit a MAC-RESOURCE or similar with a grant, somewhere this tick.
     /// `usage_marker` is set when the grant covers >1 slot — the MS uses it to identify the reservation
     /// when continuing the burst on the second slot (per ETSI §21.4.3.2). Single-slot grants pass None.

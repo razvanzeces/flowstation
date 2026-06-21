@@ -34,6 +34,8 @@ pub struct CfgTelegram {
     pub alert_backhaul: bool,
     /// Forward the stack's own WARN/ERROR log lines as alerts (catch-all for critical status).
     pub alert_critical_logs: bool,
+    /// Alert when the overall station-health level changes (Ok/Degraded/Critical transitions).
+    pub alert_health: bool,
 }
 
 impl Default for CfgTelegram {
@@ -48,6 +50,7 @@ impl Default for CfgTelegram {
             alert_lip: true,
             alert_backhaul: true,
             alert_critical_logs: true,
+            alert_health: true,
         }
     }
 }
@@ -81,6 +84,8 @@ pub struct CfgTelegramDto {
     pub alert_backhaul: bool,
     #[serde(default = "default_true")]
     pub alert_critical_logs: bool,
+    #[serde(default = "default_true")]
+    pub alert_health: bool,
 
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, toml::Value>,
@@ -101,5 +106,6 @@ pub fn apply_telegram_patch(dto: CfgTelegramDto) -> CfgTelegram {
         alert_lip: dto.alert_lip,
         alert_backhaul: dto.alert_backhaul,
         alert_critical_logs: dto.alert_critical_logs,
+        alert_health: dto.alert_health,
     }
 }

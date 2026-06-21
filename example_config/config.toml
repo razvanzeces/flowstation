@@ -392,6 +392,33 @@ voice_service = true
 
 ###############################################################################
 
+# OPTIONAL: Lite stack-health monitor (FlowStation)
+#
+# A background sampler rolls a few coarse domains — core-loop liveness, Brew backhaul, attached
+# radios, and downlink/SDS congestion — into a small snapshot every few seconds. It surfaces as
+# the "HEALTH" badge in the dashboard topbar (green/amber/red with a per-domain tooltip) and, if
+# Telegram alerts are configured, sends a message whenever the overall level changes.
+#
+# The monitor itself is observe-only and harmless, so it defaults ON. The optional software
+# WATCHDOG (restart_on_core_stall) restarts the service if the TETRA core loop stops ticking —
+# that is RF-/service-affecting, so it defaults OFF and is a deliberate operator choice. The
+# whole block can be omitted; these are the defaults.
+#
+# [health]
+# enabled = true                    # master on/off for the monitor (default true)
+# snapshot_interval_secs = 5        # how often a snapshot is emitted (1..=300)
+# restart_on_core_stall = false     # software watchdog: restart if the core loop stalls (default false)
+# core_stall_secs = 10              # core is Critical after no TDMA tick for this long (2..=600)
+# restart_after_critical_secs = 30  # how long stalled before a restart is requested (1..=3600)
+# restart_cooldown_secs = 600       # minimum spacing between restart requests (10..=86400)
+# radios_silent_secs = 900          # Radios Degraded if attached but silent this long; 0 = off
+# dl_queue_degraded = 64            # downlink backlog → Congestion Degraded
+# dl_queue_critical = 192           # downlink backlog → Congestion Critical
+# sds_queue_degraded = 32           # deferred-SDS backlog → Congestion Degraded
+# sds_queue_critical = 128          # deferred-SDS backlog → Congestion Critical
+
+###############################################################################
+
 # OPTIONAL: Built-in WX/METAR SDS service (FlowStation)
 #
 # A weather responder that runs inside FlowStation — no external bot needed.
@@ -444,6 +471,23 @@ voice_service = true
 # alert_lip = true                # LIP/APRS position beacon
 # alert_backhaul = true           # Brew backhaul up/down
 # alert_critical_logs = true      # forward the stack's WARN/ERROR log lines
+
+###############################################################################
+
+# OPTIONAL: Emergency-state handling (FlowStation)
+#
+# A radio signals emergency with a U-STATUS PDU (pre_coded_status = Emergency, status 0,
+# ETSI EN 300 392-2 table 14.72), re-sent periodically while active; on exit it sends nothing.
+# An emergency CALL (U-SETUP call_priority 15) raises the same state. Emergency is LOCAL-only:
+# it raises a persistent dashboard banner and (optionally) a Telegram alert, and is NOT forwarded
+# to Brew unless forward_to_brew is set. Because the radio is silent on exit, a session auto-clears
+# clear_timeout_secs after the last emergency status (or when the ISSI sends a non-Emergency
+# status, or an operator clears it from the dashboard). Always active with these defaults.
+#
+# [emergency]
+# forward_to_brew = false     # also forward the emergency status to Brew (default false, LOCAL-only)
+# telegram_alert = true       # Telegram alert when an emergency ENTERS, not on re-sends (default true)
+# clear_timeout_secs = 30     # auto-clear after this many seconds with no emergency status (5..=600)
 
 ###############################################################################
 

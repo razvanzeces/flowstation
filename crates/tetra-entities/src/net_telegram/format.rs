@@ -66,6 +66,19 @@ fn frame(emoji: &str, title: &str, lines: &[String], station: &StationInfo) -> S
     out
 }
 
+/// A radio raised an emergency (emergency status PDU — pre-coded status Emergency).
+pub fn emergency(station: &StationInfo, source_issi: u32, dest_ssi: u32) -> String {
+    frame(
+        "🆘",
+        "EMERGENCY",
+        &[
+            format!("From ISSI: <code>{source_issi}</code>"),
+            format!("To: <code>{dest_ssi}</code>"),
+        ],
+        station,
+    )
+}
+
 /// A radio attached to the cell.
 pub fn connect(station: &StationInfo, issi: u32) -> String {
     frame("🟢", "Radio connected", &[format!("ISSI: <code>{issi}</code>")], station)
@@ -155,6 +168,36 @@ pub fn test_message(station: &StationInfo) -> String {
         &["FlowStation alerts are configured correctly. You'll receive notifications here.".to_string()],
         station,
     )
+}
+
+/// Station health changed level. Lists the domains that are not Ok, plus the last action taken.
+pub fn health(station: &StationInfo, snap: &crate::health::HealthSnapshot) -> String {
+    use crate::health::HealthLevel;
+    let (emoji, title) = match snap.overall {
+        HealthLevel::Ok => ("🟢", "Station healthy"),
+        HealthLevel::Degraded => ("🟠", "Station degraded"),
+        HealthLevel::Critical => ("🔴", "Station CRITICAL"),
+    };
+    let mut lines: Vec<String> = snap
+        .domains
+        .iter()
+        .filter(|d| !matches!(d.level, HealthLevel::Ok))
+        .map(|d| {
+            format!(
+                "⚠️ <b>{}</b> ({}): {}",
+                escape_html(d.domain.as_str()),
+                d.level.as_str(),
+                escape_html(&truncate_chars(&d.detail, 120))
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push("All domains nominal again.".to_string());
+    }
+    if let Some(action) = &snap.last_action {
+        lines.push(format!("🔧 {}", escape_html(&truncate_chars(action, 160))));
+    }
+    frame(emoji, title, &lines, station)
 }
 
 #[cfg(test)]
