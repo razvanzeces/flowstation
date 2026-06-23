@@ -11,6 +11,8 @@ use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 use tetra_saps::tla::{TlaTlDataIndBl, TlaTlDataReqBl};
 use tetra_saps::tma::{TmaUnitdataInd, TmaUnitdataReq};
 
+const MAIN_CARRIER: u16 = 1521;
+
 #[test]
 fn test_udata_with_broken_mm_payload() {
     // INCOMPLETE VECTOR replace with something more meaningful
@@ -20,6 +22,7 @@ fn test_udata_with_broken_mm_payload() {
     let test_vec = "00011001011100111000000011111100001000010000000000000000"; // INCOMPLETE
     let dltime_vec = TdmaTime::default().add_timeslots(2); // Downlink time: 0/1/1/3
     let test_prim = TmaUnitdataInd {
+        carrier_num: MAIN_CARRIER,
         pdu: Some(BitBuffer::from_bitstr(test_vec)),
         main_address: TetraAddress {
             ssi: 2065022,
@@ -78,6 +81,7 @@ fn test_bl_ack_with_piggyback_cmce_payload_is_forwarded() {
     pdu.seek(0);
 
     let test_prim = TmaUnitdataInd {
+        carrier_num: MAIN_CARRIER,
         pdu: Some(pdu),
         main_address: TetraAddress::new(2200699, SsiType::Issi),
         scrambling_code: 0,
@@ -105,7 +109,12 @@ fn test_bl_ack_with_piggyback_cmce_payload_is_forwarded() {
     let sink_msgs = test.dump_sinks();
 
     assert_eq!(sink_msgs.len(), 1);
-    let SapMsgInner::TlaTlDataIndBl(TlaTlDataIndBl { link_id, tl_sdu: Some(mut sdu), .. }) = sink_msgs[0].msg.clone() else {
+    let SapMsgInner::TlaTlDataIndBl(TlaTlDataIndBl {
+        link_id,
+        tl_sdu: Some(mut sdu),
+        ..
+    }) = sink_msgs[0].msg.clone()
+    else {
         panic!("expected TlaTlDataIndBl with piggyback payload");
     };
     assert_eq!(link_id, 0);
@@ -154,8 +163,9 @@ fn test_stealing_bl_udata_fallback_uses_unlinked_llc_context() {
     let sink_msgs = test.dump_sinks();
 
     assert_eq!(sink_msgs.len(), 1);
-    let SapMsgInner::TmaUnitdataReq(TmaUnitdataReq { link_id, .. }) = &sink_msgs[0].msg else {
+    let SapMsgInner::TmaUnitdataReq(TmaUnitdataReq { carrier_num, link_id, .. }) = &sink_msgs[0].msg else {
         panic!("expected TMA-UNITDATA request");
     };
+    assert_eq!(*carrier_num, Some(MAIN_CARRIER));
     assert_eq!(*link_id, 0);
 }

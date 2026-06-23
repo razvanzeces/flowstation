@@ -2,6 +2,7 @@
 #[derive(Debug, Clone)]
 pub struct TmdCircuitDataReq {
     // call_id: CallId,
+    pub carrier_num: u16,
     pub ts: u8,
     pub data: Vec<u8>,
 }
@@ -10,6 +11,7 @@ pub struct TmdCircuitDataReq {
 #[derive(Debug, Clone)]
 pub struct TmdCircuitDataInd {
     // call_id: CallId,
+    pub carrier_num: u16,
     pub ts: u8,
     pub data: Vec<u8>,
 }

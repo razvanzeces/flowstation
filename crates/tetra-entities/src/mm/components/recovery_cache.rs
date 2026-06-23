@@ -172,8 +172,16 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let mut cache = RecoveryCache::new(path.clone(), Duration::ZERO);
         let records = vec![
-            TerminalRecord { issi: 2260571, groups: vec![91, 92], energy_saving_mode: 0 },
-            TerminalRecord { issi: 1000001, groups: vec![], energy_saving_mode: 2 },
+            TerminalRecord {
+                issi: 2260571,
+                groups: vec![91, 92],
+                energy_saving_mode: 0,
+            },
+            TerminalRecord {
+                issi: 1000001,
+                groups: vec![],
+                energy_saving_mode: 2,
+            },
         ];
         cache.flush_now(records.clone());
         let loaded = RecoveryCache::new(path.clone(), Duration::ZERO).load();
@@ -213,12 +221,24 @@ mod tests {
         // Long debounce: a dirty flush is suppressed until the window elapses.
         let mut cache = RecoveryCache::new(path.clone(), Duration::from_secs(3600));
         cache.mark_dirty();
-        cache.maybe_flush(|| vec![TerminalRecord { issi: 7, groups: vec![], energy_saving_mode: 0 }]);
+        cache.maybe_flush(|| {
+            vec![TerminalRecord {
+                issi: 7,
+                groups: vec![],
+                energy_saving_mode: 0,
+            }]
+        });
         assert!(!path.exists(), "should not write before debounce elapses");
         // Zero debounce: flushes immediately when dirty.
         let mut cache = RecoveryCache::new(path.clone(), Duration::ZERO);
         cache.mark_dirty();
-        cache.maybe_flush(|| vec![TerminalRecord { issi: 7, groups: vec![], energy_saving_mode: 0 }]);
+        cache.maybe_flush(|| {
+            vec![TerminalRecord {
+                issi: 7,
+                groups: vec![],
+                energy_saving_mode: 0,
+            }]
+        });
         assert!(path.exists(), "should write once debounce is satisfied");
         assert!(!cache.is_dirty());
         // Not dirty → no-op.

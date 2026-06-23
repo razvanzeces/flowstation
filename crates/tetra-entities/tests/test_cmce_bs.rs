@@ -5,15 +5,16 @@ use std::time::Duration;
 use tetra_config::bluestation::{CfgBrew, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, TxState, debug};
+use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_pdus::cmce::enums::{
     call_timeout::CallTimeout, cmce_pdu_type_dl::CmcePduTypeDl, party_type_identifier::PartyTypeIdentifier,
     transmission_grant::TransmissionGrant,
 };
 use tetra_pdus::cmce::fields::basic_service_information::BasicServiceInformation;
-use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_pdus::cmce::pdus::{
-    d_connect::DConnect, d_connect_acknowledge::DConnectAcknowledge, d_setup::DSetup, d_tx_ceased::DTxCeased, d_tx_granted::DTxGranted,
-    u_connect::UConnect, u_disconnect::UDisconnect, u_setup::USetup, u_tx_ceased::UTxCeased, u_tx_demand::UTxDemand,
+    d_connect::DConnect, d_connect_acknowledge::DConnectAcknowledge, d_release::DRelease, d_setup::DSetup, d_tx_ceased::DTxCeased,
+    d_tx_granted::DTxGranted, u_connect::UConnect, u_disconnect::UDisconnect, u_setup::USetup, u_tx_ceased::UTxCeased,
+    u_tx_demand::UTxDemand,
 };
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::control::call_control::{CallControl, NetworkCircuitCall};
@@ -27,6 +28,7 @@ use crate::common::ComponentTest;
 
 const TEST_GSSI: u32 = 91;
 const TEST_ISSI: u32 = 1000001;
+const SECONDARY_CARRIER: u16 = 1522;
 
 /// Helper: register a subscriber on a GSSI so CMCE accepts calls for that group.
 fn register_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
@@ -388,6 +390,27 @@ fn connected_simplex_individual_call(calling_issi: u32, called_issi: u32) -> (Co
     (test, call_id, connect_msgs)
 }
 
+fn connected_duplex_individual_call(calling_issi: u32, called_issi: u32) -> (ComponentTest, u16, Vec<SapMsg>) {
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+    test.config.state_write().subscribers.register(called_issi);
+
+    test.submit_message(build_individual_u_setup_msg_with_mode(calling_issi, called_issi, true));
+    test.run_stack(Some(1));
+    let setup_msgs = test.dump_sinks();
+    let call_id = first_d_setup_call_id(&setup_msgs, called_issi);
+
+    test.submit_message(build_u_connect_msg(called_issi, call_id, true));
+    test.run_stack(Some(1));
+    let connect_msgs = test.dump_sinks();
+
+    (test, call_id, connect_msgs)
+}
+
 fn connected_brew_originated_simplex_call(remote_issi: u32, local_issi: u32) -> (ComponentTest, u16, uuid::Uuid) {
     let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
     let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
@@ -578,6 +601,45 @@ fn test_simplex_individual_connect_grants_calling_ms_initial_floor() {
 }
 
 #[test]
+fn test_individual_connect_mcch_fallback_uses_linkless_delivery() {
+    debug::setup_logging_verbose();
+
+    let calling_issi = 1000001;
+    let called_issi = 1000002;
+    let (_test, _call_id, msgs) = connected_simplex_individual_call(calling_issi, called_issi);
+
+    let caller_mcch_connect = msgs.iter().find(|msg| {
+        let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
+            return false;
+        };
+        prim.main_address.ssi == calling_issi
+            && !prim.stealing_permission
+            && prim.chan_alloc.is_some()
+            && prim.link_id == 0
+            && dl_pdu_type(&prim.sdu) == Some(CmcePduTypeDl::DConnect)
+    });
+    assert!(
+        caller_mcch_connect.is_some(),
+        "expected D-CONNECT MCCH fallback for caller to be sent linkless"
+    );
+
+    let called_mcch_ack = msgs.iter().find(|msg| {
+        let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
+            return false;
+        };
+        prim.main_address.ssi == called_issi
+            && !prim.stealing_permission
+            && prim.chan_alloc.is_some()
+            && prim.link_id == 0
+            && dl_pdu_type(&prim.sdu) == Some(CmcePduTypeDl::DConnectAcknowledge)
+    });
+    assert!(
+        called_mcch_ack.is_some(),
+        "expected D-CONNECT-ACK MCCH fallback for callee to be sent linkless"
+    );
+}
+
+#[test]
 fn test_brew_originated_simplex_connect_confirm_makes_local_ms_listener() {
     debug::setup_logging_verbose();
 
@@ -680,6 +742,7 @@ fn test_brew_originated_simplex_connect_confirm_makes_local_ms_listener() {
         SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady {
             brew_uuid: ready_uuid,
             call_id: ready_call_id,
+            carrier_num: _,
             ts: 2,
         }) if *ready_uuid == brew_uuid && *ready_call_id == call_id
     )));
@@ -822,7 +885,11 @@ fn test_brew_simplex_granted_resumes_remote_downlink_without_ul_timer() {
 
     assert!(granted_msgs.iter().any(|msg| matches!(
         &msg.msg,
-        SapMsgInner::CmceCallControl(CallControl::RemoteFloorGranted { call_id: msg_call_id, ts: 2 })
+        SapMsgInner::CmceCallControl(CallControl::RemoteFloorGranted {
+            call_id: msg_call_id,
+            carrier_num: _,
+            ts: 2,
+        })
             if *msg_call_id == call_id
     )));
     assert!(
@@ -885,7 +952,11 @@ fn test_network_group_speaker_change_uses_remote_floor_grant() {
         .iter()
         .find_map(|msg| match &msg.msg {
             SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
-                brew_uuid, call_id, ts, ..
+                brew_uuid,
+                call_id,
+                carrier_num: _,
+                ts,
+                ..
             }) if *brew_uuid == first_uuid => Some((*call_id, *ts)),
             _ => None,
         })
@@ -907,7 +978,11 @@ fn test_network_group_speaker_change_uses_remote_floor_grant() {
 
     assert!(speaker_change_msgs.iter().any(|msg| matches!(
         &msg.msg,
-        SapMsgInner::CmceCallControl(CallControl::RemoteFloorGranted { call_id: msg_call_id, ts: msg_ts })
+        SapMsgInner::CmceCallControl(CallControl::RemoteFloorGranted {
+            call_id: msg_call_id,
+            carrier_num: _,
+            ts: msg_ts,
+        })
             if *msg_call_id == call_id && *msg_ts == ts
     )));
     assert!(
@@ -1033,6 +1108,112 @@ fn test_simplex_individual_current_speaker_tx_demand_is_granted() {
             .iter()
             .any(|msg| matches!(&msg.msg, SapMsgInner::CmceCallControl(CallControl::FloorGranted { .. }))),
         "Current-speaker demand should not emit a duplicate floor grant"
+    );
+}
+
+#[test]
+fn test_duplex_individual_ul_inactivity_releases_circuit_call() {
+    debug::setup_logging_verbose();
+
+    let calling_issi = 1000001;
+    let called_issi = 1000002;
+    let (mut test, call_id, connect_msgs) = connected_duplex_individual_call(calling_issi, called_issi);
+
+    let mut open_slots: Vec<(u16, u8)> = connect_msgs
+        .iter()
+        .filter_map(|msg| match &msg.msg {
+            SapMsgInner::CmceCallControl(CallControl::Open(circuit)) => Some((circuit.carrier_num, circuit.ts)),
+            _ => None,
+        })
+        .collect();
+    open_slots.sort_unstable();
+    let (failed_carrier, failed_ts) = open_slots
+        .first()
+        .copied()
+        .expect("Expected duplex connect to open at least one traffic circuit");
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Umac,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::UlInactivityTimeout {
+            carrier_num: failed_carrier,
+            ts: failed_ts,
+        }),
+    });
+    test.run_stack(Some(1));
+    let timeout_msgs = test.dump_sinks();
+
+    let (mut calling_release_sdu, _) =
+        find_lcmc_req(&timeout_msgs, calling_issi, CmcePduTypeDl::DRelease).expect("Expected D-RELEASE to calling ISSI");
+    let calling_release = DRelease::from_bitbuf(&mut calling_release_sdu).expect("Failed to parse calling DRelease");
+    assert_eq!(calling_release.call_identifier, call_id);
+    assert_eq!(calling_release.disconnect_cause, DisconnectCause::ExpiryOfTimer);
+
+    let (mut called_release_sdu, _) =
+        find_lcmc_req(&timeout_msgs, called_issi, CmcePduTypeDl::DRelease).expect("Expected D-RELEASE to called ISSI");
+    let called_release = DRelease::from_bitbuf(&mut called_release_sdu).expect("Failed to parse called DRelease");
+    assert_eq!(called_release.call_identifier, call_id);
+    assert_eq!(called_release.disconnect_cause, DisconnectCause::ExpiryOfTimer);
+}
+
+#[test]
+fn test_dual_carrier_supports_two_simultaneous_duplex_individual_calls() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.secondary_carrier = Some(SECONDARY_CARRIER);
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+    test.config.state_write().subscribers.register(9012002);
+    test.config.state_write().subscribers.register(9012004);
+
+    test.submit_message(build_individual_u_setup_msg_with_mode(9012001, 9012002, true));
+    test.run_stack(Some(1));
+    let first_setup_msgs = test.dump_sinks();
+    let first_call_id = first_d_setup_call_id(&first_setup_msgs, 9012002);
+
+    test.submit_message(build_u_connect_msg(9012002, first_call_id, true));
+    test.run_stack(Some(1));
+    let first_connect_msgs = test.dump_sinks();
+
+    test.submit_message(build_individual_u_setup_msg_with_mode(9012003, 9012004, true));
+    test.run_stack(Some(1));
+    let second_setup_msgs = test.dump_sinks();
+    let second_call_id = first_d_setup_call_id(&second_setup_msgs, 9012004);
+
+    test.submit_message(build_u_connect_msg(9012004, second_call_id, true));
+    test.run_stack(Some(1));
+    let second_connect_msgs = test.dump_sinks();
+
+    let opened: Vec<(u16, u8)> = first_connect_msgs
+        .iter()
+        .chain(second_connect_msgs.iter())
+        .filter_map(|msg| match &msg.msg {
+            SapMsgInner::CmceCallControl(CallControl::Open(circuit)) => Some((circuit.carrier_num, circuit.ts)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(opened.len(), 4, "two duplex calls should open four traffic circuits");
+    assert!(
+        opened.iter().any(|(carrier_num, _)| *carrier_num == SECONDARY_CARRIER),
+        "the second duplex call should spill onto the secondary carrier when the primary runs out of slots"
+    );
+    assert!(
+        first_connect_msgs.iter().chain(second_connect_msgs.iter()).all(
+            |msg| !matches!(&msg.msg, SapMsgInner::LcmcMleUnitdataReq(prim) if dl_pdu_type(&prim.sdu) == Some(CmcePduTypeDl::DRelease))
+        ),
+        "establishing two duplex calls on a dual-carrier cell must not reject either call"
+    );
+    assert_eq!(
+        test.config.state_read().timeslot_alloc.free_slot_count(),
+        2,
+        "two simultaneous duplex calls should consume four of the six available traffic slots"
     );
 }
 
@@ -1423,8 +1604,7 @@ fn test_group_d_setup_uses_unacknowledged_llc() {
     test.run_stack(Some(1));
     let setup_msgs = test.dump_sinks();
 
-    let l2 = lcmc_req_layer2service(&setup_msgs, TEST_GSSI, CmcePduTypeDl::DSetup)
-        .expect("Expected a group D-SETUP addressed to the GSSI");
+    let l2 = lcmc_req_layer2service(&setup_msgs, TEST_GSSI, CmcePduTypeDl::DSetup).expect("Expected a group D-SETUP addressed to the GSSI");
     assert_eq!(
         l2,
         tetra_core::Layer2Service::Unacknowledged,
@@ -1557,8 +1737,7 @@ fn test_u_facility_answered_with_function_not_supported() {
     let (mut resp_sdu, _) = find_lcmc_req(&msgs, calling_issi, CmcePduTypeDl::CmceFunctionNotSupported)
         .expect("Expected D-CMCE-FUNCTION-NOT-SUPPORTED to requesting ISSI");
 
-    let pdu = CmceFunctionNotSupported::from_bitbuf(&mut resp_sdu)
-        .expect("Failed to parse D-CMCE-FUNCTION-NOT-SUPPORTED");
+    let pdu = CmceFunctionNotSupported::from_bitbuf(&mut resp_sdu).expect("Failed to parse D-CMCE-FUNCTION-NOT-SUPPORTED");
     assert_eq!(
         pdu.not_supported_pdu_type,
         CmcePduTypeUl::UFacility.into_raw() as u8,

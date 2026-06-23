@@ -56,9 +56,7 @@ impl Sndcp {
     fn send_pdp_accept(&self, queue: &mut MessageQueue, ind: &LtpdMleUnitdataInd, demand: &str) {
         // Decode the DEMAND mandatory header (table 28.24): type(4) version(4) NSAPI(4) ATID(3)
         // [IPv4(32) when ATID==0].
-        let bits = |off: usize, n: usize| -> Option<u64> {
-            demand.get(off..off + n).and_then(|s| u64::from_str_radix(s, 2).ok())
-        };
+        let bits = |off: usize, n: usize| -> Option<u64> { demand.get(off..off + n).and_then(|s| u64::from_str_radix(s, 2).ok()) };
         let nsapi = bits(8, 4).unwrap_or(1);
         let atid = bits(12, 3).unwrap_or(0);
         let (tia, ipv4) = if atid == 0 {
@@ -173,16 +171,14 @@ fn chap_success_optional_section(chap_id: u8) -> String {
 /// is validated to reject a coincidental C223H bit pattern inside a hash value.
 fn find_chap_response_id(demand: &str) -> Option<u8> {
     const CHAP_PROTO_ID: &str = "1100001000100011"; // C223H, MSB first
-    let read = |off: usize| -> Option<u8> {
-        demand.get(off..off + 8).and_then(|s| u8::from_str_radix(s, 2).ok())
-    };
+    let read = |off: usize| -> Option<u8> { demand.get(off..off + 8).and_then(|s| u8::from_str_radix(s, 2).ok()) };
     let mut fallback = None;
     let mut from = 0;
     while let Some(rel) = demand.get(from..).and_then(|s| s.find(CHAP_PROTO_ID)) {
         let marker = from + rel;
         // After C223H: length-of-contents (8 bits), then the CHAP packet (code, identifier, ...).
         match (read(marker + 16 + 8), read(marker + 16 + 16)) {
-            (Some(2), Some(id)) => return Some(id), // Response — echo this identifier
+            (Some(2), Some(id)) => return Some(id),                           // Response — echo this identifier
             (Some(1), Some(id)) if fallback.is_none() => fallback = Some(id), // Challenge
             _ => {}
         }

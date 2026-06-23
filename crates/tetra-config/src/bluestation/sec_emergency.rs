@@ -97,9 +97,15 @@ mod tests {
 
     #[test]
     fn clamps_clear_timeout() {
-        let dto = CfgEmergencyDto { clear_timeout_secs: 0, ..Default::default() };
+        let dto = CfgEmergencyDto {
+            clear_timeout_secs: 0,
+            ..Default::default()
+        };
         assert_eq!(apply_emergency_patch(dto).clear_timeout_secs, 5);
-        let dto = CfgEmergencyDto { clear_timeout_secs: 99_999, ..Default::default() };
+        let dto = CfgEmergencyDto {
+            clear_timeout_secs: 99_999,
+            ..Default::default()
+        };
         assert_eq!(apply_emergency_patch(dto).clear_timeout_secs, 600);
     }
 }

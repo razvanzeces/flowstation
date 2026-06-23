@@ -112,6 +112,8 @@ pub struct CfgCellInfo {
 
     /// 12 bits, from MAC SYSINFO
     pub main_carrier: u16,
+    /// Optional adjacent carrier for dual-carrier BS operation.
+    pub secondary_carrier: Option<u16>,
     /// 4 bits, from MAC SYSINFO
     pub freq_band: u8,
     /// Offset in Hz from 25kHz aligned carrier. Options: 0, 6250, -6250, 12500 Hz
@@ -212,6 +214,7 @@ pub struct CfgCellInfo {
 #[derive(Default, Deserialize)]
 pub struct CellInfoDto {
     pub main_carrier: u16,
+    pub secondary_carrier: Option<u16>,
     pub freq_band: u8,
     pub freq_offset: i16,
     pub duplex_spacing: u8,
@@ -285,6 +288,7 @@ pub struct CellInfoDto {
 pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
     CfgCellInfo {
         main_carrier: ci.main_carrier,
+        secondary_carrier: ci.secondary_carrier,
         freq_band: ci.freq_band,
         freq_offset_hz: ci.freq_offset,
         duplex_spacing_id: ci.duplex_spacing,
@@ -333,7 +337,10 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         }),
         neighbor_cells_ca: ci.neighbor_cells_ca,
         hangtime_secs: ci.hangtime_secs.unwrap_or(5).clamp(0, 300),
-        call_timeout_secs: { let v = ci.call_timeout_secs.unwrap_or(120); if v == 0 { 0 } else { v.clamp(30, 86400) } },
+        call_timeout_secs: {
+            let v = ci.call_timeout_secs.unwrap_or(120);
+            if v == 0 { 0 } else { v.clamp(30, 86400) }
+        },
         ul_inactivity_secs: ci.ul_inactivity_secs.unwrap_or(3).clamp(1, 30),
         periodic_registration_secs: {
             let v = ci.periodic_registration_secs.unwrap_or(3600);
@@ -341,10 +348,14 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         },
         sds_command_control: ci.sds_command_control.map(|dto| CfgSdsCommandControl {
             authorized_issis: dto.authorized_issis,
-            commands: dto.commands.into_iter().map(|e| CfgSdsCommandEntry {
-                status_code: e.status_code,
-                action: e.action,
-            }).collect(),
+            commands: dto
+                .commands
+                .into_iter()
+                .map(|e| CfgSdsCommandEntry {
+                    status_code: e.status_code,
+                    action: e.action,
+                })
+                .collect(),
         }),
         release_group_on_same_speaker_retake: ci.release_group_on_same_speaker_retake.unwrap_or(false),
     }

@@ -32,9 +32,11 @@ pub enum SapMsgInner {
     /// TP-SAP (Contents not defined in standard)
     TpUnitdataInd(TpUnitdataInd),
     TpUnitdataReq(TpUnitdataReqSlot),
+    TpUnitdataReqSlots(TpUnitdataReqSlots),
 
     // TMV-SAP
     TmvUnitdataReq(TmvUnitdataReqSlot),
+    TmvUnitdataReqSlots(TmvUnitdataReqSlots),
     TmvUnitdataInd(TmvUnitdataInd),
     TmvConfigureReq(TmvConfigureReq),
     TmvConfigureConf(TmvConfigureConf),
@@ -83,11 +85,18 @@ pub enum SapMsgInner {
     /// CMCE -> MM: dashboard-originated DGNA (Dynamic Group Number Assignment). The dashboard's
     /// control channel terminates at CMCE, but the group attach/detach machinery lives in MM, so
     /// CMCE forwards the request here. `attach` = true assigns the GSSI, false deassigns it.
-    MmDgnaRequest { issi: u32, gssi: u32, attach: bool },
+    MmDgnaRequest {
+        issi: u32,
+        gssi: u32,
+        attach: bool,
+    },
 
     /// Sent by UMAC to MM when a UL burst is received from a known MS.
     /// MM stores the RSSI value per MS for logging and future handover decisions.
-    MsRssiUpdate { issi: u32, rssi_dbfs: f32 },
+    MsRssiUpdate {
+        issi: u32,
+        rssi_dbfs: f32,
+    },
 
     /// Sent by BrewEntity to MM when the Brew backhaul reconnects.
     /// MM responds by sending D-LOCATION-UPDATE-COMMAND to all locally registered MS,
@@ -110,10 +119,13 @@ impl Display for SapMsgInner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             // TP-SAP
-            // SapMsgInner::TpUnitdataInd(_) => write!(f, "TpUnitdataInd"),
+            SapMsgInner::TpUnitdataInd(_) => write!(f, "TpUnitdataInd"),
+            SapMsgInner::TpUnitdataReq(_) => write!(f, "TpUnitdataReq"),
+            SapMsgInner::TpUnitdataReqSlots(_) => write!(f, "TpUnitdataReqSlots"),
 
             // TMV-SAP
             SapMsgInner::TmvUnitdataReq(_) => write!(f, "TmvUnitdataReq"),
+            SapMsgInner::TmvUnitdataReqSlots(_) => write!(f, "TmvUnitdataReqSlots"),
             SapMsgInner::TmvUnitdataInd(_) => write!(f, "TmvUnitdataInd"),
             SapMsgInner::TmvConfigureReq(_) => write!(f, "TmvConfigureReq"),
             SapMsgInner::TmvConfigureConf(_) => write!(f, "TmvConfigureConf"),
@@ -128,13 +140,32 @@ impl Display for SapMsgInner {
 
             // Control/Brew
             SapMsgInner::MmSubscriberUpdate(_) => write!(f, "MmSubscriberUpdate"),
-            SapMsgInner::MmDgnaRequest { issi, gssi, attach } => write!(f, "MmDgnaRequest(issi={}, gssi={}, attach={})", issi, gssi, attach),
+            SapMsgInner::MmDgnaRequest { issi, gssi, attach } => {
+                write!(f, "MmDgnaRequest(issi={}, gssi={}, attach={})", issi, gssi, attach)
+            }
             SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => write!(f, "MsRssiUpdate(issi={}, rssi={:.1}dBFS)", issi, rssi_dbfs),
-
+            SapMsgInner::BrewReconnected => write!(f, "BrewReconnected"),
+            SapMsgInner::CmceSdsData(_) => write!(f, "CmceSdsData"),
+            SapMsgInner::CmceCallControl(_) => write!(f, "CmceCallControl"),
+            SapMsgInner::TmdCircuitDataReq(_) => write!(f, "TmdCircuitDataReq"),
+            SapMsgInner::TmdCircuitDataInd(_) => write!(f, "TmdCircuitDataInd"),
+            SapMsgInner::TmaReportInd(_) => write!(f, "TmaReportInd"),
+            SapMsgInner::TlmcConfigureReq(_) => write!(f, "TlmcConfigureReq"),
+            SapMsgInner::TlaTlDataIndBl(_) => write!(f, "TlaTlDataIndBl"),
+            SapMsgInner::TlaTlDataReqBl(_) => write!(f, "TlaTlDataReqBl"),
+            SapMsgInner::TlaTlReportInd(_) => write!(f, "TlaTlReportInd"),
+            SapMsgInner::TlaTlUnitdataIndBl(_) => write!(f, "TlaTlUnitdataIndBl"),
+            SapMsgInner::TlaTlUnitdataReqBl(_) => write!(f, "TlaTlUnitdataReqBl"),
+            SapMsgInner::LmmMleUnitdataInd(_) => write!(f, "LmmMleUnitdataInd"),
+            SapMsgInner::LmmMleUnitdataReq(_) => write!(f, "LmmMleUnitdataReq"),
+            SapMsgInner::LcmcMleUnitdataInd(_) => write!(f, "LcmcMleUnitdataInd"),
+            SapMsgInner::LcmcMleUnitdataReq(_) => write!(f, "LcmcMleUnitdataReq"),
+            SapMsgInner::LtpdMleUnitdataInd(_) => write!(f, "LtpdMleUnitdataInd"),
+            SapMsgInner::TnmmTestDemand(_) => write!(f, "TnmmTestDemand"),
+            SapMsgInner::TnmmTestResponse(_) => write!(f, "TnmmTestResponse"),
             // TLB-SAP
             // SapMsgInner::TlbTlSyncInd(_) => write!(f, "TlbTlSyncInd"),
             // SapMsgInner::TlbTlSysinfoInd(_) => write!(f, "TlbTlSysinfoInd"),
-            _ => panic!("Unknown SapMsgInner type"),
         }
     }
 }

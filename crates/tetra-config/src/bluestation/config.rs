@@ -3,15 +3,14 @@ use std::sync::{Arc, RwLock};
 use tetra_core::freqs::FreqInfo;
 
 use crate::bluestation::{
-    CfgAsterisk, CfgCellInfo, CfgControl, CfgDapnet, CfgEmergency, CfgHealth, CfgGeoalarm,
-    CfgNetInfo, CfgPhyIo, CfgRecovery, CfgSecurity, CfgSnomNotify, CfgTpg2200Action, CfgWxService,
-    PhyBackend, StackState,
+    CfgAsterisk, CfgCellInfo, CfgControl, CfgDapnet, CfgEmergency, CfgGeoalarm, CfgHealth, CfgNetInfo, CfgPhyIo, CfgRecovery, CfgSecurity,
+    CfgSnomNotify, CfgTpg2200Action, CfgWxService, PhyBackend, StackState,
 };
 
-use super::sec_dashboard::CfgDashboard;
 use super::sec_brew::CfgBrew;
-use super::sec_telemetry::CfgTelemetry;
+use super::sec_dashboard::CfgDashboard;
 use super::sec_telegram::CfgTelegram;
+use super::sec_telemetry::CfgTelemetry;
 
 /// Wrapper for a string that should be treated as a secret. Display and Debug will redact the actual value,
 /// to prevent accidental logging of secrets.
@@ -122,6 +121,29 @@ pub struct StackConfig {
 }
 
 impl StackConfig {
+    /// Return BS phase-modulated carrier numbers and their DL/UL frequencies.
+    pub fn bs_phase_mod_carriers(&self) -> Result<Vec<(u16, u32, u32)>, String> {
+        let mut carriers = Vec::with_capacity(if self.cell.secondary_carrier.is_some() { 2 } else { 1 });
+        for carrier in [Some(self.cell.main_carrier), self.cell.secondary_carrier].into_iter().flatten() {
+            let freq_info = FreqInfo::from_components(
+                self.cell.freq_band,
+                carrier,
+                self.cell.freq_offset_hz,
+                self.cell.reverse_operation,
+                self.cell.duplex_spacing_id,
+                self.cell.custom_duplex_spacing,
+            )?;
+            let (dl_freq, ul_freq) = freq_info.get_freqs();
+            carriers.push((carrier, dl_freq, ul_freq));
+        }
+        Ok(carriers)
+    }
+
+    fn frequencies_fit_center(center_hz: f64, sample_rate_hz: f64, freqs_hz: &[u32]) -> bool {
+        let half_bw = sample_rate_hz / 2.0;
+        freqs_hz.iter().all(|freq| ((*freq as f64) - center_hz).abs() <= half_bw)
+    }
+
     /// Validate that all required configuration fields are properly set.
     pub fn validate(&self) -> Result<(), &str> {
         // Check input device settings
@@ -137,7 +159,13 @@ impl StackConfig {
             }
         };
 
-        // Sanity check on main carrier property fields in SYSINFO
+        if let Some(secondary_carrier) = self.cell.secondary_carrier
+            && secondary_carrier == self.cell.main_carrier
+        {
+            return Err("cell.secondary_carrier must differ from cell.main_carrier");
+        }
+
+        // Sanity check on computed BS carrier frequencies and SDR settings.
         if self.phy_io.backend == PhyBackend::SoapySdr {
             let soapy_cfg = self
                 .phy_io
@@ -145,27 +173,36 @@ impl StackConfig {
                 .as_ref()
                 .expect("SoapySdr config must be set for SoapySdr PhyIo");
 
-            let Ok(freq_info) = FreqInfo::from_components(
-                self.cell.freq_band,
-                self.cell.main_carrier,
-                self.cell.freq_offset_hz,
-                self.cell.reverse_operation,
-                self.cell.duplex_spacing_id,
-                self.cell.custom_duplex_spacing,
-            ) else {
-                return Err("Invalid cell info frequency settings");
-            };
+            let carriers = self.bs_phase_mod_carriers().map_err(|_| "Invalid cell info frequency settings")?;
+            let (main_dl, main_ul) = carriers
+                .iter()
+                .find(|(carrier_num, _, _)| *carrier_num == self.cell.main_carrier)
+                .map(|(_, dl, ul)| (*dl, *ul))
+                .ok_or("main carrier missing from computed carrier list")?;
 
-            let (dlfreq, ulfreq) = freq_info.get_freqs();
+            println!("    Derived BS carriers: {:?}\n", carriers);
 
-            println!("    {:?}", freq_info);
-            println!("    Derived DL freq: {} Hz, UL freq: {} Hz\n", dlfreq, ulfreq);
-
-            if soapy_cfg.dl_freq as u32 != dlfreq {
+            if soapy_cfg.dl_freq as u32 != main_dl {
                 return Err("PhyIo DlFrequency does not match computed FreqInfo");
             };
-            if soapy_cfg.ul_freq as u32 != ulfreq {
+            if soapy_cfg.ul_freq as u32 != main_ul {
                 return Err("PhyIo UlFrequency does not match computed FreqInfo");
+            };
+
+            if carriers.len() > 1
+                && let Some(sample_rate_hz) = soapy_cfg.fs
+            {
+                let dl_freqs: Vec<u32> = carriers.iter().map(|(_, dl, _)| *dl).collect();
+                let ul_freqs: Vec<u32> = carriers.iter().map(|(_, _, ul)| *ul).collect();
+                let (tx_center_hz, _) = soapy_cfg.effective_tx_center_freq_corrected();
+                let (rx_center_hz, _) = soapy_cfg.effective_rx_center_freq_corrected();
+
+                if !Self::frequencies_fit_center(tx_center_hz, sample_rate_hz, &dl_freqs) {
+                    return Err("configured TX center/sample-rate do not cover all BS downlink carriers");
+                }
+                if !Self::frequencies_fit_center(rx_center_hz, sample_rate_hz, &ul_freqs) {
+                    return Err("configured RX center/sample-rate do not cover all BS uplink carriers");
+                }
             };
         }
 
@@ -175,9 +212,10 @@ impl StackConfig {
 
         // Validate timezone if configured
         if let Some(ref tz) = self.cell.timezone
-            && tz.parse::<chrono_tz::Tz>().is_err() {
-                return Err("Invalid IANA timezone name in cell.timezone");
-            }
+            && tz.parse::<chrono_tz::Tz>().is_err()
+        {
+            return Err("Invalid IANA timezone name in cell.timezone");
+        }
 
         // Validate neighbor cells
         if self.cell.neighbor_cells_ca.len() > 7 {
@@ -212,21 +250,45 @@ impl StackConfig {
                 return Err("cell.neighbor_cells_ca: main_carrier_number must be 0-4095");
             }
             if let Some(v) = cell.main_carrier_number_extension
-                && v > 0x3FF { return Err("cell.neighbor_cells_ca: main_carrier_number_extension must be 0-1023"); }
+                && v > 0x3FF
+            {
+                return Err("cell.neighbor_cells_ca: main_carrier_number_extension must be 0-1023");
+            }
             if let Some(v) = cell.mcc
-                && v > 0x3FF { return Err("cell.neighbor_cells_ca: mcc must be 0-1023"); }
+                && v > 0x3FF
+            {
+                return Err("cell.neighbor_cells_ca: mcc must be 0-1023");
+            }
             if let Some(v) = cell.mnc
-                && v > 0x3FFF { return Err("cell.neighbor_cells_ca: mnc must be 0-16383"); }
+                && v > 0x3FFF
+            {
+                return Err("cell.neighbor_cells_ca: mnc must be 0-16383");
+            }
             if let Some(v) = cell.location_area
-                && v > 0x3FFF { return Err("cell.neighbor_cells_ca: location_area must be 0-16383"); }
+                && v > 0x3FFF
+            {
+                return Err("cell.neighbor_cells_ca: location_area must be 0-16383");
+            }
             if let Some(v) = cell.maximum_ms_transmit_power
-                && v > 0x7 { return Err("cell.neighbor_cells_ca: maximum_ms_transmit_power must be 0-7"); }
+                && v > 0x7
+            {
+                return Err("cell.neighbor_cells_ca: maximum_ms_transmit_power must be 0-7");
+            }
             if let Some(v) = cell.minimum_rx_access_level
-                && v > 0xF { return Err("cell.neighbor_cells_ca: minimum_rx_access_level must be 0-15"); }
+                && v > 0xF
+            {
+                return Err("cell.neighbor_cells_ca: minimum_rx_access_level must be 0-15");
+            }
             if let Some(v) = cell.timeshare_cell_information_or_security_parameters
-                && v > 0x1F { return Err("cell.neighbor_cells_ca: timeshare_cell_information_or_security_parameters must be 0-31"); }
+                && v > 0x1F
+            {
+                return Err("cell.neighbor_cells_ca: timeshare_cell_information_or_security_parameters must be 0-31");
+            }
             if let Some(v) = cell.tdma_frame_offset
-                && v > 0x3F { return Err("cell.neighbor_cells_ca: tdma_frame_offset must be 0-63"); }
+                && v > 0x3F
+            {
+                return Err("cell.neighbor_cells_ca: tdma_frame_offset must be 0-63");
+            }
         }
 
         // Restart recovery: an explicit allowlist must not exceed the cache cap (the numeric
@@ -259,9 +321,18 @@ impl SharedConfig {
             Err(e) => panic!("Invalid stack configuration: {}", e),
         }
 
+        let mut state = state.unwrap_or_default();
+        let carriers = cfg
+            .bs_phase_mod_carriers()
+            .expect("validated carrier configuration should compute")
+            .into_iter()
+            .map(|(carrier_num, _, _)| carrier_num)
+            .collect::<Vec<_>>();
+        state.timeslot_alloc.configure_carriers(&carriers);
+
         Self {
             cfg: Arc::new(cfg),
-            state: Arc::new(RwLock::new(state.unwrap_or_default())),
+            state: Arc::new(RwLock::new(state)),
         }
     }
 

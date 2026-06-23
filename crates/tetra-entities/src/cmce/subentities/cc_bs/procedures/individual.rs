@@ -88,7 +88,18 @@ impl CcBsSubentity {
             calling_issi: call.calling_addr.ssi,
             called_issi: call.called_addr.ssi,
             simplex: call.is_simplex(),
+            carrier_num: call.calling_carrier_num,
             ts: call.calling_ts,
+            peer_carrier_num: if call.called_carrier_num != call.calling_carrier_num {
+                Some(call.called_carrier_num)
+            } else {
+                None
+            },
+            peer_ts: if call.called_ts != call.calling_ts || call.called_carrier_num != call.calling_carrier_num {
+                Some(call.called_ts)
+            } else {
+                None
+            },
             priority: call.priority,
         });
 
@@ -417,7 +428,9 @@ impl CcBsSubentity {
         let calling_handle = call_snapshot.calling_handle;
         let calling_link_id = call_snapshot.calling_link_id;
         let calling_endpoint_id = call_snapshot.calling_endpoint_id;
+        let calling_carrier_num = call_snapshot.calling_carrier_num;
         let calling_ts = call_snapshot.calling_ts;
+        let called_carrier_num = call_snapshot.called_carrier_num;
         let called_ts = call_snapshot.called_ts;
         let calling_usage = call_snapshot.calling_usage;
         let called_usage = call_snapshot.called_usage;
@@ -438,14 +451,14 @@ impl CcBsSubentity {
         let chan_alloc_calling = CmceChanAllocReq {
             usage: Some(calling_usage),
             alloc_type: ChanAllocType::Replace,
-            carrier: None,
+            carrier: Some(calling_carrier_num),
             timeslots: calling_timeslots,
             ul_dl_assigned: calling_ul_dl,
         };
         let chan_alloc_called = CmceChanAllocReq {
             usage: Some(called_usage),
             alloc_type: ChanAllocType::Replace,
-            carrier: None,
+            carrier: Some(called_carrier_num),
             timeslots: called_timeslots,
             ul_dl_assigned: called_ul_dl,
         };
@@ -465,6 +478,7 @@ impl CcBsSubentity {
             ts_created: self.dltime,
             direction: Direction::Both,
             ts: calling_ts,
+            carrier_num: calling_carrier_num,
             call_id,
             usage: calling_usage,
             circuit_mode: cached.pdu.basic_service_information.circuit_mode_type,
@@ -473,20 +487,30 @@ impl CcBsSubentity {
             speech_service: cached.pdu.basic_service_information.speech_service,
             etee_encrypted: cached.pdu.basic_service_information.encryption_flag,
         };
-        let duplex_peer = if calling_ts != called_ts { Some(called_ts) } else { None };
+        let duplex_peer = if calling_ts != called_ts || calling_carrier_num != called_carrier_num {
+            Some(called_ts)
+        } else {
+            None
+        };
         Self::signal_umac_circuit_open(
             queue,
             &circuit_calling,
             self.dltime,
+            if calling_ts != called_ts || calling_carrier_num != called_carrier_num {
+                Some(called_carrier_num)
+            } else {
+                None
+            },
             duplex_peer,
             CircuitDlMediaSource::LocalLoopback,
         );
 
-        if called_ts != calling_ts {
+        if called_ts != calling_ts || called_carrier_num != calling_carrier_num {
             let circuit_called = CmceCircuit {
                 ts_created: self.dltime,
                 direction: Direction::Both,
                 ts: called_ts,
+                carrier_num: called_carrier_num,
                 call_id,
                 usage: called_usage,
                 circuit_mode: cached.pdu.basic_service_information.circuit_mode_type,
@@ -499,6 +523,7 @@ impl CcBsSubentity {
                 queue,
                 &circuit_called,
                 self.dltime,
+                Some(calling_carrier_num),
                 Some(calling_ts),
                 CircuitDlMediaSource::LocalLoopback,
             );
@@ -558,27 +583,10 @@ impl CcBsSubentity {
         let mut connect_sdu = BitBuffer::new_autoexpand(30);
         d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
         connect_sdu.seek(0);
-        let connect_msg_fallback = SapMsg {
-            sap: Sap::LcmcSap,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Mle,
-            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu: connect_sdu,
-                handle: calling_handle,
-                endpoint_id: calling_endpoint_id,
-                link_id: calling_link_id,
-                // Individual-call D-CONNECT (MCCH fallback leg): the legacy `main` code sent CC
-                // PDUs unacknowledged (FH FIX 2).
-                layer2service: Layer2Service::Unacknowledged,
-                pdu_prio: 0,
-                layer2_qos: 0,
-                stealing_permission: false,
-                stealing_repeats_flag: false,
-                chan_alloc: Some(chan_alloc_calling.clone()),
-                main_address: calling_addr,
-                tx_reporter: None,
-            }),
-        };
+        // The post-answer MCCH copy must be linkless. Reusing the caller's setup LLC link here
+        // makes UMAC treat D-CONNECT as a random-access response and sets random_access_flag even
+        // when no RA ack is actually being carried, which can leave the far end ringing.
+        let connect_msg_fallback = Self::build_sapmsg(connect_sdu, Some(chan_alloc_calling.clone()), self.dltime, calling_addr, None);
         queue.push_back(connect_msg_fallback);
 
         let d_connect_ack = DConnectAcknowledge {
@@ -630,27 +638,9 @@ impl CcBsSubentity {
             .to_bitbuf(&mut ack_sdu)
             .expect("Failed to serialize DConnectAcknowledge");
         ack_sdu.seek(0);
-        let ack_msg_fallback = SapMsg {
-            sap: Sap::LcmcSap,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Mle,
-            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu: ack_sdu,
-                handle,
-                endpoint_id,
-                link_id,
-                // Individual-call D-CONNECT-ACK (MCCH fallback leg): the legacy `main` code sent CC
-                // PDUs unacknowledged (FH FIX 2).
-                layer2service: Layer2Service::Unacknowledged,
-                pdu_prio: 0,
-                layer2_qos: 0,
-                stealing_permission: false,
-                stealing_repeats_flag: false,
-                chan_alloc: Some(chan_alloc_called.clone()),
-                main_address: called_addr,
-                tx_reporter: None,
-            }),
-        };
+        // Same reasoning as D-CONNECT above: keep the MCCH chan_alloc copy, but send it linkless
+        // so any RA ack is merged only when genuinely pending for this ISSI.
+        let ack_msg_fallback = Self::build_sapmsg(ack_sdu, Some(chan_alloc_called.clone()), self.dltime, called_addr, None);
         queue.push_back(ack_msg_fallback);
 
         let activated = match self.fsm_individual_transition_to_active(call_id) {
@@ -687,7 +677,13 @@ impl CcBsSubentity {
                     call_id,
                     source_issi: speaker_addr.ssi,
                     dest_gssi: listener_addr.ssi,
+                    carrier_num: if calling_has_initial_floor {
+                        calling_carrier_num
+                    } else {
+                        called_carrier_num
+                    },
                     ts: speaker_ts,
+                    is_group: false,
                 },
                 true,
                 BrewNotification::Never,

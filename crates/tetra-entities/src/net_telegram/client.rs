@@ -64,11 +64,7 @@ impl TelegramClient {
         let url = Self::method_url(token, "getMe");
         let json = self.get_json(&url)?;
         let result = ok_result(&json)?;
-        let username = result
-            .get("username")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let username = result.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string();
         Ok(BotInfo { username })
     }
 
@@ -78,9 +74,7 @@ impl TelegramClient {
         let url = format!("{}?timeout=0&limit=100", Self::method_url(token, "getUpdates"));
         let json = self.get_json(&url)?;
         let result = ok_result(&json)?;
-        let updates = result
-            .as_array()
-            .ok_or_else(|| "unexpected getUpdates response".to_string())?;
+        let updates = result.as_array().ok_or_else(|| "unexpected getUpdates response".to_string())?;
 
         let mut seen: Vec<DetectedChat> = Vec::new();
         for upd in updates {
@@ -152,10 +146,7 @@ fn chat_to_detected(chat: &serde_json::Value) -> Option<DetectedChat> {
     let name = if let Some(t) = title {
         t.to_string()
     } else if first.is_some() || last.is_some() {
-        [first.unwrap_or(""), last.unwrap_or("")]
-            .join(" ")
-            .trim()
-            .to_string()
+        [first.unwrap_or(""), last.unwrap_or("")].join(" ").trim().to_string()
     } else if let Some(u) = username {
         format!("@{u}")
     } else {

@@ -1103,7 +1103,9 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   .stat-grid{grid-template-columns:1fr;gap:10px;}
 
   /* TS visualizer: 2x2 instead of 1x4 so each block stays usable */
-  .ts-grid{grid-template-columns:1fr 1fr;gap:8px;padding:10px 12px;}
+  .ts-grid{gap:10px;padding:10px 12px;}
+  .ts-row{grid-template-columns:1fr 1fr;gap:8px;}
+  .ts-carrier-head{flex-direction:column;align-items:flex-start;gap:4px;}
 
   /* System info: vertical layout per row, full-width values */
   .info-row{flex-direction:column;align-items:flex-start;gap:4px;padding:10px 14px;}
@@ -1152,7 +1154,21 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 }
 
 /* ── TS Visualizer ───────────────────────────────────────────────── */
-.ts-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:16px 18px;}
+.ts-grid{display:flex;flex-direction:column;gap:12px;padding:16px 18px;}
+.ts-carrier-group{display:flex;flex-direction:column;gap:8px;}
+.ts-carrier-head{
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  padding:0 2px;
+}
+.ts-carrier-title{
+  font-family:var(--mono);font-size:10px;font-weight:700;
+  letter-spacing:0.10em;color:var(--text2);text-transform:uppercase;
+}
+.ts-carrier-meta{
+  font-family:var(--mono);font-size:10px;color:var(--text3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.ts-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
 .ts-block{
   border:1px solid var(--border);border-radius:8px;
   padding:12px 10px 8px;text-align:center;
@@ -4067,7 +4083,7 @@ function showPage(name,el){
   if(el)el.classList.add('active');
   else{const nav=document.getElementById('nav-'+name);if(nav)nav.classList.add('active');}
   document.getElementById('topbar-title').textContent=t(name)||name;
-  if(name==='stations'){loadBtsInfo();}
+  if(name==='stations'){loadBtsInfoLegacy();}
   if(name==='sdslog'){loadSdsLog();}
   if(name==='health'){loadHealthIntegrations();}
   if(name==='asterisk'){loadAsteriskStatus();loadSnomNotify();}
@@ -4509,9 +4525,13 @@ function handleMsg(msg){
       (msg.ms||[]).forEach(m=>{state.ms[m.issi]={...m,_last_seen_ts:Date.now()-(m.last_seen_secs_ago||0)*1000,energy_saving_mode:m.energy_saving_mode||0};});
       (msg.calls||[]).forEach(c=>{
         state.calls[c.call_id]={...c,started_at:Date.now()-(c.started_secs_ago||0)*1000};
-        if(c.ts&&c.ts>=2){
+        if(c.carrier_num!=null)tsEnsureCarrierInfo(c.carrier_num);
+        if(c.peer_carrier_num!=null)tsEnsureCarrierInfo(c.peer_carrier_num);
+        if(c.ts&&c.ts>=2&&c.carrier_num!=null){
           const sub=c.call_type==='group'?t('call_group'):(c.simplex?t('call_p2p_s'):t('call_p2p_d'));
-          tsSetCall(c.ts,{...c,sub});
+          tsSetCallCarrier(c.carrier_num,c.ts,{...c,sub});
+          const peerCarrier=c.peer_carrier_num!=null?c.peer_carrier_num:c.carrier_num;
+          if(c.peer_ts&&c.peer_ts>=2&&peerCarrier!=null)tsSetCallCarrier(peerCarrier,c.peer_ts,{...c,sub});
         }
       });
       if(msg.log&&msg.log.length){document.getElementById('log-container').innerHTML='';msg.log.forEach(e=>appendLog(e));}
@@ -4563,26 +4583,31 @@ function handleMsg(msg){
       renderStations();break;
     case 'call_started':
       state.calls[msg.call_id]={...msg,started_at:Date.now()};
+      if(msg.carrier_num!=null)tsEnsureCarrierInfo(msg.carrier_num);
+      if(msg.peer_carrier_num!=null)tsEnsureCarrierInfo(msg.peer_carrier_num);
       // The caller keyed up on this GSSI → it's their actively-selected TG.
       if(msg.call_type==='group'&&msg.gssi!=null&&state.ms[msg.caller_issi]){state.ms[msg.caller_issi].selected_group=msg.gssi;renderStations();}
       if(msg.last_heard)pushLastHeard(msg.last_heard);
-      if(msg.ts&&msg.ts>=2){
+      if(msg.ts&&msg.ts>=2&&msg.carrier_num!=null){
         const sub=msg.call_type==='group'?t('call_group'):(msg.simplex?t('call_p2p_s'):t('call_p2p_d'));
-        tsSetCall(msg.ts,{...msg,sub});
-        updateTsBlocks();
+        tsSetCallCarrier(msg.carrier_num,msg.ts,{...msg,sub});
+        const peerCarrier=msg.peer_carrier_num!=null?msg.peer_carrier_num:msg.carrier_num;
+        if(msg.peer_ts&&msg.peer_ts>=2&&peerCarrier!=null)tsSetCallCarrier(peerCarrier,msg.peer_ts,{...msg,sub});
+        updateTsBlocksCarrier();
       }
       renderCalls();renderLastHeard();break;
     case 'call_ended':
-      tsClearCall(msg.call_id);updateTsBlocks();
+      tsClearCallCarrier(msg.call_id);updateTsBlocksCarrier();
       delete state.calls[msg.call_id];renderCalls();break;
     case 'ts_voice':
-      tsVoice(msg.ts);break;
+      if(msg.carrier_num!=null)tsVoiceCarrier(msg.carrier_num,msg.ts,msg.speaker_issi);break;
     case 'speaker_changed':
       if(state.calls[msg.call_id])state.calls[msg.call_id].active_speaker=msg.speaker_issi;
-      // Reflect the new speaker on the timeslot visualizer immediately.
-      tsSetSpeaker(msg.call_id,msg.speaker_issi);updateTsBlocks();
+      if(msg.carrier_num!=null)tsEnsureCarrierInfo(msg.carrier_num);
+      tsSetSpeakerCarrier(msg.call_id,msg.carrier_num,msg.ts,msg.speaker_issi);updateTsBlocksCarrier();
       // The new speaker has this call's GSSI selected (looked up from the active call).
-      {const sg=state.calls[msg.call_id]&&state.calls[msg.call_id].gssi;
+      {const activeCall=state.calls[msg.call_id];
+       const sg=activeCall&&activeCall.call_type==='group'?activeCall.gssi:null;
        if(sg!=null&&state.ms[msg.speaker_issi]){state.ms[msg.speaker_issi].selected_group=sg;renderStations();}}
       if(msg.last_heard){pushLastHeard(msg.last_heard);renderLastHeard();}
       renderCalls();break;
@@ -4649,7 +4674,7 @@ function activityBadge(activity){
 function rssiColor(v){if(v==null)return'var(--text3)';if(v>-20)return'var(--accent)';if(v>-30)return'var(--accent2)';if(v>-40)return'var(--warn)';return'var(--danger)';}
 function rssiPct(v){if(v==null)return 0;return Math.max(0,Math.min(100,(v+60)/50*100));}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocks();}
+function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocksCarrier();}
 
 // ── TS Visualizer ─────────────────────────────────────────────────────────
 // tsState[ts-1]: {call_id, call_type, label, sub, voice_ts, started_at}
@@ -4794,6 +4819,301 @@ function tsVoice(ts){
 }
 setInterval(updateTsBlocks, 150); // refresh to catch voice decay + duration tick
 
+// Carrier-aware RF visualizer. The original strip above assumes a single carrier;
+// this overlay keeps the same look but keys everything by carrier+timeslot so a
+// secondary RF carrier gets its own labelled 4-slot row.
+const tsStateCarrier={};
+const tsWaveHeightsCarrier={};
+const tsCarrierInfo={};
+
+function fmtMhz(hz,dp){return(hz!=null&&isFinite(hz))?(hz/1e6).toFixed(dp==null?4:dp)+' MHz':'-';}
+function tsCarrierKey(carrierNum,ts){return String(carrierNum)+':'+String(ts);}
+function tsCarrierNumbers(){
+  return Object.keys(tsCarrierInfo).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+}
+function tsEnsureCarrierInfo(carrierNum,txFreqHz,rxFreqHz){
+  if(carrierNum==null||!isFinite(carrierNum))return;
+  const key=String(carrierNum);
+  const info=tsCarrierInfo[key]||{carrier_num:carrierNum,tx_freq_hz:null,rx_freq_hz:null};
+  if(txFreqHz!=null&&isFinite(txFreqHz))info.tx_freq_hz=txFreqHz;
+  if(rxFreqHz!=null&&isFinite(rxFreqHz))info.rx_freq_hz=rxFreqHz;
+  tsCarrierInfo[key]=info;
+}
+function tsCarrierMeta(info){
+  const parts=[];
+  if(info&&info.tx_freq_hz!=null)parts.push('DL '+fmtMhz(info.tx_freq_hz));
+  if(info&&info.rx_freq_hz!=null)parts.push('UL '+fmtMhz(info.rx_freq_hz));
+  return parts.join(' | ')||'Waiting for RF info';
+}
+function tsCarrierBlockHtml(carrierNum,ts){
+  const idleHeights=(carrierNum===state.mainCarrierNum&&ts===1)?[8,14,10,16,8,12,6]:[3,3,3,3,3,3,3];
+  return `<div class="ts-block${carrierNum===state.mainCarrierNum&&ts===1?' mcch':''}" id="ts-block-${carrierNum}-${ts}">
+    <div class="ts-num">TS ${ts}</div>
+    ${ts===1?'':'<div class="ts-timer"></div>'}
+    <div class="ts-led"></div>
+    <div class="ts-wave">${idleHeights.map(h=>`<div class="ts-wave-bar" style="height:${h}px"></div>`).join('')}</div>
+    <div class="ts-label">${carrierNum===state.mainCarrierNum&&ts===1?'MCCH':(ts===1?'BCCH':'-')}</div>
+    <div class="ts-sub">${carrierNum===state.mainCarrierNum&&ts===1?'ACTIVE':(ts===1?'SECONDARY':'Idle')}</div>
+    <div class="ts-flash"></div>
+    <div class="ts-duration-bar"></div>
+  </div>`;
+}
+function renderTsGridCarrier(){
+  const grid=document.getElementById('ts-grid');
+  if(!grid)return;
+  let carriers=tsCarrierNumbers();
+  if(!carriers.length&&state.mainCarrierNum!=null)carriers=[state.mainCarrierNum];
+  if(!carriers.length)return;
+  grid.innerHTML=carriers.map(carrierNum=>{
+    const info=tsCarrierInfo[String(carrierNum)]||{carrier_num:carrierNum};
+    return `<div class="ts-carrier-group" data-carrier="${carrierNum}">
+      <div class="ts-carrier-head">
+        <div class="ts-carrier-title">Carrier #${carrierNum}${carrierNum===state.mainCarrierNum?' | Main':''}</div>
+        <div class="ts-carrier-meta">${tsCarrierMeta(info)}</div>
+      </div>
+      <div class="ts-row">${[1,2,3,4].map(ts=>tsCarrierBlockHtml(carrierNum,ts)).join('')}</div>
+    </div>`;
+  }).join('');
+  updateTsBlocksCarrier();
+}
+function tsRandWaveCarrier(carrierNum,ts){
+  tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)]=Array.from({length:7},()=>Math.floor(Math.random()*14)+4);
+}
+function tsApplyWaveCarrier(carrierNum,ts,active){
+  const block=document.getElementById(`ts-block-${carrierNum}-${ts}`);
+  if(!block)return;
+  const bars=block.querySelectorAll('.ts-wave-bar');
+  if(active){
+    const heights=tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)]||[];
+    heights.forEach((h,i)=>{if(bars[i])bars[i].style.height=h+'px';});
+  }else{
+    bars.forEach(b=>b.style.height='3px');
+  }
+}
+function formatDurCarrier(s){
+  if(s<60)return s+'s';
+  return Math.floor(s/60)+'m'+String(s%60).padStart(2,'0')+'s';
+}
+function tsIssiTextCarrier(issi){
+  if(!issi)return '';
+  const c=callsigns[issi];
+  if(!c||!c.cs)return ''+issi;
+  const fl=c.fl?c.fl+' ':'';
+  return issi+' | '+fl+c.cs;
+}
+function privatePartyRole(call,issi){
+  if(!call||issi==null)return '';
+  if(issi===call.caller_issi)return 'CALLER';
+  if(issi===call.called_issi)return 'CALLED';
+  return 'TALKER';
+}
+function privateSlotRef(carrierNum,ts){
+  return carrierNum!=null&&ts!=null?('C'+carrierNum+'/TS'+ts):'-';
+}
+function privateAllocText(call){
+  if(!call||call.call_type!=='individual')return '';
+  const main=privateSlotRef(call.carrier_num,call.ts);
+  const peerCarrier=call.peer_carrier_num!=null?call.peer_carrier_num:call.carrier_num;
+  const peerTs=call.peer_ts!=null?call.peer_ts:call.ts;
+  const hasPeer=call.peer_carrier_num!=null||call.peer_ts!=null;
+  if(call.simplex||!hasPeer)return 'Shared '+main+' UL/DL';
+  return 'Caller '+main+' UL/DL | Called '+privateSlotRef(peerCarrier,peerTs)+' UL/DL';
+}
+function tsLinesCarrier(st){
+  const speaker=st.speaker_issi;
+  if(st.call_type==='group')return {top:st.gssi!=null?('GSSI '+st.gssi):'GROUP',bottom:tsIssiTextCarrier(speaker||st.caller_issi)};
+  const slotRole=st.private_slot_role||'shared';
+  const top=`${st.caller_issi||'?'} <-> ${st.called_issi||'?'}`;
+  const shownIssi=speaker||(slotRole==='called'?st.called_issi:st.caller_issi);
+  const shownRole=privatePartyRole(st,shownIssi);
+  const who=tsIssiTextCarrier(shownIssi);
+  const slotText=slotRole==='caller'?'CALLER SLOT':(slotRole==='called'?'CALLED SLOT':'SHARED SLOT');
+  const talkerText=who?(`TX ${shownRole} ${who}`):'';
+  return {top,bottom:[slotText,talkerText].filter(Boolean).join(' | ')};
+}
+function updateTsBlocksCarrier(){
+  const now=Date.now();
+  const carriers=tsCarrierNumbers().length?tsCarrierNumbers():(state.mainCarrierNum!=null?[state.mainCarrierNum]:[]);
+  for(const carrierNum of carriers){
+    for(let ts=1;ts<=4;ts++){
+      const block=document.getElementById(`ts-block-${carrierNum}-${ts}`);
+      if(!block)continue;
+      const label=block.querySelector('.ts-label');
+      const sub=block.querySelector('.ts-sub');
+      const dur=block.querySelector('.ts-duration-bar');
+      const timer=block.querySelector('.ts-timer');
+      const st=tsStateCarrier[tsCarrierKey(carrierNum,ts)];
+      if(ts===1&&carrierNum===state.mainCarrierNum){
+        block.className='ts-block mcch';
+        label.textContent='MCCH';
+        sub.textContent='ACTIVE';
+        if(!tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)])tsRandWaveCarrier(carrierNum,ts);
+        tsApplyWaveCarrier(carrierNum,ts,true);
+        if(dur)dur.style.width='0%';
+        continue;
+      }
+      if(!st){
+        block.className='ts-block';
+        label.textContent=ts===1?'BCCH':'-';
+        sub.textContent=ts===1?'SECONDARY':'Idle';
+        tsApplyWaveCarrier(carrierNum,ts,false);
+        if(timer)timer.textContent='';
+        if(dur)dur.style.width='0%';
+        continue;
+      }
+      const voiceRecent=st.voice_ts&&(now-st.voice_ts)<TS_VOICE_DECAY_MS;
+      const lines=tsLinesCarrier(st);
+      label.textContent=lines.top;
+      if(voiceRecent){
+        block.className='ts-block voice';
+        sub.textContent=lines.bottom?('â–¶ '+lines.bottom):'â–¶ TX';
+      }else{
+        block.className='ts-block call';
+        sub.textContent=lines.bottom||(st.sub||'Alloc');
+      }
+      if((st.priority||0)>=15)block.classList.add('emergency');
+      if(timer){
+        const elapsed=Math.floor((now-(st.started_at||now))/1000);
+        timer.textContent=elapsed>0?formatDurCarrier(elapsed):'';
+      }
+      tsApplyWaveCarrier(carrierNum,ts,voiceRecent);
+      if(dur&&st.started_at){
+        const pct=Math.min(100,((now-st.started_at)/120000)*100);
+        dur.style.width=pct+'%';
+      }
+    }
+  }
+}
+function tsSetCallCarrier(carrierNum,ts,call){
+  if(ts<2||ts>4||carrierNum==null)return;
+  tsEnsureCarrierInfo(carrierNum);
+  if(!document.getElementById(`ts-block-${carrierNum}-${ts}`))renderTsGridCarrier();
+  const peerCarrier=call.peer_carrier_num!=null?call.peer_carrier_num:call.carrier_num;
+  const peerTs=call.peer_ts!=null?call.peer_ts:call.ts;
+  const hasPeer=call.peer_carrier_num!=null||call.peer_ts!=null;
+  const privateSlotRole=call.call_type!=='individual'
+    ? null
+    : ((call.simplex||!hasPeer)
+      ? 'shared'
+      : ((carrierNum===call.carrier_num&&ts===call.ts)?'caller':((carrierNum===peerCarrier&&ts===peerTs)?'called':'shared')));
+  tsStateCarrier[tsCarrierKey(carrierNum,ts)]={
+    call_id:call.call_id,call_type:call.call_type,
+    gssi:call.gssi,called_issi:call.called_issi,caller_issi:call.caller_issi,
+    speaker_issi:call.call_type==='individual'?(call.active_speaker||call.speaker_issi||null):(call.active_speaker||call.speaker_issi||call.caller_issi),
+    simplex:call.simplex,sub:call.sub,priority:call.priority||0,
+    voice_ts:null,started_at:Date.now(),carrier_num:carrierNum,ts:ts,private_slot_role:privateSlotRole
+  };
+}
+function tsSetSpeakerCarrier(callId,speakerIssi){
+  Object.keys(tsStateCarrier).forEach(key=>{if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId)tsStateCarrier[key].speaker_issi=speakerIssi;});
+}
+function tsClearCallCarrier(callId){
+  Object.keys(tsStateCarrier).forEach(key=>{if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId)delete tsStateCarrier[key];});
+}
+function tsVoiceCarrier(carrierNum,ts,speakerIssi){
+  if(ts<2||ts>4||carrierNum==null)return;
+  tsEnsureCarrierInfo(carrierNum);
+  if(!document.getElementById(`ts-block-${carrierNum}-${ts}`))renderTsGridCarrier();
+  const key=tsCarrierKey(carrierNum,ts);
+  // Voice bursts should animate an existing allocation, not create a synthetic
+  // "PRIVATE" slot that outlives the call if a late frame arrives after call_ended.
+  if(!tsStateCarrier[key])return;
+  tsStateCarrier[key].voice_ts=Date.now();
+  if(speakerIssi)tsStateCarrier[key].speaker_issi=speakerIssi;
+  tsRandWaveCarrier(carrierNum,ts);
+  const block=document.getElementById(`ts-block-${carrierNum}-${ts}`);
+  if(block){
+    const flash=block.querySelector('.ts-flash');
+    if(flash){flash.style.animation='none';void flash.offsetWidth;flash.style.animation='ts-flash-in 0.08s ease-out forwards';}
+  }
+  updateTsBlocksCarrier();
+}
+setInterval(updateTsBlocksCarrier, 150);
+
+function tsCarrierBlockHtml(carrierNum,ts){
+  const idleHeights=(carrierNum===state.mainCarrierNum&&ts===1)?[8,14,10,16,8,12,6]:[3,3,3,3,3,3,3];
+  const label=(carrierNum===state.mainCarrierNum&&ts===1)?'MCCH':(ts===1?'BCCH':'-');
+  const sub=(carrierNum===state.mainCarrierNum&&ts===1)?'ACTIVE':(ts===1?'SECONDARY':'Idle');
+  return `<div class="ts-block${carrierNum===state.mainCarrierNum&&ts===1?' mcch':''}" id="ts-block-${carrierNum}-${ts}">
+    <div class="ts-num">TS ${ts}</div>
+    ${ts===1?'':'<div class="ts-timer"></div>'}
+    <div class="ts-led"></div>
+    <div class="ts-wave">${idleHeights.map(h=>`<div class="ts-wave-bar" style="height:${h}px"></div>`).join('')}</div>
+    <div class="ts-label">${label}</div>
+    <div class="ts-sub">${sub}</div>
+    <div class="ts-flash"></div>
+    <div class="ts-duration-bar"></div>
+  </div>`;
+}
+
+function updateTsBlocksCarrier(){
+  const now=Date.now();
+  const carriers=tsCarrierNumbers().length?tsCarrierNumbers():(state.mainCarrierNum!=null?[state.mainCarrierNum]:[]);
+  for(const carrierNum of carriers){
+    for(let ts=1;ts<=4;ts++){
+      const block=document.getElementById(`ts-block-${carrierNum}-${ts}`);
+      if(!block)continue;
+      const label=block.querySelector('.ts-label');
+      const sub=block.querySelector('.ts-sub');
+      const dur=block.querySelector('.ts-duration-bar');
+      const timer=block.querySelector('.ts-timer');
+      const st=tsStateCarrier[tsCarrierKey(carrierNum,ts)];
+
+      if(ts===1&&carrierNum===state.mainCarrierNum){
+        block.className='ts-block mcch';
+        label.textContent='MCCH';
+        sub.textContent='ACTIVE';
+        if(!tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)])tsRandWaveCarrier(carrierNum,ts);
+        tsApplyWaveCarrier(carrierNum,ts,true);
+        if(dur)dur.style.width='0%';
+        continue;
+      }
+
+      if(!st){
+        block.className='ts-block';
+        label.textContent=ts===1?'BCCH':'-';
+        sub.textContent=ts===1?'SECONDARY':'Idle';
+        tsApplyWaveCarrier(carrierNum,ts,false);
+        if(timer)timer.textContent='';
+        if(dur)dur.style.width='0%';
+        continue;
+      }
+
+      const voiceRecent=st.voice_ts&&(now-st.voice_ts)<TS_VOICE_DECAY_MS;
+      const lines=tsLinesCarrier(st);
+      label.textContent=lines.top;
+      if(voiceRecent){
+        block.className='ts-block voice';
+        sub.textContent=lines.bottom?('TX '+lines.bottom):'TX';
+      }else{
+        block.className='ts-block call';
+        sub.textContent=lines.bottom||(st.sub||'Alloc');
+      }
+      if((st.priority||0)>=15)block.classList.add('emergency');
+      if(timer){
+        const elapsed=Math.floor((now-(st.started_at||now))/1000);
+        timer.textContent=elapsed>0?formatDurCarrier(elapsed):'';
+      }
+      tsApplyWaveCarrier(carrierNum,ts,voiceRecent);
+      if(dur&&st.started_at){
+        const pct=Math.min(100,((now-st.started_at)/120000)*100);
+        dur.style.width=pct+'%';
+      }
+    }
+  }
+}
+
+function tsSetSpeakerCarrier(callId,carrierNum,ts,speakerIssi){
+  if(carrierNum!=null&&ts!=null){
+    const key=tsCarrierKey(carrierNum,ts);
+    if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId){
+      tsStateCarrier[key].speaker_issi=speakerIssi;
+      return;
+    }
+  }
+  Object.keys(tsStateCarrier).forEach(key=>{if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId)tsStateCarrier[key].speaker_issi=speakerIssi;});
+}
+
 function renderStations(){
   const ms=Object.values(state.ms);
   const msCount=ms.length,callCount=Object.keys(state.calls).length;
@@ -4855,8 +5175,13 @@ function renderCalls(){
     const mm=String(Math.floor(dur/60)).padStart(2,'0'),ss=String(dur%60).padStart(2,'0');
     const badge=c.call_type==='group'?'badge-blue':'badge-yellow';
     const label=c.call_type==='group'?t('call_group'):(c.simplex?t('call_p2p_s'):t('call_p2p_d'));
-    const to=c.call_type==='group'?`GSSI ${c.gssi}`:idCell(c.called_issi);
-    const spk=c.active_speaker?idCell(c.active_speaker):'<span style="color:var(--text3)">—</span>';
+    const allocMeta=c.call_type==='individual'
+      ? `<div style="margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--text2)">${escHtml(privateAllocText(c))}</div>`
+      : '';
+    const to=c.call_type==='group'?`GSSI ${c.gssi}`:`${idCell(c.called_issi)}${allocMeta}`;
+    const spk=c.active_speaker
+      ? `${idCell(c.active_speaker)}${c.call_type==='individual'?` <span class="badge badge-dim" style="font-size:9px">${privatePartyRole(c,c.active_speaker)}</span>`:''}`
+      : '<span style="color:var(--text3)">—</span>';
     // Emergency call = ETSI call priority 15 (terminal emergency button). Flag it prominently.
     const emg=(c.priority||0)>=15;
     const emgBadge=emg?`<span class="badge badge-emergency">${t('call_emergency')}</span> `:'';
@@ -5787,7 +6112,34 @@ async function loadBtsInfo(){
     set('bts-shift', (d.shift_hz!=null&&isFinite(d.shift_hz))?((d.shift_hz>=0?'+':'')+(d.shift_hz/1e6).toFixed(3)+' MHz'):'—');
     set('bts-mcc', d.mcc);
     set('bts-mnc', d.mnc);
-    set('bts-carrier', d.main_carrier);
+    const carrierValue=document.getElementById('bts-carrier');
+    const carrierLabel=carrierValue?.previousElementSibling;
+    if(carrierValue){
+      const carriers=(Array.isArray(d.carriers)&&d.carriers.length)?d.carriers:[{
+        carrier_num:d.main_carrier,
+        tx_freq_hz:d.tx_freq_hz,
+        rx_freq_hz:d.rx_freq_hz,
+      }];
+      if(carrierLabel)carrierLabel.textContent=(t('bts_carrier')||'Carrier')+(carriers.length>1?'s':'');
+      carrierValue.classList.toggle('bts-carrier-listing', carriers.length>1);
+      carrierValue.innerHTML=carriers.map(c=>{
+        const carrierNum=(c.carrier_num??'â€”');
+        const dl=mhz(c.tx_freq_hz);
+        const ul=mhz(c.rx_freq_hz);
+        return `<span class="bts-carrier-line">#${carrierNum} · DL ${dl} · UL ${ul}</span>`;
+      }).join('');
+      carrierValue.innerHTML=carrierValue.innerHTML
+        .replace(/\u00c2\u00b7/g,' | ')
+        .replace(/\u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u009d/g,'-');
+    }
+    state.mainCarrierNum=d.main_carrier!=null?d.main_carrier:state.mainCarrierNum;
+    set('bts-carrier', d.main_carrier!=null?('#'+d.main_carrier):'â€”');
+    ((Array.isArray(d.carriers)&&d.carriers.length)?d.carriers:[{
+      carrier_num:d.main_carrier,
+      tx_freq_hz:d.tx_freq_hz,
+      rx_freq_hz:d.rx_freq_hz,
+    }]).forEach(c=>tsEnsureCarrierInfo(c.carrier_num,c.tx_freq_hz,c.rx_freq_hz));
+    renderTsGridCarrier();
     // Neighbor-cell + hangtime chips in the card header
     const nb=document.getElementById('bts-neighbor');
     if(nb){
@@ -5813,6 +6165,57 @@ async function loadBtsInfo(){
         : t('bts_wl_open');
     }
   }catch(e){/* config endpoint unavailable — leave placeholders */}
+}
+
+async function loadBtsInfoLegacy(){
+  try{
+    const r=await fetch('/api/btsinfo',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const set=(id,v)=>setText(id,(v==null||v==='')?'-':v);
+    const mhz=(hz,dp)=>(hz!=null&&isFinite(hz))?(hz/1e6).toFixed(dp==null?4:dp)+' MHz':'-';
+    const carriers=(Array.isArray(d.carriers)&&d.carriers.length)?d.carriers:[{
+      carrier_num:d.main_carrier,
+      tx_freq_hz:d.tx_freq_hz,
+      rx_freq_hz:d.rx_freq_hz,
+    }];
+
+    set('bts-tx', mhz(d.tx_freq_hz));
+    set('bts-rx', mhz(d.rx_freq_hz));
+    set('bts-shift', (d.shift_hz!=null&&isFinite(d.shift_hz))?((d.shift_hz>=0?'+':'')+(d.shift_hz/1e6).toFixed(3)+' MHz'):'-');
+    set('bts-mcc', d.mcc);
+    set('bts-mnc', d.mnc);
+    set('bts-carrier', d.main_carrier!=null?('#'+d.main_carrier):'-');
+
+    state.mainCarrierNum=d.main_carrier!=null?d.main_carrier:state.mainCarrierNum;
+    Object.keys(tsCarrierInfo).forEach(key=>delete tsCarrierInfo[key]);
+    carriers.forEach(c=>tsEnsureCarrierInfo(c.carrier_num,c.tx_freq_hz,c.rx_freq_hz));
+    renderTsGridCarrier();
+
+    const nb=document.getElementById('bts-neighbor');
+    if(nb){
+      const n=d.neighbor_count||0;
+      nb.innerHTML=BTS_TOWER_ICON+'Neighbor Cell | '+(n>0?('ON ('+n+' '+(n===1?'neighbor':'neighbors')+')'):'OFF');
+      nb.className='bts-chip '+(n>0?'on':'off');
+    }
+    const hg=document.getElementById('bts-hang');
+    if(hg){
+      hg.innerHTML=BTS_CLOCK_ICON+'HangTime | '+(d.hangtime_secs!=null?d.hangtime_secs:'-')+' sec';
+      hg.className='bts-chip time';
+    }
+    const acc=document.getElementById('bts-access');
+    if(acc){
+      const restricted=!!d.whitelist_restricted;
+      acc.textContent=restricted?'RESTRICTED':'OPEN';
+      acc.className='bts-access '+(restricted?'restricted':'open');
+    }
+    const sub=document.getElementById('bts-access-sub');
+    if(sub){
+      sub.textContent=d.whitelist_restricted
+        ? ((d.whitelist_count||0)+' '+t('bts_wl_entries'))
+        : t('bts_wl_open');
+    }
+  }catch(e){/* config endpoint unavailable - leave placeholders */}
 }
 
 async function loadSystemInfo(){
@@ -7006,7 +7409,7 @@ async function boot(){
   // Populate the topbar SDR badge (and prime system data) immediately on load,
   // instead of waiting for the user to open the System tab.
   loadSystemInfo();
-  loadBtsInfo();        // TETRA BTS Details card on the default (Radios) page
+  loadBtsInfoLegacy();  // TETRA BTS Details card on the default (Radios) page
   wifiProbeAvailable(); // toggles the WiFi nav item
   checkUpdate();
 }

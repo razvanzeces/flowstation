@@ -160,9 +160,7 @@ impl VoiceJitterBuffer {
         // elevated, or *new* underruns have occurred since our last warning. Comparing
         // against `last_warn_underruns` (rather than `== 0`) stops a single transient
         // underrun at call setup from spamming the log every interval for the call's life.
-        if self.target_frames() < BREW_JITTER_WARN_TARGET_FRAMES
-            && self.underruns == self.last_warn_underruns
-        {
+        if self.target_frames() < BREW_JITTER_WARN_TARGET_FRAMES && self.underruns == self.last_warn_underruns {
             return;
         }
 

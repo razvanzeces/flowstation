@@ -97,9 +97,7 @@ pub fn apply_tpg2200_action_patch(dto: CfgTpg2200ActionDto) -> Result<CfgTpg2200
         }
     }
     if dto.token.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(
-            "tpg2200_action: token must not contain spaces or control characters".to_string(),
-        );
+        return Err("tpg2200_action: token must not contain spaces or control characters".to_string());
     }
 
     Ok(CfgTpg2200Action {

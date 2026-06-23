@@ -5,8 +5,8 @@
 //! registry never calls back into RF/CMCE/UMAC, so observing health can never stall the stack.
 //! FlowStation-original work.
 
-use std::sync::OnceLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -147,7 +147,11 @@ impl HealthRegistry {
         } else {
             (HealthLevel::Ok, "ticking".to_string())
         };
-        domains.push(DomainHealth { domain: HealthDomain::Service, level: svc, detail: svc_detail });
+        domains.push(DomainHealth {
+            domain: HealthDomain::Service,
+            level: svc,
+            detail: svc_detail,
+        });
 
         // Backhaul (Brew). Down is Degraded, not Critical: local service keeps working.
         let (bh, bh_detail) = if !self.brew_configured.load(Ordering::Relaxed) {
@@ -157,19 +161,31 @@ impl HealthRegistry {
         } else {
             (HealthLevel::Degraded, "disconnected (local-only)".to_string())
         };
-        domains.push(DomainHealth { domain: HealthDomain::Backhaul, level: bh, detail: bh_detail });
+        domains.push(DomainHealth {
+            domain: HealthDomain::Backhaul,
+            level: bh,
+            detail: bh_detail,
+        });
 
         // Radios. Informational, with a Degraded signal for "attached but silent".
         let radios = self.registered_radios.load(Ordering::Relaxed);
         let last_act = self.last_radio_activity_ms.load(Ordering::Relaxed);
-        let silent_ms = if last_act == 0 { self.now_ms() } else { self.now_ms().saturating_sub(last_act) };
+        let silent_ms = if last_act == 0 {
+            self.now_ms()
+        } else {
+            self.now_ms().saturating_sub(last_act)
+        };
         let silent_check = t.radios_silent_degraded_secs > 0; // 0 disables the silent-radio signal
         let (rad, rad_detail) = if radios > 0 && silent_check && silent_ms >= t.radios_silent_degraded_secs * 1000 {
             (HealthLevel::Degraded, format!("{} attached, silent {}s", radios, silent_ms / 1000))
         } else {
             (HealthLevel::Ok, format!("{} attached", radios))
         };
-        domains.push(DomainHealth { domain: HealthDomain::Radios, level: rad, detail: rad_detail });
+        domains.push(DomainHealth {
+            domain: HealthDomain::Radios,
+            level: rad,
+            detail: rad_detail,
+        });
 
         // Congestion (downlink + live-SDS queues).
         let dl = self.dl_queue_depth.load(Ordering::Relaxed);

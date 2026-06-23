@@ -108,16 +108,36 @@ impl Default for CfgHealthDto {
     }
 }
 
-fn default_true() -> bool { true }
-fn default_snapshot_interval() -> u64 { 5 }
-fn default_core_stall() -> u64 { 10 }
-fn default_restart_after() -> u64 { 30 }
-fn default_restart_cooldown() -> u64 { 600 }
-fn default_radios_silent() -> u64 { 900 }
-fn default_dl_degraded() -> u32 { 64 }
-fn default_dl_critical() -> u32 { 192 }
-fn default_sds_degraded() -> u32 { 32 }
-fn default_sds_critical() -> u32 { 128 }
+fn default_true() -> bool {
+    true
+}
+fn default_snapshot_interval() -> u64 {
+    5
+}
+fn default_core_stall() -> u64 {
+    10
+}
+fn default_restart_after() -> u64 {
+    30
+}
+fn default_restart_cooldown() -> u64 {
+    600
+}
+fn default_radios_silent() -> u64 {
+    900
+}
+fn default_dl_degraded() -> u32 {
+    64
+}
+fn default_dl_critical() -> u32 {
+    192
+}
+fn default_sds_degraded() -> u32 {
+    32
+}
+fn default_sds_critical() -> u32 {
+    128
+}
 
 pub fn apply_health_patch(dto: CfgHealthDto) -> CfgHealth {
     // Clamp everything so a bad TOML value can't wedge the monitor (house style — same as

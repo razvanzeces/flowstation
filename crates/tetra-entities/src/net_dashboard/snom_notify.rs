@@ -26,18 +26,11 @@ fn ric_set_toml(rics: &std::collections::BTreeSet<u32>) -> String {
 }
 
 fn u32_set_toml(values: &std::collections::BTreeSet<u32>) -> String {
-    values
-        .iter()
-        .map(|v| v.to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
+    values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")
 }
 
 /// Rewrite (or insert) the `[snom_notify]` section in the TOML file. A `.snom.bak` backup is made.
-pub fn write_snom_notify_to_toml(
-    config_path: &str,
-    ov: &SnomNotifyRuntimeOverride,
-) -> std::io::Result<()> {
+pub fn write_snom_notify_to_toml(config_path: &str, ov: &SnomNotifyRuntimeOverride) -> std::io::Result<()> {
     let original = std::fs::read_to_string(config_path)?;
     let section = format!(
         "[snom_notify]\n\

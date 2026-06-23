@@ -34,22 +34,13 @@ fn ric_set_toml(rics: &std::collections::BTreeSet<u32>) -> String {
 fn ric_routes_toml(routes: &std::collections::BTreeMap<u32, u32>) -> String {
     routes
         .iter()
-        .map(|(ric, ssi)| {
-            format!(
-                "\"{}\" = {}",
-                tetra_config::bluestation::format_ric_route_key(*ric),
-                ssi
-            )
-        })
+        .map(|(ric, ssi)| format!("\"{}\" = {}", tetra_config::bluestation::format_ric_route_key(*ric), ssi))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
 /// Rewrite (or insert) the `[dapnet]` section in the TOML file. A `.dapnet.bak` backup is made.
-pub fn write_dapnet_to_toml(
-    config_path: &str,
-    ov: &DapnetRuntimeOverride,
-) -> std::io::Result<()> {
+pub fn write_dapnet_to_toml(config_path: &str, ov: &DapnetRuntimeOverride) -> std::io::Result<()> {
     let original = std::fs::read_to_string(config_path)?;
     let ric_issi_routes = ric_routes_toml(&ov.ric_issi_routes);
     let ric_gssi_routes = ric_routes_toml(&ov.ric_gssi_routes);

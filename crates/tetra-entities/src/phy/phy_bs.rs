@@ -39,7 +39,6 @@ impl<D: RxTxDev> PhyBs<D> {
     pub fn new(config: SharedConfig, rxtxdev: D) -> Self {
         let c = &config.config().phy_io;
 
-        // Create async writers for file logging of generated DL and received UL signals
         let dl_tx_logger = c
             .dl_tx_file
             .as_ref()
@@ -49,7 +48,6 @@ impl<D: RxTxDev> PhyBs<D> {
             .as_ref()
             .and_then(|f| PhyIoFile::create_async_writer(f, "ul_rx_logger".to_string()).ok());
 
-        // Open input files overriding either generated DL or received UL data
         let dl_input_file = if let Some(ref f) = c.dl_input_file {
             Some(PhyIoFile::new(f, PhyIoFileMode::ReadRepeat).expect("Failed to open dl_input_file"))
         } else {
@@ -63,7 +61,7 @@ impl<D: RxTxDev> PhyBs<D> {
 
         Self {
             config,
-            dltime: TdmaTime::default(), // updated in tick_start
+            dltime: TdmaTime::default(),
             dl_tx_sender: dl_tx_logger,
             ul_rx_sender: ul_rx_logger,
             dl_input_file,
@@ -75,6 +73,7 @@ impl<D: RxTxDev> PhyBs<D> {
 
     fn send_rxblock_to_lmac(
         queue: &mut MessageQueue,
+        carrier_num: u16,
         train_type: TrainingSequence,
         burst_type: BurstType,
         block_type: PhyBlockType,
@@ -82,12 +81,12 @@ impl<D: RxTxDev> PhyBs<D> {
         bits: BitBuffer,
         rssi_dbfs: f32,
     ) {
-        // Uplink timeslot is two after downlink. Thus was transmitted at dltime - 2
         let sapmsg = SapMsg {
             sap: Sap::TpSap,
             src: TetraEntity::Phy,
             dest: TetraEntity::Lmac,
             msg: SapMsgInner::TpUnitdataInd(TpUnitdataInd {
+                carrier_num,
                 train_type,
                 burst_type,
                 block_type,
@@ -99,18 +98,12 @@ impl<D: RxTxDev> PhyBs<D> {
         queue.push_back(sapmsg);
     }
 
-    fn split_rxslot_and_send_to_lmac(queue: &mut MessageQueue, burst: &RxBurstBits<'_>) {
+    fn split_rxslot_and_send_to_lmac(queue: &mut MessageQueue, carrier_num: u16, burst: &RxBurstBits<'_>) {
         let train_seq = burst.train_type;
         match train_seq {
             TrainingSequence::NormalTrainSeq1 => {
-                // burst.bits is a variable-length slice from the demodulator. A length
-                // mismatch (DSP glitch, misconfiguration) would otherwise panic on the
-                // slice index below — drop and log instead so the cell survives.
                 if burst.bits.len() != NUB_BITS {
-                    tracing::warn!(
-                        "PHY: NUB burst wrong length ({} != {}), dropping",
-                        burst.bits.len(), NUB_BITS
-                    );
+                    tracing::warn!("PHY: NUB burst wrong length ({} != {}), dropping", burst.bits.len(), NUB_BITS);
                     return;
                 }
 
@@ -119,30 +112,50 @@ impl<D: RxTxDev> PhyBs<D> {
                 blk.copy_bits_from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
                 blk.seek(0);
 
-                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Both, blk, burst.rssi_dbfs);
+                Self::send_rxblock_to_lmac(
+                    queue,
+                    carrier_num,
+                    train_seq,
+                    BurstType::NUB,
+                    PhyBlockType::NUB,
+                    PhyBlockNum::Both,
+                    blk,
+                    burst.rssi_dbfs,
+                );
             }
-
             TrainingSequence::NormalTrainSeq2 => {
                 if burst.bits.len() != NUB_BITS {
-                    tracing::warn!(
-                        "PHY: NUB burst wrong length ({} != {}), dropping",
-                        burst.bits.len(), NUB_BITS
-                    );
+                    tracing::warn!("PHY: NUB burst wrong length ({} != {}), dropping", burst.bits.len(), NUB_BITS);
                     return;
                 }
 
                 let blk1 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK1_OFFSET..NUB_BLK1_OFFSET + NUB_BLK_BITS]);
                 let blk2 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
 
-                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Block1, blk1, burst.rssi_dbfs);
-                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Block2, blk2, burst.rssi_dbfs);
+                Self::send_rxblock_to_lmac(
+                    queue,
+                    carrier_num,
+                    train_seq,
+                    BurstType::NUB,
+                    PhyBlockType::NUB,
+                    PhyBlockNum::Block1,
+                    blk1,
+                    burst.rssi_dbfs,
+                );
+                Self::send_rxblock_to_lmac(
+                    queue,
+                    carrier_num,
+                    train_seq,
+                    BurstType::NUB,
+                    PhyBlockType::NUB,
+                    PhyBlockNum::Block2,
+                    blk2,
+                    burst.rssi_dbfs,
+                );
             }
             TrainingSequence::ExtendedTrainSeq => {
                 if burst.bits.len() != CUB_BITS {
-                    tracing::warn!(
-                        "PHY: CUB burst wrong length ({} != {}), dropping",
-                        burst.bits.len(), CUB_BITS
-                    );
+                    tracing::warn!("PHY: CUB burst wrong length ({} != {}), dropping", burst.bits.len(), CUB_BITS);
                     return;
                 }
 
@@ -151,158 +164,149 @@ impl<D: RxTxDev> PhyBs<D> {
                 blk.copy_bits_from_bitarr(&burst.bits[CUB_BLK2_OFFSET..CUB_BLK2_OFFSET + CUB_BLK_BITS]);
                 blk.seek(0);
 
-                Self::send_rxblock_to_lmac(queue, train_seq, BurstType::CUB, PhyBlockType::SSN1, PhyBlockNum::Block1, blk, burst.rssi_dbfs);
+                Self::send_rxblock_to_lmac(
+                    queue,
+                    carrier_num,
+                    train_seq,
+                    BurstType::CUB,
+                    PhyBlockType::SSN1,
+                    PhyBlockNum::Block1,
+                    blk,
+                    burst.rssi_dbfs,
+                );
             }
-
-            // SyncTrainSeq, NormalTrainSeq3 and NotFound are not handled here (sync bursts
-            // are processed elsewhere; NotFound is filtered by the caller). A real demod
-            // can legitimately classify a burst as SyncTrainSeq, so this must NOT be an
-            // unreachable!()/panic — drop and log instead.
             other => {
                 tracing::debug!("PHY: training sequence {:?} not handled in split_rxslot, dropping", other);
             }
         }
     }
 
-    fn rx_tpsap_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
-        // Handle TpUnitdataReq with a TX slot
-        // Prepare TxSlotBits for transmission
-        // TODO FIXME: optimize
-
-        self.tick += 1;
-
-        let SapMsgInner::TpUnitdataReq(prim) = message.msg else { tracing::error!("BUG: unexpected message or state -- routing error"); return; };
-
-        // Generate block (from file or from LMAC data)
+    fn build_dl_burst(&mut self, prim: tetra_saps::tp::TpUnitdataReqSlot) -> [u8; TIMESLOT_TYPE4_BITS] {
         let mut dl_burst = [0u8; TIMESLOT_TYPE4_BITS];
         if let Some(dl_input_file) = &mut self.dl_input_file {
-            // Code for testing mode, when replaying from DL input file
             dl_input_file.read_block(&mut dl_burst).expect("Failed to read dl_input_file data");
-        } else {
-            // We received data from LMAC, convert BBK block to bitarr
-            assert!(prim.bbk.is_some());
-            let mut bbk = [0u8; 30];
-            prim.bbk.unwrap().to_bitarr(&mut bbk);
+            return dl_burst;
+        }
 
-            // Build NDB or SDB burst
-            dl_burst = match prim.burst_type {
-                BurstType::SDB => {
-                    // SDB burst
-                    assert!(prim.train_type == TrainingSequence::SyncTrainSeq);
-                    assert!(prim.blk1.is_some() && prim.blk2.is_some());
+        let mut bbk = [0u8; 30];
+        prim.bbk.expect("TP slot missing BBK").to_bitarr(&mut bbk);
 
-                    let mut blk1 = [0u8; 120];
-                    let mut blk2 = [0u8; 216];
-                    prim.blk1.unwrap().to_bitarr(&mut blk1); // Guaranteed for SDB
-                    prim.blk2.unwrap().to_bitarr(&mut blk2); // Guaranteed for SDB
+        match prim.burst_type {
+            BurstType::SDB => {
+                assert!(prim.train_type == TrainingSequence::SyncTrainSeq);
+                assert!(prim.blk1.is_some() && prim.blk2.is_some());
 
-                    slotter::build_sdb(&blk1, &bbk, &blk2)
-                }
-                BurstType::NDB => {
-                    let mut blk1 = [0u8; 216];
-                    let mut blk2 = [0u8; 216];
+                let mut blk1 = [0u8; 120];
+                let mut blk2 = [0u8; 216];
+                prim.blk1.expect("SDB missing blk1").to_bitarr(&mut blk1);
+                prim.blk2.expect("SDB missing blk2").to_bitarr(&mut blk2);
+                slotter::build_sdb(&blk1, &bbk, &blk2)
+            }
+            BurstType::NDB => {
+                let mut blk1 = [0u8; 216];
+                let mut blk2 = [0u8; 216];
 
-                    match prim.train_type {
-                        TrainingSequence::NormalTrainSeq1 => {
-                            // Single large block
-                            assert!(prim.blk1.is_some() && prim.blk2.is_none());
-                            let mut blk1_src = prim.blk1.unwrap(); // Guaranteed for NDB
-                            blk1_src.to_bitarr(&mut blk1);
-                            blk1_src.to_bitarr(&mut blk2);
-                        }
-                        TrainingSequence::NormalTrainSeq2 => {
-                            // Two half slots
-                            assert!(prim.blk1.is_some() && prim.blk2.is_some());
-                            prim.blk1.unwrap().to_bitarr(&mut blk1); // Guaranteed for NDB
-                            prim.blk2.unwrap().to_bitarr(&mut blk2); // Guaranteed for NDB trainseq 2
-                        }
-                        _ => {
-                            tracing::warn!("PHY: unsupported training sequence {:?} for NDB burst, dropping", prim.train_type);
-                            return;
-                        }
+                match prim.train_type {
+                    TrainingSequence::NormalTrainSeq1 => {
+                        assert!(prim.blk1.is_some() && prim.blk2.is_none());
+                        let mut blk1_src = prim.blk1.expect("NDB missing blk1");
+                        blk1_src.to_bitarr(&mut blk1);
+                        blk1_src.to_bitarr(&mut blk2);
                     }
-
-                    slotter::build_ndb(prim.train_type, &blk1, &bbk, &blk2)
+                    TrainingSequence::NormalTrainSeq2 => {
+                        assert!(prim.blk1.is_some() && prim.blk2.is_some());
+                        prim.blk1.expect("NDB missing blk1").to_bitarr(&mut blk1);
+                        prim.blk2.expect("NDB missing blk2").to_bitarr(&mut blk2);
+                    }
+                    other => panic!("Unsupported training sequence for NDB burst: {:?}", other),
                 }
-                _ => unreachable!("BUG: unhandled match variant -- should never be reached")
-            };
+
+                slotter::build_ndb(prim.train_type, &blk1, &bbk, &blk2)
+            }
+            other => panic!("Unsupported burst type: {:?}", other),
+        }
+    }
+
+    fn rx_tpsap_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
+        self.tick += 1;
+
+        let prims = match message.msg {
+            SapMsgInner::TpUnitdataReq(prim) => vec![prim],
+            SapMsgInner::TpUnitdataReqSlots(batch) => batch.slots,
+            _ => {
+                tracing::error!("BUG: unexpected message or state -- routing error");
+                return;
+            }
+        };
+
+        let mut dl_bursts = Vec::with_capacity(prims.len());
+        let mut carrier_nums = Vec::with_capacity(prims.len());
+        for prim in prims {
+            carrier_nums.push(prim.carrier_num);
+            dl_bursts.push(self.build_dl_burst(prim));
         }
 
-        // Prepare the TX slot for the tx device
-        let tx_slot: [TxSlotBits; 1] = [TxSlotBits {
-            time: self.dltime.add_timeslots(MACSCHED_TX_AHEAD as i32),
-            slot: Some(&dl_burst),
-            ..Default::default()
-        }];
+        let tx_time = self.dltime.add_timeslots(MACSCHED_TX_AHEAD as i32);
+        let tx_slots = dl_bursts
+            .iter()
+            .zip(carrier_nums.iter())
+            .map(|(burst, carrier_num)| TxSlotBits {
+                carrier_num: *carrier_num,
+                time: tx_time,
+                slot: Some(burst),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
 
-        // Code for testing mode, when capturing all DL output to file
         if let Some(dl_tx_sender) = &self.dl_tx_sender {
-            let _ = dl_tx_sender.try_send(FileWriteMsg::WriteBlock(dl_burst.to_vec()));
+            for burst in &dl_bursts {
+                let _ = dl_tx_sender.try_send(FileWriteMsg::WriteBlock(burst.to_vec()));
+            }
         }
 
-        // Transmit slot and receive rx data (if any trainseq was found)
-        // This function is blocking and the source of timing sync in the whole stack
-        // let tick_done = std::time::Instant::now();
-        let rx = self.rxtxdev.rxtx_timeslot(&tx_slot).expect("Got error from rxtx_timeslot");
-        // let new_tick_start = std::time::Instant::now();
-        // let elapsed = new_tick_start.duration_since(tick_done);
-        // tracing::debug!("rxtx_timeslot: tick_done {:?}, new_tick_start {:?}, elapsed {:?}", tick_done, new_tick_start, elapsed);
+        let rx = self.rxtxdev.rxtx_timeslot(&tx_slots).expect("Got error from rxtx_timeslot");
 
-        // Process received slot (either full, subslot1 or subslot2)
-        // In exceptional cases, we might receive multiple slots (multiple possible detected bursts in one timeslot)
-        // This may be due to two subslots, or due to false psoitives in training seq detection
-        // The Lmac error correction will eliminate the false positives
         for rx_slot in rx {
             if let Some(rx_slot) = rx_slot {
                 let mut slot_sent = false;
                 if rx_slot.slot.train_type != TrainingSequence::NotFound {
-                    tracing::info!(ts=%self.dltime, "rx_tpsap_prim got {:?} in fullslot", rx_slot.slot.train_type);
+                    tracing::info!(ts=%self.dltime, carrier=rx_slot.carrier_num, "rx_tpsap_prim got {:?} in fullslot", rx_slot.slot.train_type);
 
                     if let Some(ul_rx_sender) = &self.ul_rx_sender {
-                        // Log received data to file (non-blocking)
                         let _ = ul_rx_sender.try_send(FileWriteMsg::WriteHeaderAndBlock(3, self.tick, rx_slot.slot.bits.to_vec()));
                     }
 
-                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.slot);
+                    Self::split_rxslot_and_send_to_lmac(queue, rx_slot.carrier_num, &rx_slot.slot);
                     slot_sent = true;
                 }
                 if rx_slot.subslot1.train_type != TrainingSequence::NotFound {
-                    tracing::info!(ts=%self.dltime, "rx_tpsap_prim got {:?} in subslot1", rx_slot.subslot1.train_type);
+                    tracing::info!(ts=%self.dltime, carrier=rx_slot.carrier_num, "rx_tpsap_prim got {:?} in subslot1", rx_slot.subslot1.train_type);
                     if slot_sent {
-                        // Expected: more than one of {full-slot, subslot1, subslot2} correlated a
-                        // training sequence in this slot — usually a false-positive detection. We
-                        // forward all candidates; the LMAC CRC discards the bogus ones. Not an error.
                         tracing::debug!("Multiple candidate bursts detected in one slot; forwarding all (LMAC CRC drops false positives)");
                     }
                     if let Some(ul_rx_sender) = &self.ul_rx_sender {
-                        // Log received data to file (non-blocking)
                         let _ = ul_rx_sender.try_send(FileWriteMsg::WriteHeaderAndBlock(1, self.tick, rx_slot.subslot1.bits.to_vec()));
                     }
 
-                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.subslot1);
+                    Self::split_rxslot_and_send_to_lmac(queue, rx_slot.carrier_num, &rx_slot.subslot1);
                     slot_sent = true;
                 }
                 if rx_slot.subslot2.train_type != TrainingSequence::NotFound {
-                    tracing::info!(ts=%self.dltime, "rx_tpsap_prim got {:?} in subslot2", rx_slot.subslot2.train_type);
+                    tracing::info!(ts=%self.dltime, carrier=rx_slot.carrier_num, "rx_tpsap_prim got {:?} in subslot2", rx_slot.subslot2.train_type);
                     if slot_sent {
-                        // Expected: more than one of {full-slot, subslot1, subslot2} correlated a
-                        // training sequence in this slot — usually a false-positive detection. We
-                        // forward all candidates; the LMAC CRC discards the bogus ones. Not an error.
                         tracing::debug!("Multiple candidate bursts detected in one slot; forwarding all (LMAC CRC drops false positives)");
                     }
                     if let Some(ul_rx_sender) = &self.ul_rx_sender {
-                        // Log received data to file (non-blocking)
                         let _ = ul_rx_sender.try_send(FileWriteMsg::WriteHeaderAndBlock(2, self.tick, rx_slot.subslot2.bits.to_vec()));
                     }
 
-                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.subslot2);
+                    Self::split_rxslot_and_send_to_lmac(queue, rx_slot.carrier_num, &rx_slot.subslot2);
                 }
             }
         }
     }
 
     fn rx_tpc_prim(&mut self, _queue: &mut MessageQueue, _message: SapMsg) {
-        // TPC SAP not implemented yet. Log instead of crashing the PHY worker.
         unimplemented_log!("rx_tpc_prim: TPC SAP not implemented");
     }
 }
@@ -314,7 +318,6 @@ impl<D: RxTxDev + Send + 'static> TetraEntityTrait for PhyBs<D> {
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         tracing::debug!("rx_prim: {:?}", message);
-        // tracing::debug!(ts=%message.dltime, "rx_prim: {:?}", message);
 
         match message.sap {
             Sap::TpSap => {
@@ -324,12 +327,14 @@ impl<D: RxTxDev + Send + 'static> TetraEntityTrait for PhyBs<D> {
                 self.rx_tpc_prim(queue, message);
             }
             _ => {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+                tracing::error!("BUG: unexpected message or state -- routing error");
             }
         }
     }
 
     fn tick_start(&mut self, _queue: &mut MessageQueue, ts: TdmaTime) {
         self.dltime = ts;
+        let _ = &self.config;
+        let _ = &self.ul_input_file;
     }
 }

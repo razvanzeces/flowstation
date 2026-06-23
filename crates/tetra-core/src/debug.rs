@@ -1,8 +1,8 @@
+use chrono::Local;
 use core::fmt;
 use std::fmt::Write as FmtWrite;
 use std::fs::OpenOptions;
 use std::sync::{Once, OnceLock};
-use chrono::Local;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::format::{self, FormatEvent, FormatFields};
@@ -245,7 +245,7 @@ impl tracing::field::Visit for StringVisitor<'_> {
             let _ = write!(self.0, "{:?}", value);
             // Remove surrounding quotes from debug format
             if self.0.starts_with('"') && self.0.ends_with('"') {
-                *self.0 = self.0[1..self.0.len()-1].to_string();
+                *self.0 = self.0[1..self.0.len() - 1].to_string();
             }
         }
     }

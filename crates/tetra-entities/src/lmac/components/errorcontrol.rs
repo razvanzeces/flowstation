@@ -462,6 +462,7 @@ mod tests {
         assert_eq!(type5vec, type5.to_bitstr());
 
         let prim_ind = TpUnitdataInd {
+            carrier_num: 0,
             train_type: TrainingSequence::SyncTrainSeq,
             burst_type: BurstType::SDB,
             block_type: PhyBlockType::SB2,
@@ -492,6 +493,7 @@ mod tests {
         };
         let type5 = encode_cp(prim_req);
         let prim_ind = TpUnitdataInd {
+            carrier_num: 0,
             train_type: TrainingSequence::SyncTrainSeq,
             burst_type: BurstType::SDB,
             block_type: PhyBlockType::SB2,
@@ -566,6 +568,7 @@ mod tests {
         };
         let type5 = encode_cp(prim_req);
         let prim_ind = TpUnitdataInd {
+            carrier_num: 0,
             train_type: TrainingSequence::NormalTrainSeq1,
             burst_type: BurstType::NDB,
             block_type: PhyBlockType::NDB,

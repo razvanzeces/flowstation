@@ -40,8 +40,7 @@ impl HomeModeDisplaySender {
     const MAX_SDS_TYPE4_BYTES: usize = 255; // 2040 bits max when byte-aligned
     const SDS_TL_TRANSFER_HEADER_BYTES: usize = 3;
     const HOME_MODE_TEXT_CODING_SCHEME_BYTES: usize = 1;
-    const MAX_TEXT_BYTES: usize =
-        Self::MAX_SDS_TYPE4_BYTES - Self::SDS_TL_TRANSFER_HEADER_BYTES - Self::HOME_MODE_TEXT_CODING_SCHEME_BYTES;
+    const MAX_TEXT_BYTES: usize = Self::MAX_SDS_TYPE4_BYTES - Self::SDS_TL_TRANSFER_HEADER_BYTES - Self::HOME_MODE_TEXT_CODING_SCHEME_BYTES;
 
     pub fn new() -> Self {
         Self {
@@ -64,19 +63,23 @@ impl HomeModeDisplaySender {
     /// otherwise falls back to sds_broadcast interval, otherwise 96 multiframes.
     pub fn tick_live_sds(&mut self, config: &SharedConfig, dltime: TdmaTime) -> Option<HomeModeDisplayTx> {
         // Determine the interval to use: prefer home_mode_display, then sds_broadcast, then default.
-        let interval_multiframes = config.config().cell.home_mode_display.as_ref()
+        let interval_multiframes = config
+            .config()
+            .cell
+            .home_mode_display
+            .as_ref()
             .map(|c| c.interval_multiframes)
             .or_else(|| config.config().cell.sds_broadcast.as_ref().map(|c| c.interval_multiframes))
             .unwrap_or(96)
             .max(1);
 
-        let interval_slots =
-            interval_multiframes.saturating_mul(Self::SLOTS_PER_MULTIFRAME).min(i32::MAX as u32) as i32;
+        let interval_slots = interval_multiframes.saturating_mul(Self::SLOTS_PER_MULTIFRAME).min(i32::MAX as u32) as i32;
 
         // Startup delay: don't fire before the static HMD has had time to send first.
         let start_time = self.start_time.get_or_insert(dltime);
-        let start_delay_slots =
-            Self::HOME_MODE_START_DELAY_FRAMES.saturating_mul(Self::SLOTS_PER_FRAME).min(i32::MAX as u32) as i32;
+        let start_delay_slots = Self::HOME_MODE_START_DELAY_FRAMES
+            .saturating_mul(Self::SLOTS_PER_FRAME)
+            .min(i32::MAX as u32) as i32;
         if start_time.age(dltime) < start_delay_slots * 2 {
             return None;
         }
@@ -125,8 +128,13 @@ impl HomeModeDisplaySender {
 
                 tracing::info!(
                     "SDS: LiveSds broadcast id={} sent={}/{} text={:?}",
-                    msg.id, msg.sent_count,
-                    if msg.repeat_count == 0 { "∞".to_string() } else { msg.repeat_count.to_string() },
+                    msg.id,
+                    msg.sent_count,
+                    if msg.repeat_count == 0 {
+                        "∞".to_string()
+                    } else {
+                        msg.repeat_count.to_string()
+                    },
                     &msg.text
                 );
 
@@ -160,7 +168,6 @@ impl HomeModeDisplaySender {
     }
 
     fn tick_with_cfg(&mut self, home_mode_cfg: Option<CfgHomeModeDisplay>, dltime: TdmaTime) -> Option<HomeModeDisplayTx> {
-
         let Some(home_mode_cfg) = home_mode_cfg else {
             // Feature disabled — reset timers so a re-enable works cleanly
             self.reset_timers();
@@ -191,15 +198,15 @@ impl HomeModeDisplaySender {
 
         // Startup delay: wait before first broadcast
         let start_time = self.start_time.get_or_insert(dltime);
-        let start_delay_slots =
-            Self::HOME_MODE_START_DELAY_FRAMES.saturating_mul(Self::SLOTS_PER_FRAME).min(i32::MAX as u32) as i32;
+        let start_delay_slots = Self::HOME_MODE_START_DELAY_FRAMES
+            .saturating_mul(Self::SLOTS_PER_FRAME)
+            .min(i32::MAX as u32) as i32;
         if start_time.age(dltime) < start_delay_slots {
             return None;
         }
 
         // Interval check
-        let interval_slots =
-            interval_multiframes.saturating_mul(Self::SLOTS_PER_MULTIFRAME).min(i32::MAX as u32) as i32;
+        let interval_slots = interval_multiframes.saturating_mul(Self::SLOTS_PER_MULTIFRAME).min(i32::MAX as u32) as i32;
         let should_send = match self.last_tx {
             None => true,
             Some(last_tx) => last_tx.age(dltime) >= interval_slots,

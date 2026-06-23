@@ -14,6 +14,7 @@ pub struct TmvUnitdataReq {
 
 #[derive(Debug, Clone)]
 pub struct TmvUnitdataReqSlot {
+    pub carrier_num: u16,
     /// Timeslot at which this block is to be transmitted
     pub ts: TdmaTime,
     pub ul_phy_chan: PhysicalChannel,
@@ -32,9 +33,15 @@ pub struct TmvUnitdataReqSlot {
     pub bbk: Option<TmvUnitdataReq>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TmvUnitdataReqSlots {
+    pub slots: Vec<TmvUnitdataReqSlot>,
+}
+
 /// The TMV-UNITDATA indication primitive shall be used by the lower MAC to deliver a received MAC block;
 #[derive(Debug, Clone)]
 pub struct TmvUnitdataInd {
+    pub carrier_num: u16,
     pub pdu: BitBuffer,
 
     /// While not in the spec, the Umac needs to know which block this is.
@@ -57,6 +64,8 @@ pub struct TmvUnitdataInd {
 
 #[derive(Debug, Clone, Default)]
 pub struct TmvConfigureReq {
+    /// Carrier this configuration update applies to. Legacy single-carrier callers may leave it unset.
+    pub carrier_num: Option<u16>,
     // pub channel_info: Option<Todo>,
     /// Received from umac upon change of network information
     pub scrambling_code: Option<u32>,

@@ -197,8 +197,7 @@ mod tests {
 
     #[test]
     fn reactive_can_be_disabled_and_cooldown_clamps() {
-        let dto: CfgRecoveryDto =
-            toml::from_str("reactive_enabled = false\nreactive_cooldown_secs = 1").unwrap();
+        let dto: CfgRecoveryDto = toml::from_str("reactive_enabled = false\nreactive_cooldown_secs = 1").unwrap();
         let c = apply_recovery_patch(dto);
         assert!(!c.reactive_enabled);
         assert_eq!(c.reactive_cooldown_secs, 2, "clamped up to the 2s floor");
@@ -220,7 +219,11 @@ mod tests {
         assert_eq!(c.debounce_secs, 1);
         assert_eq!(c.max_cached_issis, 1);
 
-        let dto = CfgRecoveryDto { replay_per_frame: 999, max_cached_issis: 9_999_999, ..Default::default() };
+        let dto = CfgRecoveryDto {
+            replay_per_frame: 999,
+            max_cached_issis: 9_999_999,
+            ..Default::default()
+        };
         let c = apply_recovery_patch(dto);
         assert_eq!(c.replay_per_frame, 18);
         assert_eq!(c.max_cached_issis, 65535);
@@ -229,9 +232,15 @@ mod tests {
     #[test]
     fn empty_cache_path_becomes_none() {
         // The documented `cache_path = ""` must mean "use the default", not a literal empty path.
-        let dto = CfgRecoveryDto { cache_path: Some("   ".to_string()), ..Default::default() };
+        let dto = CfgRecoveryDto {
+            cache_path: Some("   ".to_string()),
+            ..Default::default()
+        };
         assert_eq!(apply_recovery_patch(dto).cache_path, None);
-        let dto = CfgRecoveryDto { cache_path: Some("/etc/fs/cache.json".to_string()), ..Default::default() };
+        let dto = CfgRecoveryDto {
+            cache_path: Some("/etc/fs/cache.json".to_string()),
+            ..Default::default()
+        };
         assert_eq!(apply_recovery_patch(dto).cache_path.as_deref(), Some("/etc/fs/cache.json"));
     }
 }

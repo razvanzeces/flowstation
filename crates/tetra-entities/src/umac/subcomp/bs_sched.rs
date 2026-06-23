@@ -1,4 +1,6 @@
-use tetra_core::{BitBuffer, Direction, LinkId, PhyBlockNum, PhysicalChannel, SsiType, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
+use tetra_core::{
+    BitBuffer, Direction, LinkId, PhyBlockNum, PhysicalChannel, SsiType, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log,
+};
 use tetra_saps::{
     control::call_control::{Circuit, CircuitDlMediaSource},
     tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
@@ -43,7 +45,28 @@ pub const TCH_S_CAP: usize = 274;
 /// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
 pub const NUM_TIMESLOTS: usize = 4;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CarrierDownlinkMode {
+    PrimaryMcch,
+    SecondaryBcchNoMcch,
+    TrafficOnly,
+}
+
+impl CarrierDownlinkMode {
+    fn emit_bcch(self) -> bool {
+        matches!(self, Self::PrimaryMcch | Self::SecondaryBcchNoMcch)
+    }
+
+    fn allow_mcch(self) -> bool {
+        matches!(self, Self::PrimaryMcch)
+    }
+
+    fn allow_common_control_aach(self) -> bool {
+        matches!(self, Self::PrimaryMcch)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct PrecomputedUmacPdus {
     pub mac_sysinfo1: MacSysinfo,
     pub mac_sysinfo2: MacSysinfo,
@@ -71,6 +94,8 @@ pub struct TimeslotSchedule {
 // #[derive(Debug)]
 pub struct BsChannelScheduler {
     pub cur_dltime: TdmaTime,
+    carrier_num: u16,
+    downlink_mode: CarrierDownlinkMode,
     scrambling_code: u32,
     precomps: PrecomputedUmacPdus,
     /// Collect dltx traffic here that can't be sent this slot.
@@ -147,8 +172,11 @@ const EMPTY_SCHED: [[TimeslotSchedule; MACSCHED_NUM_FRAMES]; 4] = [EMPTY_SCHED_C
 
 impl BsChannelScheduler {
     pub fn new(scrambling_code: u32, precomps: PrecomputedUmacPdus) -> Self {
+        let carrier_num = precomps.mac_sysinfo1.main_carrier;
         BsChannelScheduler {
             cur_dltime: TdmaTime { t: 0, f: 0, m: 0, h: 0 }, // Intentionally invalid, updated in tick function
+            carrier_num,
+            downlink_mode: CarrierDownlinkMode::PrimaryMcch,
             scrambling_code,
             precomps,
             dltx_next_slot_queue: Vec::new(),
@@ -161,6 +189,26 @@ impl BsChannelScheduler {
             // Start each timeslot's marker cursor at 4 (first valid value).
             next_usage_marker: [4, 4, 4, 4],
         }
+    }
+
+    pub fn set_carrier_num(&mut self, carrier_num: u16) {
+        self.carrier_num = carrier_num;
+    }
+
+    pub fn set_downlink_mode(&mut self, downlink_mode: CarrierDownlinkMode) {
+        self.downlink_mode = downlink_mode;
+    }
+
+    pub fn carrier_num(&self) -> u16 {
+        self.carrier_num
+    }
+
+    pub fn allow_mcch(&self) -> bool {
+        self.downlink_mode.allow_mcch()
+    }
+
+    pub fn allow_common_control_aach(&self) -> bool {
+        self.downlink_mode.allow_common_control_aach()
     }
 
     /// Enter/leave hangtime for a traffic timeslot (2..=4).
@@ -223,7 +271,7 @@ impl BsChannelScheduler {
     }
 
     pub fn can_deliver_stealing(&self, ts: u8) -> bool {
-        (2..=4).contains(&ts) && self.circuits.is_active(Direction::Dl, ts)
+        (2..=4).contains(&ts) && self.circuits.is_active(Direction::Dl, self.carrier_num, ts)
     }
 
     fn generate_hangtime_idle_schf(&self) -> BitBuffer {
@@ -530,12 +578,36 @@ impl BsChannelScheduler {
     /// `usage_marker` is set when the grant covers >1 slot — the MS uses it to identify the reservation
     /// when continuing the burst on the second slot (per ETSI §21.4.3.2). Single-slot grants pass None.
     pub fn dl_enqueue_grant(&mut self, ts: u8, addr: TetraAddress, grant: BasicSlotgrant, usage_marker: Option<u8>) {
-        tracing::debug!("dl_enqueue_grant: ts {} enqueueing PDU {:?} for addr {} marker {:?}", ts, grant, addr, usage_marker);
+        if ts == 1 && !self.allow_mcch() {
+            tracing::debug!(
+                "dl_enqueue_grant: carrier={} ignoring TS1 grant for {} because MCCH is disabled in mode {:?}",
+                self.carrier_num,
+                addr,
+                self.downlink_mode
+            );
+            return;
+        }
+        tracing::debug!(
+            "dl_enqueue_grant: ts {} enqueueing PDU {:?} for addr {} marker {:?}",
+            ts,
+            grant,
+            addr,
+            usage_marker
+        );
         let elem = DlSchedElem::Grant(addr, grant, usage_marker);
         self.dltx_queues[ts as usize - 1].push(elem);
     }
 
     pub fn dl_enqueue_random_access_ack(&mut self, ts: u8, addr: TetraAddress) {
+        if ts == 1 && !self.allow_mcch() {
+            tracing::debug!(
+                "dl_enqueue_random_access_ack: carrier={} ignoring TS1 random-access ack for {} because MCCH is disabled in mode {:?}",
+                self.carrier_num,
+                addr,
+                self.downlink_mode
+            );
+            return;
+        }
         tracing::debug!(
             "dl_enqueue_random_access_ack: ts {} enqueueing random access acknowledgementfor addr {}",
             ts,
@@ -547,39 +619,76 @@ impl BsChannelScheduler {
 
     fn identify_timeslots_for_ssi(&self, addr: Option<TetraAddress>, link_id: LinkId) -> [u8; NUM_TIMESLOTS] {
         let Some(addr) = addr else {
-            tracing::warn!("identify_timeslots_for_ssi: MAC-RESOURCE has no address, defaulting to ts1");
-            return [1, 0, 0, 0];
+            tracing::warn!("identify_timeslots_for_ssi: MAC-RESOURCE has no address, dropping");
+            return [0, 0, 0, 0];
         };
 
         if addr.ssi_type == SsiType::Gssi || link_id == 0 {
-            return [1, 0, 0, 0];
+            if self.allow_mcch() {
+                return [1, 0, 0, 0];
+            }
+            tracing::debug!(
+                "identify_timeslots_for_ssi: carrier={} mode {:?} has no MCCH for addr {}, dropping linkless/common-control routing",
+                self.carrier_num,
+                self.downlink_mode,
+                addr
+            );
+            return [0, 0, 0, 0];
         }
 
         let Ok(link_ts) = u8::try_from(link_id) else {
             tracing::warn!(
-                "identify_timeslots_for_ssi: invalid link_id {} for {}, defaulting to ts1",
+                "identify_timeslots_for_ssi: invalid link_id {} for {}, {}",
                 link_id,
-                addr
+                addr,
+                if self.allow_mcch() {
+                    "defaulting to ts1"
+                } else {
+                    "dropping on carrier without MCCH"
+                }
             );
-            return [1, 0, 0, 0];
+            return if self.allow_mcch() { [1, 0, 0, 0] } else { [0, 0, 0, 0] };
         };
 
         if !(1..=NUM_TIMESLOTS as u8).contains(&link_ts) {
             tracing::warn!(
-                "identify_timeslots_for_ssi: link_id {} is outside TS range for {}, defaulting to ts1",
+                "identify_timeslots_for_ssi: link_id {} is outside TS range for {}, {}",
                 link_id,
-                addr
+                addr,
+                if self.allow_mcch() {
+                    "defaulting to ts1"
+                } else {
+                    "dropping on carrier without MCCH"
+                }
             );
-            return [1, 0, 0, 0];
+            return if self.allow_mcch() { [1, 0, 0, 0] } else { [0, 0, 0, 0] };
         }
 
-        if self.circuits.is_active(Direction::Dl, link_ts) {
+        if self.circuits.is_active(Direction::Dl, self.carrier_num, link_ts) {
+            if self.allow_mcch() {
+                tracing::debug!(
+                    "identify_timeslots_for_ssi: link TS {} is active DL traffic for {}, routing normal signaling on ts1",
+                    link_ts,
+                    addr
+                );
+                return [1, 0, 0, 0];
+            }
             tracing::debug!(
-                "identify_timeslots_for_ssi: link TS {} is active DL traffic for {}, routing normal signaling on ts1",
-                link_ts,
+                "identify_timeslots_for_ssi: carrier={} has no MCCH, routing assigned-channel signaling for {} on active DL traffic ts {}",
+                self.carrier_num,
+                addr,
+                link_ts
+            );
+            return [link_ts, 0, 0, 0];
+        }
+
+        if !self.allow_mcch() && link_ts == 1 {
+            tracing::debug!(
+                "identify_timeslots_for_ssi: carrier={} has no MCCH and link_ts=1 for {}, dropping",
+                self.carrier_num,
                 addr
             );
-            return [1, 0, 0, 0];
+            return [0, 0, 0, 0];
         }
 
         [link_ts, 0, 0, 0]
@@ -596,13 +705,24 @@ impl BsChannelScheduler {
         // The loop basically prevents cloning the last element.
         for i in 0..NUM_TIMESLOTS {
             let ts = timeslots[i];
+            if ts == 0 {
+                if i == 0 {
+                    tracing::debug!(
+                        "dl_enqueue_tma_on_timeslots: carrier={} dropping unschedulable {:?} (mode {:?})",
+                        self.carrier_num,
+                        pdu,
+                        self.downlink_mode
+                    );
+                }
+                break;
+            }
             let next_ts = if i < NUM_TIMESLOTS - 1 { timeslots[i + 1] } else { 0 };
             assert!(ts > 0);
 
             // If this PDU carries a chan_alloc element (DConnect/DConnectAck MCCH), check if we
             // already sent one this frame. DConnect MCCH (113 bits) + DConnectAck MCCH (110 bits)
             // = 223 bits > 216-bit slot capacity. Defer the second one to the next frame.
-            let deferred = if pdu.chan_alloc_element.is_some() {
+            let deferred = if ts == 1 && self.allow_mcch() && pdu.chan_alloc_element.is_some() {
                 if self.mcch_chan_alloc_sent_this_frame {
                     true // Defer this one to next frame
                 } else {
@@ -680,7 +800,11 @@ impl BsChannelScheduler {
     /// Use this to deliberately separate two MCCH messages that would overflow the slot
     /// if sent together (e.g. DConnect MCCH + DConnectAck MCCH = 223 bits > 216-bit slot).
     pub fn dl_enqueue_tma_next_frame(&mut self, pdu: MacResource, sdu: BitBuffer, tx_reporter: Option<TxReporter>) {
-        tracing::debug!("dl_enqueue_tma_next_frame: deferring PDU {:?} SDU {} to next frame", pdu, sdu.dump_bin());
+        tracing::debug!(
+            "dl_enqueue_tma_next_frame: deferring PDU {:?} SDU {} to next frame",
+            pdu,
+            sdu.dump_bin()
+        );
         let elem = DlSchedElem::Resource(pdu, sdu, tx_reporter);
         self.dltx_next_slot_queue.push(elem);
     }
@@ -694,35 +818,19 @@ impl BsChannelScheduler {
     // }
 
     pub fn dl_schedule_tmd(&mut self, ts: u8, block: Vec<u8>) {
-        self.circuits.put_block(ts, block);
+        self.circuits.put_block(self.carrier_num, ts, block);
     }
 
     pub fn circuit_is_active(&self, dir: Direction, ts: u8) -> bool {
-        self.circuits.is_active(dir, ts)
+        self.circuits.is_active(dir, self.carrier_num, ts)
     }
 
-    /// Return the peer timeslot for the UL circuit on `ts`, if any.
-    /// Used for full-duplex P2P cross-routing: UL voice on `ts` must be played out
-    /// on the peer MS's DL timeslot. Returns `None` for simplex/group calls
-    /// (where UL→DL stays on the same timeslot, classic loopback).
-    pub fn ul_circuit_peer_ts(&self, ts: u8) -> Option<u8> {
-        if !(1..=4).contains(&ts) {
-            return None;
-        }
-        self.circuits.ul[ts as usize - 1].as_ref().and_then(|c| c.peer_ts)
+    pub fn duplex_peer_route(&self, ts: u8) -> Option<(u16, u8)> {
+        self.circuits.get_ul_peer_route(self.carrier_num, ts)
     }
 
-    /// Return the DL media source policy for the UL circuit on `ts`.
-    /// `LocalLoopback` = reflect UL back to DL (group/simplex calls).
-    /// `SwMI` = DL audio comes from Brew/TetraPack; suppress local loopback.
-    pub fn ul_circuit_dl_media_source(&self, ts: u8) -> CircuitDlMediaSource {
-        if !(1..=4).contains(&ts) {
-            return CircuitDlMediaSource::LocalLoopback;
-        }
-        self.circuits.ul[ts as usize - 1]
-            .as_ref()
-            .map(|c| c.dl_media_source)
-            .unwrap_or(CircuitDlMediaSource::LocalLoopback)
+    pub fn dl_media_source(&self, ts: u8) -> Option<CircuitDlMediaSource> {
+        self.circuits.get_dl_media_source(self.carrier_num, ts)
     }
 
     pub fn close_circuit(&mut self, dir: Direction, ts: u8) -> Option<Circuit> {
@@ -730,7 +838,7 @@ impl BsChannelScheduler {
         if (1..=4).contains(&ts) {
             self.hangtime[ts as usize - 1] = false;
         }
-        self.circuits.close_circuit(dir, ts)
+        self.circuits.close_circuit(dir, self.carrier_num, ts)
     }
 
     pub fn create_circuit(&mut self, dir: Direction, circuit: Circuit) {
@@ -896,7 +1004,7 @@ impl BsChannelScheduler {
             let addr = match &elem {
                 DlSchedElem::Grant(addr, _, _) => addr,
                 DlSchedElem::RandomAccessAck(addr) => addr,
-                _ => unreachable!("BUG: unhandled match variant -- should never be reached")
+                _ => unreachable!("BUG: unhandled match variant -- should never be reached"),
             };
             let mac_resource = self.dl_get_scheduled_resource_for_ssi(ts, addr);
             match mac_resource {
@@ -927,7 +1035,7 @@ impl BsChannelScheduler {
                             );
                             pdu.random_access_flag = true;
                         }
-                        _ => unreachable!("BUG: unhandled match variant -- should never be reached")
+                        _ => unreachable!("BUG: unhandled match variant -- should never be reached"),
                     }
                 }
                 None => {
@@ -952,14 +1060,14 @@ impl BsChannelScheduler {
                             );
                             Self::dl_make_minimal_resource(addr, None, true)
                         }
-                        _ => unreachable!("BUG: unhandled match variant -- should never be reached")
+                        _ => unreachable!("BUG: unhandled match variant -- should never be reached"),
                     };
 
                     // Push new resource into the queue. These do not need a tx_reporter
                     let dlsched_res = DlSchedElem::Resource(pdu, BitBuffer::new(0), None);
                     self.dltx_queues[ts.t as usize - 1].push(dlsched_res);
                 }
-                _ => unreachable!("BUG: unhandled match variant -- should never be reached")
+                _ => unreachable!("BUG: unhandled match variant -- should never be reached"),
             }
         }
     }
@@ -1046,7 +1154,7 @@ impl BsChannelScheduler {
     /// Also reports transmission, if a TxReporter was attached to the DlSchedElem::Stealing element
     fn dl_build_traffic_block(&mut self, ts: TdmaTime) -> (BitBuffer, Option<BitBuffer>) {
         // Get speech data or silence
-        let tch_buf = if let Some(block) = self.circuits.take_block(ts.t) {
+        let tch_buf = if let Some(block) = self.circuits.take_block(self.carrier_num, ts.t) {
             let mut buf = BitBuffer::from_vec(block);
             // Raw ACELP speech (274 bits for TCH/S).
             // Clamp to TCH_S_CAP as Vec may be larger (e.g. 280 bits).
@@ -1149,21 +1257,38 @@ impl BsChannelScheduler {
     /// Increments cur_ts by one timeslot.
     /// Caller should check timestamp of returned DlTxElem to prevent desync
     pub fn finalize_ts_for_tick(&mut self) -> TmvUnitdataReqSlot {
+        self.finalize_ts_for_tick_inner(true)
+            .expect("primary carrier must always emit a downlink slot")
+    }
+
+    pub fn finalize_secondary_ts_for_tick(&mut self) -> Option<TmvUnitdataReqSlot> {
+        self.finalize_ts_for_tick_inner(self.downlink_mode.emit_bcch())
+    }
+
+    fn clear_ul_schedule_for_tx_time(&mut self, ts: TdmaTime) {
+        let index = self.ul_ts_to_sched_index(&ts.add_timeslots(-4));
+        self.ulsched[ts.t as usize - 1][index].ul1 = None;
+        self.ulsched[ts.t as usize - 1][index].ul2 = None;
+        self.ulsched[ts.t as usize - 1][index].usage_marker = None;
+    }
+
+    fn finalize_ts_for_tick_inner(&mut self, emit_bcch: bool) -> Option<TmvUnitdataReqSlot> {
         // Reset the per-frame chan_alloc flag when we start processing ts1 (MCCH slot).
         // This allows the next DConnect MCCH to go normally while the subsequent DConnectAck
         // MCCH is deferred to the following frame.
-        if self.cur_dltime.add_timeslots(MACSCHED_TX_AHEAD as i32).t == 1 {
+        if self.cur_dltime.add_timeslots(MACSCHED_TX_AHEAD as i32).t == 1 && self.allow_mcch() {
             self.mcch_chan_alloc_sent_this_frame = false;
         }
 
         // We finalize a FUTURE slot: cur_ts plus some number of timeslots
         let ts = self.cur_dltime.add_timeslots(MACSCHED_TX_AHEAD as i32);
+        let carrier_num = self.carrier_num;
         self.precomps.mac_sync.time = ts;
         self.precomps.mac_sysinfo1.hyperframe_number = Some(ts.h);
         self.precomps.mac_sysinfo2.hyperframe_number = Some(ts.h);
 
-        let dl_circuit_active = self.circuits.is_active(Direction::Dl, ts.t) && ts.f != 18;
-        let ul_circuit_active = self.circuits.is_active(Direction::Ul, ts.t) && ts.f != 18;
+        let dl_circuit_active = self.circuits.is_active(Direction::Dl, self.carrier_num, ts.t) && ts.f != 18;
+        let ul_circuit_active = self.circuits.is_active(Direction::Ul, self.carrier_num, ts.t) && ts.f != 18;
 
         // During hangtime we stop sending traffic frames and switch to signalling mode.
         // Keep traffic mode while FACCH/stealing is still queued for delivery.
@@ -1184,8 +1309,6 @@ impl BsChannelScheduler {
             let (tch_buf, stch_opt) = self.dl_build_traffic_block(ts);
 
             if let Some(stch_buf) = stch_opt {
-                // FACCH/Stealing: 1st half = STCH signaling, 2nd half = TCH speech.
-                // NDB uses NormalTrainSeq2 for independent half-slot demodulation (EN 300 392-2, clause 23.5).
                 tracing::info!(
                     "finalize_ts_for_tick: FACCH stealing on ts {} (stch={} bits, tch={} bits)",
                     ts.t,
@@ -1193,6 +1316,7 @@ impl BsChannelScheduler {
                     tch_buf.get_len()
                 );
                 TmvUnitdataReqSlot {
+                    carrier_num,
                     ts,
                     blk1: Some(TmvUnitdataReq {
                         logical_channel: LogicalChannel::Stch,
@@ -1208,8 +1332,8 @@ impl BsChannelScheduler {
                     ul_phy_chan: ul_phy,
                 }
             } else {
-                // Normal traffic: full-slot TCH
                 TmvUnitdataReqSlot {
+                    carrier_num,
                     ts,
                     blk1: Some(TmvUnitdataReq {
                         logical_channel: LogicalChannel::TchS,
@@ -1222,14 +1346,12 @@ impl BsChannelScheduler {
                 }
             }
         } else {
-            // Signalling mode (either no circuit, or hangtime on an allocated timeslot)
-            // Integrate all grants and random access acks into resources (either existing or new)
             self.dl_integrate_sched_elems_for_timeslot(ts);
 
-            // Fill our signalling block with scheduled items (if any)
             let buf = self.dl_build_block_from_signalling_schedule(ts);
             if let Some(buf) = buf {
                 TmvUnitdataReqSlot {
+                    carrier_num,
                     ts,
                     blk1: Some(TmvUnitdataReq {
                         logical_channel: LogicalChannel::SchF,
@@ -1240,36 +1362,46 @@ impl BsChannelScheduler {
                     bbk: None,
                     ul_phy_chan: ul_phy,
                 }
+            } else if hang_effective && dl_circuit_active {
+                TmvUnitdataReqSlot {
+                    carrier_num,
+                    ts,
+                    blk1: Some(TmvUnitdataReq {
+                        logical_channel: LogicalChannel::SchF,
+                        mac_block: self.generate_hangtime_idle_schf(),
+                        scrambling_code: self.scrambling_code,
+                    }),
+                    blk2: None,
+                    bbk: None,
+                    ul_phy_chan: ul_phy,
+                }
+            } else if !emit_bcch {
+                TmvUnitdataReqSlot {
+                    carrier_num,
+                    ts,
+                    blk1: Some(TmvUnitdataReq {
+                        logical_channel: LogicalChannel::SchF,
+                        mac_block: self.generate_hangtime_idle_schf(),
+                        scrambling_code: self.scrambling_code,
+                    }),
+                    blk2: None,
+                    bbk: None,
+                    ul_phy_chan: ul_phy,
+                }
             } else {
-                // If this is an allocated traffic slot in hangtime, keep it alive with an idle SCH/F (Null PDU).
-                // Otherwise, fall back to default SYNC/SYSINFO.
-                if hang_effective && dl_circuit_active {
-                    TmvUnitdataReqSlot {
-                        ts,
-                        blk1: Some(TmvUnitdataReq {
-                            logical_channel: LogicalChannel::SchF,
-                            mac_block: self.generate_hangtime_idle_schf(),
-                            scrambling_code: self.scrambling_code,
-                        }),
-                        blk2: None,
-                        bbk: None,
-                        ul_phy_chan: ul_phy,
-                    }
-                } else {
-                    // Put default SYNC/SYSINFO frame
-                    TmvUnitdataReqSlot {
-                        ts,
-                        blk1: None,
-                        blk2: None,
-                        bbk: None,
-                        ul_phy_chan: ul_phy,
-                    }
+                TmvUnitdataReqSlot {
+                    carrier_num,
+                    ts,
+                    blk1: None,
+                    blk2: None,
+                    bbk: None,
+                    ul_phy_chan: ul_phy,
                 }
             }
         };
 
         // Sanity check: frame 18 should not carry user blocks
-        if elem.blk1.is_some() {
+        if elem.blk1.is_some() && emit_bcch {
             assert!(ts.f != 18, "frame 18 shouldn't have blk1 set");
         }
 
@@ -1343,16 +1475,13 @@ impl BsChannelScheduler {
         // slots of a reservation have been consumed, the marker is free to
         // be re-issued. (If a reservation extends over multiple frames this
         // gets called once per consumed slot pair, which is correct.)
-        let index = self.ul_ts_to_sched_index(&ts.add_timeslots(-4));
-        self.ulsched[ts.t as usize - 1][index].ul1 = None;
-        self.ulsched[ts.t as usize - 1][index].ul2 = None;
-        self.ulsched[ts.t as usize - 1][index].usage_marker = None;
+        self.clear_ul_schedule_for_tx_time(ts);
 
         // tracing::warn!("end finalize");
         // self.dump_ul_schedule_full(true);
 
         // We now have our bbk, blk1 and (optional) blk2
-        elem
+        Some(elem)
     }
 
     fn generate_bbk_block(&self, ts: TdmaTime) -> TmvUnitdataReq {
@@ -1360,8 +1489,8 @@ impl BsChannelScheduler {
             (None, None)
         } else {
             (
-                self.circuits.get_usage(Direction::Ul, ts.t),
-                self.circuits.get_usage(Direction::Dl, ts.t),
+                self.circuits.get_usage(Direction::Ul, self.carrier_num, ts.t),
+                self.circuits.get_usage(Direction::Dl, self.carrier_num, ts.t),
             )
         };
 
@@ -1375,45 +1504,31 @@ impl BsChannelScheduler {
                     assert!(dl_traffic_usage.is_none(), "DL ts 1 can't be traffic");
                     assert!(ul_traffic_usage.is_none(), "UL ts 1 can't be traffic (is this allowed?"); // TODO FIXME check spec
 
-                    // TS1 (MCCH) DL is always CommonControl — that doesn't
-                    // change for individual reservations.
-                    aach.dl_usage = AccessAssignDlUsage::CommonControl;
+                    if self.allow_common_control_aach() {
+                        // TS1 (MCCH) DL is always CommonControl — that doesn't
+                        // change for individual reservations.
+                        aach.dl_usage = AccessAssignDlUsage::CommonControl;
 
-                    // UL behaviour: when this slot has an active uplink
-                    // reservation with a usage_marker (i.e. a multi-slot grant
-                    // we issued previously), the AACH must announce
-                    // `Traffic(marker)` per ETSI TS 100 392-2 §23.5.2 so the
-                    // MS holding the reservation can identify "its" slot and
-                    // continue the fragmented burst with MacEndUl. Without
-                    // this, the MS sees CommonOnly, treats the slot as random
-                    // access, and abandons the burst after the first frag —
-                    // leaving location updates / re-attaches stuck in an
-                    // infinite random-access loop (the symptom we observed
-                    // when an MS re-entered coverage and couldn't TX/RX).
-                    let ul_usage_for_slot = self.ul_get_usage(ts);
-                    match ul_usage_for_slot {
-                        AccessAssignUlUsage::Traffic(_) => {
-                            // Reservation in flight: hand the marker through
-                            // AACH so the MS commits to its assigned slot.
-                            aach.ul_usage = ul_usage_for_slot;
-                            // For Traffic UL usage we don't emit f1/f2 access
-                            // fields — the slot is fully allocated.
+                        let ul_usage_for_slot = self.ul_get_usage(ts);
+                        match ul_usage_for_slot {
+                            AccessAssignUlUsage::Traffic(_) => {
+                                aach.ul_usage = ul_usage_for_slot;
+                            }
+                            _ => {
+                                aach.ul_usage = AccessAssignUlUsage::CommonOnly;
+                                aach.f1_af1 = Some(AccessField {
+                                    access_code: 0,
+                                    base_frame_len: 4,
+                                });
+                                aach.f2_af2 = Some(AccessField {
+                                    access_code: 0,
+                                    base_frame_len: 4,
+                                });
+                            }
                         }
-                        _ => {
-                            // No reservation: default MCCH behaviour. MS with
-                            // a fresh grant transmits in granted slots without
-                            // checking AACH per ETSI 23.5.2.2.2; common slots
-                            // remain open for random access by other MSs.
-                            aach.ul_usage = AccessAssignUlUsage::CommonOnly;
-                            aach.f1_af1 = Some(AccessField {
-                                access_code: 0,
-                                base_frame_len: 4,
-                            });
-                            aach.f2_af2 = Some(AccessField {
-                                access_code: 0,
-                                base_frame_len: 4,
-                            });
-                        }
+                    } else {
+                        aach.dl_usage = AccessAssignDlUsage::Unallocated;
+                        aach.ul_usage = AccessAssignUlUsage::Unallocated;
                     }
                 }
                 2..=4 => {
@@ -1461,17 +1576,32 @@ impl BsChannelScheduler {
         } else {
             // Fr18
             assert!(ul_traffic_usage.is_none() && dl_traffic_usage.is_none());
-            let aach = AccessAssignFr18 {
-                ul_usage: AccessAssignUlUsage::CommonOnly,
-                f1_af1: Some(AccessField {
-                    access_code: 0,
-                    base_frame_len: 1,
-                }),
-                f2_af2: Some(AccessField {
-                    access_code: 0,
-                    base_frame_len: 0,
-                }),
-                ..Default::default()
+            let aach = if self.allow_common_control_aach() {
+                AccessAssignFr18 {
+                    ul_usage: AccessAssignUlUsage::CommonOnly,
+                    f1_af1: Some(AccessField {
+                        access_code: 0,
+                        base_frame_len: 1,
+                    }),
+                    f2_af2: Some(AccessField {
+                        access_code: 0,
+                        base_frame_len: 0,
+                    }),
+                    ..Default::default()
+                }
+            } else {
+                AccessAssignFr18 {
+                    ul_usage: AccessAssignUlUsage::AssignedOnly,
+                    f1_af1: Some(AccessField {
+                        access_code: 0,
+                        base_frame_len: 0,
+                    }),
+                    f2_af2: Some(AccessField {
+                        access_code: 0,
+                        base_frame_len: 0,
+                    }),
+                    ..Default::default()
+                }
             };
             // TODO FIXME: Access field defaults are possibly not great
             aach.to_bitbuf(&mut aach_bb);
@@ -1487,32 +1617,27 @@ impl BsChannelScheduler {
     fn generate_default_blks(&self, ts: TdmaTime) -> TmvUnitdataReq {
         match (ts.f, ts.t) {
             (1..=17, 1) => {
-                // Two options: [Blk1: SCH/HD Null | Blk2: BNCH SYSINFO] or [Both: SCH/F Null]
-                // Alternate every frame
-                match ts.f % 2 {
-                    0 => {
-                        // Half-slot Null PDU on SCH/HD, SYSINFO gets added later as BNCH blk2
-                        let mut buf1 = BitBuffer::new(SCH_HD_CAP);
-                        let blk1 = MacResource::null_pdu();
-                        blk1.to_bitbuf(&mut buf1);
-                        TmvUnitdataReq {
-                            logical_channel: LogicalChannel::SchHd,
-                            mac_block: buf1,
-                            scrambling_code: self.scrambling_code,
-                        }
+                // Primary TS1 alternates between SCH/HD+BNCH and SCH/F null.
+                // Secondary BCCH/no-MCCH carriers never advertise MCCH, so TS1 stays
+                // on the BCCH-style SCH/HD+BNCH form instead of emitting SCH/F nulls.
+                if !self.allow_mcch() || ts.f % 2 == 0 {
+                    let mut buf1 = BitBuffer::new(SCH_HD_CAP);
+                    let blk1 = MacResource::null_pdu();
+                    blk1.to_bitbuf(&mut buf1);
+                    TmvUnitdataReq {
+                        logical_channel: LogicalChannel::SchHd,
+                        mac_block: buf1,
+                        scrambling_code: self.scrambling_code,
                     }
-                    1 => {
-                        // Full-slot Null PDU
-                        let mut buf = BitBuffer::new(SCH_F_CAP);
-                        let blk = MacResource::null_pdu();
-                        blk.to_bitbuf(&mut buf);
-                        TmvUnitdataReq {
-                            logical_channel: LogicalChannel::SchF,
-                            mac_block: buf,
-                            scrambling_code: self.scrambling_code,
-                        }
+                } else {
+                    let mut buf = BitBuffer::new(SCH_F_CAP);
+                    let blk = MacResource::null_pdu();
+                    blk.to_bitbuf(&mut buf);
+                    TmvUnitdataReq {
+                        logical_channel: LogicalChannel::SchF,
+                        mac_block: buf,
+                        scrambling_code: self.scrambling_code,
                     }
-                    _ => unreachable!("BUG: unhandled match variant -- should never be reached") // never happens
                 }
             }
             (1..=17, 2..=4) | (18, _) => {
@@ -1526,7 +1651,7 @@ impl BsChannelScheduler {
                     scrambling_code: scrambler::SCRAMB_INIT,
                 }
             }
-            _ => unreachable!("BUG: unhandled match variant -- should never be reached") // never happens
+            _ => unreachable!("BUG: unhandled match variant -- should never be reached"), // never happens
         }
     }
 
@@ -1605,7 +1730,7 @@ mod tests {
             fields::{
                 sysinfo_default_def_for_access_code_a::SysinfoDefaultDefForAccessCodeA, sysinfo_ext_services::SysinfoExtendedServices,
             },
-            pdus::{mac_sync::MacSync, mac_sysinfo::MacSysinfo},
+            pdus::{access_assign::AccessAssign, mac_sync::MacSync, mac_sysinfo::MacSysinfo},
         },
     };
 
@@ -1725,9 +1850,18 @@ mod tests {
         sched
     }
 
+    fn get_testing_secondary_scheduler() -> BsChannelScheduler {
+        let mut sched = get_testing_slotter();
+        sched.set_carrier_num(1002);
+        sched.set_downlink_mode(CarrierDownlinkMode::SecondaryBcchNoMcch);
+        sched
+    }
+
     fn test_circuit(direction: Direction, ts: u8) -> Circuit {
         Circuit {
             direction,
+            carrier_num: 1001,
+            peer_carrier_num: None,
             ts,
             peer_ts: None,
             usage: 4,
@@ -1736,6 +1870,136 @@ mod tests {
             etee_encrypted: false,
             dl_media_source: CircuitDlMediaSource::LocalLoopback,
         }
+    }
+
+    fn test_circuit_on_carrier(direction: Direction, carrier_num: u16, ts: u8) -> Circuit {
+        Circuit {
+            direction,
+            carrier_num,
+            peer_carrier_num: None,
+            ts,
+            peer_ts: None,
+            usage: 4,
+            circuit_mode: tetra_saps::control::enums::circuit_mode_type::CircuitModeType::TchS,
+            speech_service: Some(0),
+            etee_encrypted: false,
+            dl_media_source: CircuitDlMediaSource::LocalLoopback,
+        }
+    }
+
+    #[test]
+    fn test_secondary_idle_ts1_emits_broadcast_not_idle_schf_only() {
+        let mut sched = get_testing_secondary_scheduler();
+        sched.set_dl_time(TdmaTime { t: 4, f: 2, m: 1, h: 0 });
+
+        let slot = sched.finalize_secondary_ts_for_tick().expect("secondary should emit");
+
+        assert_eq!(slot.carrier_num, 1002);
+        assert_eq!(slot.ts.t, 1);
+        assert_eq!(slot.blk1.as_ref().expect("blk1").logical_channel, LogicalChannel::SchHd);
+        assert_eq!(slot.blk2.as_ref().expect("blk2").logical_channel, LogicalChannel::Bnch);
+    }
+
+    #[test]
+    fn test_secondary_idle_ts2_emits_bsch_and_sysinfo() {
+        let mut sched = get_testing_secondary_scheduler();
+        sched.set_dl_time(TdmaTime { t: 1, f: 1, m: 1, h: 0 });
+
+        let slot = sched.finalize_secondary_ts_for_tick().expect("secondary should emit");
+
+        assert_eq!(slot.carrier_num, 1002);
+        assert_eq!(slot.ts.t, 2);
+        assert_eq!(slot.blk1.as_ref().expect("blk1").logical_channel, LogicalChannel::Bsch);
+        assert_eq!(slot.blk2.as_ref().expect("blk2").logical_channel, LogicalChannel::Bnch);
+    }
+
+    #[test]
+    fn test_secondary_sysinfo_keeps_primary_main_carrier() {
+        let mut sched = get_testing_secondary_scheduler();
+        sched.set_dl_time(TdmaTime { t: 4, f: 1, m: 1, h: 0 });
+
+        let slot = sched.finalize_secondary_ts_for_tick().expect("secondary should emit");
+        let mut bnch = slot.blk2.expect("secondary ts1 should have BNCH").mac_block;
+        let sysinfo = MacSysinfo::from_bitbuf(&mut bnch).expect("BNCH should start with MAC-SYSINFO");
+
+        assert_eq!(sysinfo.main_carrier, 1001);
+    }
+
+    #[test]
+    fn test_secondary_ts1_aach_is_not_common_control_common_only() {
+        let mut sched = get_testing_secondary_scheduler();
+        sched.set_dl_time(TdmaTime { t: 4, f: 1, m: 1, h: 0 });
+
+        let slot = sched.finalize_secondary_ts_for_tick().expect("secondary should emit");
+        let mut bbk = slot.bbk.expect("bbk").mac_block;
+        let aach = AccessAssign::from_bitbuf(&mut bbk).expect("AACH should parse");
+
+        assert_eq!(aach.dl_usage, AccessAssignDlUsage::Unallocated);
+        assert_eq!(aach.ul_usage, AccessAssignUlUsage::Unallocated);
+    }
+
+    #[test]
+    fn test_primary_ts1_aach_remains_common_control_common_only() {
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 4, f: 1, m: 1, h: 0 });
+
+        let slot = sched.finalize_ts_for_tick();
+        let mut bbk = slot.bbk.expect("bbk").mac_block;
+        let aach = AccessAssign::from_bitbuf(&mut bbk).expect("AACH should parse");
+
+        assert_eq!(aach.dl_usage, AccessAssignDlUsage::CommonControl);
+        assert_eq!(aach.ul_usage, AccessAssignUlUsage::CommonOnly);
+    }
+
+    #[test]
+    fn test_secondary_never_queues_mcch_messages_on_ts1() {
+        let mut sched = get_testing_secondary_scheduler();
+        let addr = TetraAddress {
+            ssi_type: SsiType::Issi,
+            ssi: 2200699,
+        };
+        let pdu = BsChannelScheduler::dl_make_minimal_resource(&addr, None, false);
+        let grant = BasicSlotgrant {
+            capacity_allocation: BasicSlotgrantCapAlloc::FirstSubslotGranted,
+            granting_delay: BasicSlotgrantGrantingDelay::CapAllocAtNextOpportunity,
+        };
+
+        sched.dl_enqueue_tma_for_link(0, pdu, BitBuffer::new(0), None);
+        sched.dl_enqueue_grant(1, addr, grant, None);
+        sched.dl_enqueue_random_access_ack(1, addr);
+
+        assert_eq!(sched.dltx_queues[0].len(), 0);
+    }
+
+    #[test]
+    fn test_secondary_traffic_allocation_routes_to_traffic_slot_without_mcch() {
+        let mut sched = get_testing_secondary_scheduler();
+        let addr = TetraAddress {
+            ssi_type: SsiType::Issi,
+            ssi: 2200699,
+        };
+        sched.create_circuit(Direction::Dl, test_circuit_on_carrier(Direction::Dl, 1002, 3));
+        let pdu = BsChannelScheduler::dl_make_minimal_resource(&addr, None, false);
+
+        sched.dl_enqueue_tma_for_link(3, pdu, BitBuffer::new(0), None);
+
+        assert_eq!(sched.dltx_queues[0].len(), 0);
+        assert_eq!(sched.dltx_queues[2].len(), 1);
+    }
+
+    #[test]
+    fn test_secondary_facch_still_works_on_traffic_slot() {
+        let mut sched = get_testing_secondary_scheduler();
+        sched.create_circuit(Direction::Dl, test_circuit_on_carrier(Direction::Dl, 1002, 2));
+        sched.set_dl_time(TdmaTime { t: 1, f: 1, m: 1, h: 0 });
+        sched.dl_enqueue_stealing(2, BitBuffer::new(124), None);
+
+        let slot = sched.finalize_secondary_ts_for_tick().expect("secondary should emit");
+
+        assert_eq!(slot.carrier_num, 1002);
+        assert_eq!(slot.ts.t, 2);
+        assert_eq!(slot.blk1.as_ref().expect("blk1").logical_channel, LogicalChannel::Stch);
+        assert_eq!(slot.blk2.as_ref().expect("blk2").logical_channel, LogicalChannel::TchS);
     }
 
     #[test]
@@ -1810,8 +2074,9 @@ mod tests {
         sched.dump_ul_schedule(true);
         let resreq2 = ReservationRequirement::Req3Slots;
         let Some((grant2, _marker)) = sched.ul_process_cap_req(1, addr, &resreq2) else {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
-            };
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
         tracing::info!("grant2: {:?}", grant2);
         sched.dump_ul_schedule(true);
 

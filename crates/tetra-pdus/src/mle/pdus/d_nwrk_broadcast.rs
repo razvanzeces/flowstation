@@ -45,8 +45,7 @@ impl DNwrkBroadcast {
         // Type2
         let tetra_network_time = typed::parse_type2_generic(obit, buffer, 48, "tetra_network_time")?;
         // Type2
-        let number_of_ca_neighbour_cells =
-            typed::parse_type2_generic(obit, buffer, 3, "number_of_ca_neighbour_cells")?.map(|v| v as u8);
+        let number_of_ca_neighbour_cells = typed::parse_type2_generic(obit, buffer, 3, "number_of_ca_neighbour_cells")?.map(|v| v as u8);
 
         // Conditional: parse neighbour cell info elements
         let mut neighbour_cell_information_for_ca = Vec::new();
@@ -116,12 +115,7 @@ impl DNwrkBroadcast {
         typed::write_type2_generic(obit, buffer, self.tetra_network_time, 48);
 
         // Type2
-        typed::write_type2_generic(
-            obit,
-            buffer,
-            self.number_of_ca_neighbour_cells.map(|v| v as u64),
-            3,
-        );
+        typed::write_type2_generic(obit, buffer, self.number_of_ca_neighbour_cells.map(|v| v as u64), 3);
 
         // Conditional: write neighbour cell info elements (no P-bit per note 3)
         if self.number_of_ca_neighbour_cells.unwrap_or(0) > 0 {

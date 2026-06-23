@@ -4,6 +4,7 @@ use super::*;
 #[derive(Clone, Copy)]
 struct IndividualFloorParty {
     addr: TetraAddress,
+    carrier_num: u16,
     ts: u8,
     usage: u8,
 }
@@ -14,11 +15,13 @@ impl CcBsSubentity {
             Some((
                 IndividualFloorParty {
                     addr: call.calling_addr,
+                    carrier_num: call.calling_carrier_num,
                     ts: call.calling_ts,
                     usage: call.calling_usage,
                 },
                 IndividualFloorParty {
                     addr: call.called_addr,
+                    carrier_num: call.called_carrier_num,
                     ts: call.called_ts,
                     usage: call.called_usage,
                 },
@@ -27,11 +30,13 @@ impl CcBsSubentity {
             Some((
                 IndividualFloorParty {
                     addr: call.called_addr,
+                    carrier_num: call.called_carrier_num,
                     ts: call.called_ts,
                     usage: call.called_usage,
                 },
                 IndividualFloorParty {
                     addr: call.calling_addr,
+                    carrier_num: call.calling_carrier_num,
                     ts: call.calling_ts,
                     usage: call.calling_usage,
                 },
@@ -92,7 +97,15 @@ impl CcBsSubentity {
         d_tx_granted.to_bitbuf(&mut sdu).expect("Failed to serialize DTxGranted");
         sdu.seek(0);
 
-        let msg = Self::build_sapmsg_stealing_ul_dl(sdu, self.dltime, target.addr, target.ts, Some(target.usage), ul_dl_assigned);
+        let msg = Self::build_sapmsg_stealing_ul_dl(
+            sdu,
+            self.dltime,
+            target.addr,
+            target.carrier_num,
+            target.ts,
+            Some(target.usage),
+            ul_dl_assigned,
+        );
         queue.push_back(msg);
     }
 
@@ -124,7 +137,15 @@ impl CcBsSubentity {
         d_tx_ceased.to_bitbuf(&mut sdu).expect("Failed to serialize DTxCeased");
         sdu.seek(0);
 
-        let msg = Self::build_sapmsg_stealing_ul_dl(sdu, self.dltime, target.addr, target.ts, Some(target.usage), UlDlAssignment::Dl);
+        let msg = Self::build_sapmsg_stealing_ul_dl(
+            sdu,
+            self.dltime,
+            target.addr,
+            target.carrier_num,
+            target.ts,
+            Some(target.usage),
+            UlDlAssignment::Dl,
+        );
         queue.push_back(msg);
     }
 
@@ -142,7 +163,9 @@ impl CcBsSubentity {
                 call_id,
                 source_issi: speaker.addr.ssi,
                 dest_gssi: listener.addr.ssi,
+                carrier_num: speaker.carrier_num,
                 ts: speaker.ts,
+                is_group: false,
             },
             true,
             BrewNotification::Never,
@@ -172,7 +195,16 @@ impl CcBsSubentity {
         call_id: u16,
         speaker: IndividualFloorParty,
     ) {
-        self.notify_floor_released(queue, CallTimeslot { call_id, ts: speaker.ts }, true, BrewNotification::Never);
+        self.notify_floor_released(
+            queue,
+            CallTimeslot {
+                call_id,
+                carrier_num: speaker.carrier_num,
+                ts: speaker.ts,
+            },
+            true,
+            BrewNotification::Never,
+        );
 
         if Self::individual_floor_party_is_local(call, speaker)
             && let Some(brew_uuid) = call.brew_uuid
@@ -275,6 +307,7 @@ impl CcBsSubentity {
             dest: TetraEntity::Umac,
             msg: SapMsgInner::CmceCallControl(CallControl::RemoteFloorGranted {
                 call_id,
+                carrier_num: local_party.carrier_num,
                 ts: local_party.ts,
             }),
         });
@@ -356,6 +389,7 @@ impl CcBsSubentity {
                     queue,
                     CallTimeslot {
                         call_id,
+                        carrier_num: local_party.carrier_num,
                         ts: local_party.ts,
                     },
                     true,
@@ -398,6 +432,7 @@ impl CcBsSubentity {
             queue,
             CallTimeslot {
                 call_id,
+                carrier_num: local_party.carrier_num,
                 ts: local_party.ts,
             },
             true,
@@ -855,10 +890,10 @@ impl CcBsSubentity {
             return;
         }
 
-        let (target_addr, target_ts, target_usage) = if sender.ssi == call.calling_addr.ssi {
-            (call.called_addr, call.called_ts, call.called_usage)
+        let (target_addr, target_carrier_num, target_ts, target_usage) = if sender.ssi == call.calling_addr.ssi {
+            (call.called_addr, call.called_carrier_num, call.called_ts, call.called_usage)
         } else if sender.ssi == call.called_addr.ssi {
-            (call.calling_addr, call.calling_ts, call.calling_usage)
+            (call.calling_addr, call.calling_carrier_num, call.calling_ts, call.calling_usage)
         } else {
             tracing::warn!(
                 "U-INFO modify call_id={} from unexpected ISSI {} (calling {}, called {})",
@@ -878,7 +913,7 @@ impl CcBsSubentity {
             target_addr.ssi
         );
         let sdu = Self::build_d_info(call_id, Some(modify), Some(CallStatus::Callcontinue), true);
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, target_addr, target_ts, Some(target_usage));
+        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, target_addr, target_carrier_num, target_ts, Some(target_usage));
         queue.push_back(msg);
     }
 

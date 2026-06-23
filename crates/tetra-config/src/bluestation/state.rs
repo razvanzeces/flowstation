@@ -444,7 +444,7 @@ pub struct StackState {
     /// so it can reach an MS engaged in a call, which is NOT listening to the MCCH
     /// (ETSI EN 300 392-2 §23.5). Empty when no calls are active, so idle delivery stays on
     /// the MCCH exactly as before.
-    pub active_call_ts: std::collections::HashMap<u32, (u8, u8)>,
+    pub active_call_ts: std::collections::HashMap<u32, (u16, u8, u8)>,
 
     /// Per-MS energy-economy downlink monitoring window, republished every tick by MM from the
     /// live client registry (so it is never stale). Keyed by ISSI; value = (monitoring_frame

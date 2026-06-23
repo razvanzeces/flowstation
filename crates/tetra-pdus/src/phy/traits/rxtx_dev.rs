@@ -18,6 +18,8 @@ pub struct RxBurstBits<'a> {
 
 #[derive(Debug, Default)]
 pub struct RxSlotBits<'a> {
+    /// Carrier number from which this slot was received.
+    pub carrier_num: u16,
     /// Number of slot received
     pub time: TdmaTime,
     /// Burst received in full slot
@@ -30,6 +32,8 @@ pub struct RxSlotBits<'a> {
 
 #[derive(Debug, Default)]
 pub struct TxSlotBits<'a> {
+    /// Carrier number to transmit on.
+    pub carrier_num: u16,
     /// Number of slot to transmit
     pub time: TdmaTime,
     /// Burst to transmit in full slot

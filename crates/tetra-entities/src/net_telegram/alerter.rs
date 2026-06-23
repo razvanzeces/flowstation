@@ -165,13 +165,15 @@ impl TelegramAlerter {
                 }
             }
             // LIP/APRS position beacons: SDS protocol id 10, received over the air from a radio.
-            TelemetryEvent::SdsLog { direction, source_issi, dest_issi, protocol_id, text, .. }
-                if protocol_id == LIP_PROTOCOL_ID && direction == "rx" =>
-            {
-                let debounced = self
-                    .last_lip_alert
-                    .get(&source_issi)
-                    .is_some_and(|t| t.elapsed() < LIP_DEBOUNCE);
+            TelemetryEvent::SdsLog {
+                direction,
+                source_issi,
+                dest_issi,
+                protocol_id,
+                text,
+                ..
+            } if protocol_id == LIP_PROTOCOL_ID && direction == "rx" => {
+                let debounced = self.last_lip_alert.get(&source_issi).is_some_and(|t| t.elapsed() < LIP_DEBOUNCE);
                 if !debounced {
                     self.last_lip_alert.insert(source_issi, Instant::now());
                     if tg.alert_lip && tg.is_deliverable() {
@@ -242,10 +244,7 @@ impl TelegramAlerter {
         for issi in due {
             self.pending_disconnect.remove(&issi);
             self.known_issis.remove(&issi);
-            let suppressed = self
-                .recent_t351
-                .get(&issi)
-                .is_some_and(|t| t.elapsed() < T351_WINDOW);
+            let suppressed = self.recent_t351.get(&issi).is_some_and(|t| t.elapsed() < T351_WINDOW);
             if !suppressed && tg.alert_disconnect && tg.is_deliverable() {
                 let html = format::disconnect(&self.station, issi);
                 self.send_all(&tg, &html);
@@ -383,7 +382,10 @@ location_area = 1
     fn backhaul_first_observation_is_not_an_event() {
         let mut a = alerter();
         // First observation only records state (no spurious "connected" alert on every restart).
-        a.handle_event(TelemetryEvent::BrewConnected { connected: true, server_version: 1 });
+        a.handle_event(TelemetryEvent::BrewConnected {
+            connected: true,
+            server_version: 1,
+        });
         assert_eq!(a.last_brew, Some(true));
     }
 

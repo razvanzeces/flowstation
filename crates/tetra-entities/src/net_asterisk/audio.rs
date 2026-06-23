@@ -85,9 +85,7 @@ impl AsteriskAudioTranscoder {
             let mut pcm_a = [0i16; TETRA_PCM_SAMPLES_PER_FRAME];
             let mut pcm_b = [0i16; TETRA_PCM_SAMPLES_PER_FRAME];
             pcm_a.copy_from_slice(&self.downlink_pcm[..TETRA_PCM_SAMPLES_PER_FRAME]);
-            pcm_b.copy_from_slice(
-                &self.downlink_pcm[TETRA_PCM_SAMPLES_PER_FRAME..TETRA_PCM_SAMPLES_PER_BLOCK],
-            );
+            pcm_b.copy_from_slice(&self.downlink_pcm[TETRA_PCM_SAMPLES_PER_FRAME..TETRA_PCM_SAMPLES_PER_BLOCK]);
             self.downlink_pcm.drain(..TETRA_PCM_SAMPLES_PER_BLOCK);
 
             let mut coded_a = [0u8; TETRA_CODED_BYTES_PER_FRAME];
@@ -176,17 +174,10 @@ fn split_tmd_block_to_codec_frames(data: &[u8]) -> Option<[[u8; TETRA_CODED_BYTE
     Some(frames)
 }
 
-fn join_codec_frames_to_tmd_block(
-    frame_a: &[u8; TETRA_CODED_BYTES_PER_FRAME],
-    frame_b: &[u8; TETRA_CODED_BYTES_PER_FRAME],
-) -> Vec<u8> {
+fn join_codec_frames_to_tmd_block(frame_a: &[u8; TETRA_CODED_BYTES_PER_FRAME], frame_b: &[u8; TETRA_CODED_BYTES_PER_FRAME]) -> Vec<u8> {
     let mut out = vec![0u8; TETRA_TMD_PACKED_BYTES];
     for bit_idx in 0..TETRA_TMD_BITS_PER_BLOCK {
-        let frame = if bit_idx < TETRA_CODED_BITS_PER_FRAME {
-            frame_a
-        } else {
-            frame_b
-        };
+        let frame = if bit_idx < TETRA_CODED_BITS_PER_FRAME { frame_a } else { frame_b };
         let frame_bit = bit_idx % TETRA_CODED_BITS_PER_FRAME;
         set_packed_bit(&mut out, bit_idx, get_packed_bit(frame, frame_bit));
     }
@@ -211,11 +202,7 @@ fn ulaw_to_linear(sample: u8) -> i16 {
     let exponent = ((sample & 0x70) >> 4) as u32;
     let value = ((mantissa << 3) + BIAS) << exponent;
 
-    if sample & 0x80 != 0 {
-        BIAS - value
-    } else {
-        value - BIAS
-    }
+    if sample & 0x80 != 0 { BIAS - value } else { value - BIAS }
 }
 
 fn linear_to_ulaw(sample: i16) -> u8 {
@@ -232,10 +219,7 @@ fn linear_to_ulaw(sample: i16) -> u8 {
     };
     pcm = pcm.min(CLIP) + BIAS;
 
-    let segment = SEG_END
-        .iter()
-        .position(|&end| pcm <= end)
-        .unwrap_or(SEG_END.len() - 1) as i32;
+    let segment = SEG_END.iter().position(|&end| pcm <= end).unwrap_or(SEG_END.len() - 1) as i32;
     let ulaw = ((segment << 4) | ((pcm >> (segment + 3)) & 0x0f)) as u8;
 
     ulaw ^ mask

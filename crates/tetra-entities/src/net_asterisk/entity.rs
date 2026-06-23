@@ -60,7 +60,7 @@ struct SipDialog {
     state: DialogState,
     rtp: RtpSession,
     audio: AsteriskAudioTranscoder,
-    media_ready: Option<(u16, u8)>,
+    media_ready: Option<(u16, u16, u8)>,
     inbound: bool,
     request_context: Option<SipRequestContext>,
 }
@@ -103,10 +103,7 @@ impl SipMessage {
         if !self.start_line.starts_with("SIP/2.0 ") {
             return None;
         }
-        self.start_line
-            .split_whitespace()
-            .nth(1)
-            .and_then(|code| code.parse().ok())
+        self.start_line.split_whitespace().nth(1).and_then(|code| code.parse().ok())
     }
 
     fn method(&self) -> Option<&str> {
@@ -150,7 +147,7 @@ pub struct AsteriskEntity {
     sip_socket: UdpSocket,
     remote: SocketAddr,
     dialogs: HashMap<Uuid, SipDialog>,
-    rtp_by_ts: HashMap<u8, Uuid>,
+    rtp_by_ts: HashMap<(u16, u8), Uuid>,
     next_rtp_port: u16,
     branch_counter: u64,
     register_call_id: String,
@@ -221,11 +218,7 @@ impl AsteriskEntity {
             remote: self.remote_display(),
             rtp_port_range: self.rtp_range(),
             codec: self.asterisk_config.codec.clone(),
-            active_dialogs: self
-                .dialogs
-                .values()
-                .filter(|d| d.state != DialogState::Released)
-                .count(),
+            active_dialogs: self.dialogs.values().filter(|d| d.state != DialogState::Released).count(),
             last_rx: self.last_rx.clone(),
             last_tx: self.last_tx.clone(),
             last_error: self.last_error.clone(),
@@ -387,10 +380,7 @@ impl AsteriskEntity {
 
     fn build_invite(&mut self, uuid: Uuid) -> Option<String> {
         let snapshot = self.dialogs.get(&uuid).map(SipDialogSnapshot::from_dialog)?;
-        let (rtp_port, auth) = self
-            .dialogs
-            .get(&uuid)
-            .map(|dialog| (dialog.rtp.local_port, dialog.auth.clone()))?;
+        let (rtp_port, auth) = self.dialogs.get(&uuid).map(|dialog| (dialog.rtp.local_port, dialog.auth.clone()))?;
         let request_uri = self.request_uri(&snapshot.number);
         let branch = self.next_branch();
         let body = self.build_sdp(rtp_port);
@@ -500,14 +490,7 @@ impl AsteriskEntity {
         to
     }
 
-    fn build_response(
-        &self,
-        ctx: &SipRequestContext,
-        code: u16,
-        reason: &str,
-        to_tag: Option<&str>,
-        body: Option<(&str, &str)>,
-    ) -> String {
+    fn build_response(&self, ctx: &SipRequestContext, code: u16, reason: &str, to_tag: Option<&str>, body: Option<(&str, &str)>) -> String {
         let to = Self::tagged_to(&ctx.to, to_tag);
         let (content_type, body_text) = body.unwrap_or(("", ""));
         let content_type_line = if content_type.is_empty() {
@@ -601,11 +584,7 @@ impl AsteriskEntity {
         } else {
             format!("{:x}", md5::compute(format!("{}:{}:{}", ha1, challenge.nonce, ha2)))
         };
-        let header_name = if challenge.proxy {
-            "Proxy-Authorization"
-        } else {
-            "Authorization"
-        };
+        let header_name = if challenge.proxy { "Proxy-Authorization" } else { "Authorization" };
         let mut line = format!(
             "{}: Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\"",
             header_name, username, realm, challenge.nonce, uri, response
@@ -752,7 +731,10 @@ impl AsteriskEntity {
             return;
         };
         let Some(destination) = self.inbound_destination_issi(msg) else {
-            tracing::info!("AsteriskEntity: rejecting inbound INVITE without TETRA destination: {}", msg.start_line);
+            tracing::info!(
+                "AsteriskEntity: rejecting inbound INVITE without TETRA destination: {}",
+                msg.start_line
+            );
             let response = self.build_response(&ctx, 404, "Not Found", Some("flowstation"), None);
             self.send_sip_to(response, addr, "404 Not Found");
             return;
@@ -840,10 +822,7 @@ impl AsteriskEntity {
             sap: Sap::Control,
             src: TetraEntity::Asterisk,
             dest: TetraEntity::Cmce,
-            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest {
-                brew_uuid: uuid,
-                call,
-            }),
+            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest { brew_uuid: uuid, call }),
         });
     }
 
@@ -890,11 +869,7 @@ impl AsteriskEntity {
     }
 
     fn handle_inbound_connect_request(&mut self, queue: &mut MessageQueue, uuid: Uuid, call: NetworkCircuitCall) {
-        let Some((inbound, rtp_port)) = self
-            .dialogs
-            .get(&uuid)
-            .map(|dialog| (dialog.inbound, dialog.rtp.local_port))
-        else {
+        let Some((inbound, rtp_port)) = self.dialogs.get(&uuid).map(|dialog| (dialog.inbound, dialog.rtp.local_port)) else {
             return;
         };
         if !inbound {
@@ -1000,26 +975,28 @@ impl AsteriskEntity {
         });
     }
 
-    fn mark_media_ready(&mut self, brew_uuid: Uuid, call_id: u16, ts: u8) {
+    fn mark_media_ready(&mut self, brew_uuid: Uuid, call_id: u16, carrier_num: u16, ts: u8) {
         if let Some(dialog) = self.dialogs.get_mut(&brew_uuid) {
-            dialog.media_ready = Some((call_id, ts));
-            self.rtp_by_ts.insert(ts, brew_uuid);
-            tracing::info!("AsteriskEntity: media ready uuid={} call_id={} ts={}", brew_uuid, call_id, ts);
+            dialog.media_ready = Some((call_id, carrier_num, ts));
+            self.rtp_by_ts.insert((carrier_num, ts), brew_uuid);
+            tracing::info!(
+                "AsteriskEntity: media ready uuid={} call_id={} carrier={} ts={}",
+                brew_uuid,
+                call_id,
+                carrier_num,
+                ts
+            );
         }
     }
 
     fn release_dialog(&mut self, brew_uuid: Uuid, from_cmce: bool) {
-        let Some((cancel, media_ready, inbound)) = self
-            .dialogs
-            .get(&brew_uuid)
-            .map(|dialog| {
-                (
-                    !matches!(dialog.state, DialogState::Established),
-                    dialog.media_ready,
-                    dialog.inbound,
-                )
-            })
-        else {
+        let Some((cancel, media_ready, inbound)) = self.dialogs.get(&brew_uuid).map(|dialog| {
+            (
+                !matches!(dialog.state, DialogState::Established),
+                dialog.media_ready,
+                dialog.inbound,
+            )
+        }) else {
             return;
         };
         if from_cmce {
@@ -1029,8 +1006,8 @@ impl AsteriskEntity {
                 self.send_bye_or_cancel(brew_uuid, cancel);
             }
         }
-        if let Some((_, ts)) = media_ready {
-            self.rtp_by_ts.remove(&ts);
+        if let Some((_, carrier_num, ts)) = media_ready {
+            self.rtp_by_ts.remove(&(carrier_num, ts));
         }
         if let Some(dialog) = self.dialogs.get_mut(&brew_uuid) {
             dialog.state = DialogState::Released;
@@ -1039,7 +1016,7 @@ impl AsteriskEntity {
     }
 
     fn handle_ul_voice(&mut self, prim: TmdCircuitDataInd) {
-        let Some(uuid) = self.rtp_by_ts.get(&prim.ts).copied() else {
+        let Some(uuid) = self.rtp_by_ts.get(&(prim.carrier_num, prim.ts)).copied() else {
             return;
         };
         let mut send_result = None;
@@ -1089,7 +1066,7 @@ impl AsteriskEntity {
         let mut last_error = None;
         let mut buf = [0u8; 1720];
         for dialog in self.dialogs.values_mut() {
-            let Some((_, ts)) = dialog.media_ready else {
+            let Some((_, carrier_num, ts)) = dialog.media_ready else {
                 continue;
             };
             for _ in 0..32 {
@@ -1108,7 +1085,7 @@ impl AsteriskEntity {
                         }
                         dialog.rtp.remote = Some(addr);
                         for frame in dialog.audio.encode_pcmu_to_tmd(payload) {
-                            downlink.push((ts, frame));
+                            downlink.push((carrier_num, ts, frame));
                         }
                     }
                     Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
@@ -1123,12 +1100,12 @@ impl AsteriskEntity {
             self.last_error = last_error;
         }
 
-        for (ts, data) in downlink {
+        for (carrier_num, ts, data) in downlink {
             queue.push_back(SapMsg {
                 sap: Sap::TmdSap,
                 src: TetraEntity::Asterisk,
                 dest: TetraEntity::Umac,
-                msg: SapMsgInner::TmdCircuitDataReq(TmdCircuitDataReq { ts, data }),
+                msg: SapMsgInner::TmdCircuitDataReq(TmdCircuitDataReq { carrier_num, ts, data }),
             });
         }
     }
@@ -1404,8 +1381,13 @@ impl TetraEntityTrait for AsteriskEntity {
                 self.handle_inbound_connect_request(queue, brew_uuid, call);
             }
             SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectConfirm { .. }) => {}
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady { brew_uuid, call_id, ts }) => {
-                self.mark_media_ready(brew_uuid, call_id, ts);
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady {
+                brew_uuid,
+                call_id,
+                carrier_num,
+                ts,
+            }) => {
+                self.mark_media_ready(brew_uuid, call_id, carrier_num, ts);
             }
             SapMsgInner::CmceCallControl(CallControl::NetworkCircuitRelease { brew_uuid, .. }) => {
                 self.release_dialog(brew_uuid, true);

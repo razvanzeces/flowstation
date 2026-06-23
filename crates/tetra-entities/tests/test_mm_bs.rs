@@ -4,8 +4,8 @@ use tetra_config::bluestation::StackMode;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, debug};
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
-use tetra_pdus::mm::pdus::d_attach_detach_group_identity::DAttachDetachGroupIdentity;
 use tetra_pdus::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
+use tetra_pdus::mm::pdus::d_attach_detach_group_identity::DAttachDetachGroupIdentity;
 use tetra_pdus::mm::pdus::d_mm_status::DMmStatus;
 use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
 use tetra_saps::lmm::LmmMleUnitdataInd;
@@ -43,7 +43,10 @@ fn register_terminal(test: &mut ComponentTest, issi: u32) {
     let prim = LmmMleUnitdataInd {
         sdu,
         handle: 0,
-        received_address: TetraAddress { ssi_type: SsiType::Issi, ssi: issi },
+        received_address: TetraAddress {
+            ssi_type: SsiType::Issi,
+            ssi: issi,
+        },
     };
     test.submit_message(SapMsg {
         sap: Sap::LmmSap,
@@ -112,9 +115,8 @@ fn test_reactive_recovery_commands_unknown_issi_on_uplink() {
     submit_uplink_rssi(&mut test, GHOST_ISSI);
     let msgs = test.dump_sinks();
 
-    let target = find_location_update_command(&msgs).unwrap_or_else(|| {
-        panic!("expected a D-LOCATION-UPDATE-COMMAND for the unknown ISSI, got {} msgs", msgs.len())
-    });
+    let target = find_location_update_command(&msgs)
+        .unwrap_or_else(|| panic!("expected a D-LOCATION-UPDATE-COMMAND for the unknown ISSI, got {} msgs", msgs.len()));
     assert_eq!(target, GHOST_ISSI, "the COMMAND must be addressed to the transmitting ghost ISSI");
 }
 
@@ -194,12 +196,20 @@ fn test_dgna_assign_emits_attach_group_identity_and_affiliates() {
     let _ = test.dump_sinks(); // discard the D-LOCATION-UPDATE-ACCEPT
 
     // Issue the DGNA assign and let MM process the control command.
-    dispatcher.send(ControlCommand::Dgna { issi: TEST_ISSI, gssi: TEST_GSSI, attach: true });
+    dispatcher.send(ControlCommand::Dgna {
+        issi: TEST_ISSI,
+        gssi: TEST_GSSI,
+        attach: true,
+    });
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    let (addr_ssi, pdu) = find_attach_detach(&msgs)
-        .unwrap_or_else(|| panic!("expected a D-ATTACH/DETACH GROUP IDENTITY after DGNA assign, got {} msgs", msgs.len()));
+    let (addr_ssi, pdu) = find_attach_detach(&msgs).unwrap_or_else(|| {
+        panic!(
+            "expected a D-ATTACH/DETACH GROUP IDENTITY after DGNA assign, got {} msgs",
+            msgs.len()
+        )
+    });
 
     assert_eq!(addr_ssi, TEST_ISSI, "DGNA PDU must be addressed to the target ISSI");
     assert!(pdu.group_identity_acknowledgement_request, "DGNA must request an ACK");
@@ -207,11 +217,18 @@ fn test_dgna_assign_emits_attach_group_identity_and_affiliates() {
     let gids = pdu.group_identity_downlink.expect("downlink groups present");
     assert_eq!(gids.len(), 1);
     assert_eq!(gids[0].gssi, Some(TEST_GSSI));
-    assert!(gids[0].group_identity_attachment.is_some(), "an assign carries a group identity attachment");
+    assert!(
+        gids[0].group_identity_attachment.is_some(),
+        "an assign carries a group identity attachment"
+    );
 
     // BS-side affiliation must be reflected for local call/SDS routing.
     assert!(
-        test.config.state_read().subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI),
+        test.config
+            .state_read()
+            .subscribers
+            .attached_groups_of(TEST_ISSI)
+            .contains(&TEST_GSSI),
         "DGNA assign must affiliate the GSSI in the subscriber registry"
     );
 }
@@ -231,26 +248,52 @@ fn test_dgna_deassign_emits_detach_and_deaffiliates() {
     register_terminal(&mut test, TEST_ISSI);
 
     // Assign, then deassign.
-    dispatcher.send(ControlCommand::Dgna { issi: TEST_ISSI, gssi: TEST_GSSI, attach: true });
+    dispatcher.send(ControlCommand::Dgna {
+        issi: TEST_ISSI,
+        gssi: TEST_GSSI,
+        attach: true,
+    });
     test.run_stack(Some(2));
     let _ = test.dump_sinks();
-    assert!(test.config.state_read().subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI));
+    assert!(
+        test.config
+            .state_read()
+            .subscribers
+            .attached_groups_of(TEST_ISSI)
+            .contains(&TEST_GSSI)
+    );
 
-    dispatcher.send(ControlCommand::Dgna { issi: TEST_ISSI, gssi: TEST_GSSI, attach: false });
+    dispatcher.send(ControlCommand::Dgna {
+        issi: TEST_ISSI,
+        gssi: TEST_GSSI,
+        attach: false,
+    });
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    let (addr_ssi, pdu) = find_attach_detach(&msgs)
-        .unwrap_or_else(|| panic!("expected a D-ATTACH/DETACH GROUP IDENTITY after DGNA deassign, got {} msgs", msgs.len()));
+    let (addr_ssi, pdu) = find_attach_detach(&msgs).unwrap_or_else(|| {
+        panic!(
+            "expected a D-ATTACH/DETACH GROUP IDENTITY after DGNA deassign, got {} msgs",
+            msgs.len()
+        )
+    });
     assert_eq!(addr_ssi, TEST_ISSI);
     let gids = pdu.group_identity_downlink.expect("downlink groups present");
     assert_eq!(gids.len(), 1);
     assert_eq!(gids[0].gssi, Some(TEST_GSSI));
     assert!(gids[0].group_identity_attachment.is_none(), "a deassign carries no attachment");
-    assert!(gids[0].group_identity_detachment_uplink.is_some(), "a deassign carries a detachment");
+    assert!(
+        gids[0].group_identity_detachment_uplink.is_some(),
+        "a deassign carries a detachment"
+    );
 
     assert!(
-        !test.config.state_read().subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI),
+        !test
+            .config
+            .state_read()
+            .subscribers
+            .attached_groups_of(TEST_ISSI)
+            .contains(&TEST_GSSI),
         "DGNA deassign must remove the GSSI from the subscriber registry"
     );
 }
@@ -281,12 +324,19 @@ fn test_dgna_from_cmce_control_reaches_mm_and_emits_pdu() {
     let _ = test.dump_sinks();
 
     // Send DGNA to CMCE's control endpoint (the dashboard's path), NOT to MM directly.
-    cmce_dispatcher.send(ControlCommand::Dgna { issi: TEST_ISSI, gssi: TEST_GSSI, attach: true });
+    cmce_dispatcher.send(ControlCommand::Dgna {
+        issi: TEST_ISSI,
+        gssi: TEST_GSSI,
+        attach: true,
+    });
     test.run_stack(Some(4)); // CMCE drains control -> forwards MmDgnaRequest -> MM emits the PDU
     let msgs = test.dump_sinks();
 
     let (addr_ssi, pdu) = find_attach_detach(&msgs).unwrap_or_else(|| {
-        panic!("DGNA via CMCE must reach MM and emit a D-ATTACH/DETACH GROUP IDENTITY, got {} msgs", msgs.len())
+        panic!(
+            "DGNA via CMCE must reach MM and emit a D-ATTACH/DETACH GROUP IDENTITY, got {} msgs",
+            msgs.len()
+        )
     });
     assert_eq!(addr_ssi, TEST_ISSI);
     let gids = pdu.group_identity_downlink.expect("downlink groups present");
@@ -294,7 +344,11 @@ fn test_dgna_from_cmce_control_reaches_mm_and_emits_pdu() {
     assert!(gids[0].group_identity_attachment.is_some());
 
     assert!(
-        test.config.state_read().subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI),
+        test.config
+            .state_read()
+            .subscribers
+            .attached_groups_of(TEST_ISSI)
+            .contains(&TEST_GSSI),
         "DGNA via CMCE must affiliate the GSSI in the subscriber registry"
     );
 }
@@ -310,11 +364,18 @@ fn test_dgna_to_unregistered_issi_is_refused() {
     test.register_entity(mm);
 
     // No registration first — the command must be dropped, emitting no group identity PDU.
-    dispatcher.send(ControlCommand::Dgna { issi: 9_999_001, gssi: 100, attach: true });
+    dispatcher.send(ControlCommand::Dgna {
+        issi: 9_999_001,
+        gssi: 100,
+        attach: true,
+    });
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    assert!(find_attach_detach(&msgs).is_none(), "DGNA to an unregistered ISSI must not emit a group identity PDU");
+    assert!(
+        find_attach_detach(&msgs).is_none(),
+        "DGNA to an unregistered ISSI must not emit a group identity PDU"
+    );
 }
 
 #[test]
@@ -413,8 +474,16 @@ fn test_restart_recovery_loads_and_replays() {
         }
     }
 
-    assert!(targets.contains(&1000001), "ISSI 1000001 should receive a recovery COMMAND, got {:?}", targets);
-    assert!(targets.contains(&1000002), "ISSI 1000002 should receive a recovery COMMAND, got {:?}", targets);
+    assert!(
+        targets.contains(&1000001),
+        "ISSI 1000001 should receive a recovery COMMAND, got {:?}",
+        targets
+    );
+    assert!(
+        targets.contains(&1000002),
+        "ISSI 1000002 should receive a recovery COMMAND, got {:?}",
+        targets
+    );
 
     let _ = std::fs::remove_file(&path);
 }
@@ -454,7 +523,11 @@ fn test_restart_recovery_honours_whitelist() {
         }
     }
     assert!(targets.contains(&1000001), "whitelisted ISSI should be replayed, got {:?}", targets);
-    assert!(!targets.contains(&1000002), "non-whitelisted ISSI must NOT be replayed, got {:?}", targets);
+    assert!(
+        !targets.contains(&1000002),
+        "non-whitelisted ISSI must NOT be replayed, got {:?}",
+        targets
+    );
 
     let _ = std::fs::remove_file(&path);
 }

@@ -32,23 +32,11 @@ pub enum TelegramAlertMsg {
     /// A captured stack log line at WARN or ERROR level (the "critical status" catch-all).
     CriticalLog { level: String, message: String },
     /// A DAPNET message forwarded through the existing Telegram alert delivery path.
-    Dapnet {
-        prefix: String,
-        callsign: String,
-        text: String,
-    },
+    Dapnet { prefix: String, callsign: String, text: String },
     /// A MeshCom text message forwarded through the existing Telegram alert delivery path.
-    Meshcom {
-        prefix: String,
-        src: String,
-        text: String,
-    },
+    Meshcom { prefix: String, src: String, text: String },
     /// A GeoAlarm geofence event forwarded through the existing Telegram alert delivery path.
-    Geoalarm {
-        prefix: String,
-        source: String,
-        text: String,
-    },
+    Geoalarm { prefix: String, source: String, text: String },
 }
 
 /// Cloneable, push-only handle. Cloned into the telemetry-tee and dashboard-log threads.
@@ -98,10 +86,7 @@ pub struct TelegramAlertSource {
 impl TelegramAlertSource {
     /// Blocking receive with timeout. `Err(Timeout)` lets the alerter run its maintenance cycle
     /// (deferred disconnects, log batching); `Err(Disconnected)` means all sinks were dropped.
-    pub fn recv_timeout(
-        &self,
-        timeout: std::time::Duration,
-    ) -> Result<TelegramAlertMsg, crossbeam_channel::RecvTimeoutError> {
+    pub fn recv_timeout(&self, timeout: std::time::Duration) -> Result<TelegramAlertMsg, crossbeam_channel::RecvTimeoutError> {
         self.rx.recv_timeout(timeout)
     }
 }

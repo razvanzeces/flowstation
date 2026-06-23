@@ -215,7 +215,9 @@ impl CcBsSubentity {
                 called_handle: None,
                 called_link_id: None,
                 called_endpoint_id: None,
+                calling_carrier_num: self.config.config().cell.main_carrier,
                 calling_ts: ts,
+                called_carrier_num: self.config.config().cell.main_carrier,
                 called_ts: ts,
                 calling_usage: usage,
                 called_usage: usage,
@@ -316,7 +318,7 @@ impl CcBsSubentity {
         let chan_alloc_calling = CmceChanAllocReq {
             usage: Some(call.calling_usage),
             alloc_type: ChanAllocType::Replace,
-            carrier: None,
+            carrier: Some(call.calling_carrier_num),
             timeslots: calling_timeslots,
             ul_dl_assigned: UlDlAssignment::Both,
         };
@@ -369,6 +371,7 @@ impl CcBsSubentity {
             ts_created: self.dltime,
             direction: Direction::Both,
             ts: call.calling_ts,
+            carrier_num: call.calling_carrier_num,
             call_id,
             usage: call.calling_usage,
             circuit_mode: CircuitModeType::TchS,
@@ -377,7 +380,7 @@ impl CcBsSubentity {
             speech_service: Some(0),
             etee_encrypted: false,
         };
-        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, CircuitDlMediaSource::SwMI);
+        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, None, CircuitDlMediaSource::SwMI);
 
         let activated = match self.fsm_individual_transition_to_active(call_id) {
             Ok(()) => true,
@@ -413,7 +416,9 @@ impl CcBsSubentity {
                     call_id,
                     source_issi: call.calling_addr.ssi,
                     dest_gssi: call.called_addr.ssi,
+                    carrier_num: call.calling_carrier_num,
                     ts: call.calling_ts,
+                    is_group: false,
                 },
                 true,
                 BrewNotification::Never,
@@ -444,6 +449,7 @@ impl CcBsSubentity {
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady {
                 brew_uuid,
                 call_id,
+                carrier_num: call.calling_carrier_num,
                 ts: call.calling_ts,
             }),
         });
@@ -520,7 +526,7 @@ impl CcBsSubentity {
         let chan_alloc_called = CmceChanAllocReq {
             usage: Some(call.called_usage),
             alloc_type: ChanAllocType::Replace,
-            carrier: None,
+            carrier: Some(call.called_carrier_num),
             timeslots: called_timeslots,
             ul_dl_assigned,
         };
@@ -580,6 +586,7 @@ impl CcBsSubentity {
             ts_created: self.dltime,
             direction: Direction::Both,
             ts: call.called_ts,
+            carrier_num: call.called_carrier_num,
             call_id,
             usage: call.called_usage,
             circuit_mode,
@@ -588,7 +595,7 @@ impl CcBsSubentity {
             speech_service,
             etee_encrypted,
         };
-        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, CircuitDlMediaSource::SwMI);
+        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, None, CircuitDlMediaSource::SwMI);
 
         let activated = match self.fsm_individual_transition_to_active(call_id) {
             Ok(()) => true,
@@ -626,7 +633,9 @@ impl CcBsSubentity {
                             call_id,
                             source_issi: call.called_addr.ssi,
                             dest_gssi: call.calling_addr.ssi,
+                            carrier_num: call.called_carrier_num,
                             ts: call.called_ts,
+                            is_group: false,
                         },
                         true,
                         BrewNotification::Never,
@@ -653,6 +662,7 @@ impl CcBsSubentity {
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady {
                 brew_uuid,
                 call_id,
+                carrier_num: call.called_carrier_num,
                 ts: call.called_ts,
             }),
         });
@@ -755,7 +765,7 @@ impl CcBsSubentity {
             call_id
         );
 
-        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, CircuitDlMediaSource::LocalLoopback);
+        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, None, CircuitDlMediaSource::LocalLoopback);
 
         tracing::debug!(
             "CMCE: sending D-SETUP for NEW call call_id={} gssi={} (network-initiated)",
@@ -800,7 +810,7 @@ impl CcBsSubentity {
         );
         let d_setup_ref = &self.cached_setups.get(&call_id).unwrap().pdu;
 
-        let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, usage, ts, UlDlAssignment::Both);
+        let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, usage, circuit.carrier_num, ts, UlDlAssignment::Both);
         let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), self.dltime, dest_addr.clone(), None);
         queue.push_back(setup_msg);
 
@@ -850,7 +860,17 @@ impl CcBsSubentity {
 
         self.active_calls.insert(
             call_id,
-            ActiveCall::new_network(brew_uuid, dest_gssi, source_issi, ts, usage, self.dltime, self.config_call_timeout(), priority),
+            ActiveCall::new_network(
+                brew_uuid,
+                dest_gssi,
+                source_issi,
+                circuit.carrier_num,
+                ts,
+                usage,
+                self.dltime,
+                self.config_call_timeout(),
+                priority,
+            ),
         );
 
         // Dashboard telemetry: a Brew/network-initiated group call just became active.
@@ -858,6 +878,7 @@ impl CcBsSubentity {
             call_id,
             gssi: dest_gssi,
             caller_issi: source_issi,
+            carrier_num: circuit.carrier_num,
             ts,
             priority,
         });
@@ -869,6 +890,7 @@ impl CcBsSubentity {
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
                 brew_uuid,
                 call_id,
+                carrier_num: circuit.carrier_num,
                 ts,
                 usage,
             }),

@@ -272,18 +272,9 @@ pub fn apply_dapnet_patch(dto: CfgDapnetDto) -> Result<CfgDapnet, String> {
         sds_dest_is_group: dto.sds_dest_is_group,
         ric_issi_routes,
         ric_gssi_routes,
-        sds_allowed_rics: normalize_ric_value_list(
-            "dapnet.sds_allowed_rics",
-            dto.sds_allowed_rics,
-        )?,
-        callout_allowed_rics: normalize_ric_value_list(
-            "dapnet.callout_allowed_rics",
-            dto.callout_allowed_rics,
-        )?,
-        telegram_allowed_rics: normalize_ric_value_list(
-            "dapnet.telegram_allowed_rics",
-            dto.telegram_allowed_rics,
-        )?,
+        sds_allowed_rics: normalize_ric_value_list("dapnet.sds_allowed_rics", dto.sds_allowed_rics)?,
+        callout_allowed_rics: normalize_ric_value_list("dapnet.callout_allowed_rics", dto.callout_allowed_rics)?,
+        telegram_allowed_rics: normalize_ric_value_list("dapnet.telegram_allowed_rics", dto.telegram_allowed_rics)?,
         callout_source_issi: dto.callout_source_issi,
         callout_dest_issi: dto.callout_dest_issi,
         callout_incident_base: dto.callout_incident_base.clamp(1, 256),
@@ -306,13 +297,10 @@ pub fn parse_ric_route_key(raw: &str) -> Result<u32, String> {
         return Err("empty RIC route key".to_string());
     }
     if let Some(hex) = key.strip_prefix("0x").or_else(|| key.strip_prefix("0X")) {
-        return u32::from_str_radix(hex, 16)
-            .map_err(|_| format!("invalid hex RIC route key '{raw}'"));
+        return u32::from_str_radix(hex, 16).map_err(|_| format!("invalid hex RIC route key '{raw}'"));
     }
     if key.chars().all(|c| c.is_ascii_digit()) {
-        return key
-            .parse::<u32>()
-            .map_err(|_| format!("invalid decimal RIC route key '{raw}'"));
+        return key.parse::<u32>().map_err(|_| format!("invalid decimal RIC route key '{raw}'"));
     }
     Err(format!("invalid RIC route key '{raw}'"))
 }
@@ -321,10 +309,7 @@ pub fn format_ric_route_key(ric: u32) -> String {
     format!("{ric:07}")
 }
 
-fn normalize_ric_ssi_routes(
-    field: &str,
-    routes: HashMap<String, u32>,
-) -> Result<BTreeMap<u32, u32>, String> {
+fn normalize_ric_ssi_routes(field: &str, routes: HashMap<String, u32>) -> Result<BTreeMap<u32, u32>, String> {
     let mut out = BTreeMap::new();
     for (raw_ric, issi) in routes {
         let ric = parse_ric_route_key(&raw_ric)?;
@@ -339,10 +324,7 @@ fn normalize_ric_ssi_routes(
     Ok(out)
 }
 
-fn normalize_ric_value_list(
-    field: &str,
-    values: Vec<toml::Value>,
-) -> Result<BTreeSet<u32>, String> {
+fn normalize_ric_value_list(field: &str, values: Vec<toml::Value>) -> Result<BTreeSet<u32>, String> {
     let mut out = BTreeSet::new();
     for value in values {
         let ric = match value {
@@ -355,10 +337,7 @@ fn normalize_ric_value_list(
     Ok(out)
 }
 
-fn ensure_no_route_conflicts(
-    issi_routes: &BTreeMap<u32, u32>,
-    gssi_routes: &BTreeMap<u32, u32>,
-) -> Result<(), String> {
+fn ensure_no_route_conflicts(issi_routes: &BTreeMap<u32, u32>, gssi_routes: &BTreeMap<u32, u32>) -> Result<(), String> {
     for ric in issi_routes.keys() {
         if gssi_routes.contains_key(ric) {
             return Err(format!(

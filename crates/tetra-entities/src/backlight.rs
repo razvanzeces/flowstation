@@ -92,7 +92,12 @@ fn read_u32(path: &Path) -> Option<u32> {
 /// `present: false` so the UI can hide the control gracefully.
 pub fn status() -> BacklightStatus {
     match discover() {
-        None => BacklightStatus { present: false, device: None, brightness: None, max_brightness: None },
+        None => BacklightStatus {
+            present: false,
+            device: None,
+            brightness: None,
+            max_brightness: None,
+        },
         Some(dir) => BacklightStatus {
             present: true,
             device: dir.file_name().map(|n| n.to_string_lossy().into_owned()),
@@ -167,7 +172,10 @@ fn write_via_sudo_tee(node: &Path, payload: &str) -> Result<(), BacklightError> 
                 }
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 return Err(BacklightError::Failed(if stderr.is_empty() {
-                    format!("exit code {} (no sudoers rule? prefer a udev group-write rule)", exit.code().unwrap_or(-1))
+                    format!(
+                        "exit code {} (no sudoers rule? prefer a udev group-write rule)",
+                        exit.code().unwrap_or(-1)
+                    )
                 } else {
                     stderr
                 }));

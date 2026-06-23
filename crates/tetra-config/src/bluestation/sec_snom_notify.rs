@@ -36,8 +36,7 @@ pub struct CfgSnomNotify {
 
 impl Default for CfgSnomNotify {
     fn default() -> Self {
-        apply_snom_notify_patch(CfgSnomNotifyDto::default())
-            .expect("default snom_notify config must be valid")
+        apply_snom_notify_patch(CfgSnomNotifyDto::default()).expect("default snom_notify config must be valid")
     }
 }
 
@@ -214,11 +213,7 @@ fn normalize_issi_list(values: Vec<u32>) -> Result<BTreeSet<u32>, String> {
 
 fn non_empty_or(value: String, fallback: String) -> String {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        fallback
-    } else {
-        trimmed.to_string()
-    }
+    if trimmed.is_empty() { fallback } else { trimmed.to_string() }
 }
 
 #[cfg(test)]

@@ -56,14 +56,7 @@ impl SnomNotifySink {
     }
 
     #[inline]
-    pub fn send_meshcom(
-        &self,
-        title: String,
-        src: String,
-        dst: Option<String>,
-        text: String,
-        msg_id: Option<String>,
-    ) {
+    pub fn send_meshcom(&self, title: String, src: String, dst: Option<String>, text: String, msg_id: Option<String>) {
         let _ = self.tx.send(SnomNotifyMsg::Meshcom {
             title,
             src,
@@ -74,15 +67,7 @@ impl SnomNotifySink {
     }
 
     #[inline]
-    pub fn send_geoalarm(
-        &self,
-        title: String,
-        source: String,
-        text: String,
-        distance_m: f64,
-        lat: f64,
-        lon: f64,
-    ) {
+    pub fn send_geoalarm(&self, title: String, source: String, text: String, distance_m: f64, lat: f64, lon: f64) {
         let _ = self.tx.send(SnomNotifyMsg::Geoalarm {
             title,
             source,
@@ -109,10 +94,7 @@ pub fn snom_notify_channel() -> (SnomNotifySink, SnomNotifySource) {
     (SnomNotifySink { tx }, SnomNotifySource { rx })
 }
 
-pub fn spawn_snom_notify_worker(
-    cfg: SharedConfig,
-    source: SnomNotifySource,
-) -> Option<thread::JoinHandle<()>> {
+pub fn spawn_snom_notify_worker(cfg: SharedConfig, source: SnomNotifySource) -> Option<thread::JoinHandle<()>> {
     match thread::Builder::new()
         .name("snom-notify".into())
         .spawn(move || SnomNotifyWorker::new(cfg, source).run())
@@ -152,11 +134,7 @@ impl SnomNotifyWorker {
         tracing::info!("Snom notify worker exiting");
     }
 
-    fn notification_for_msg(
-        &self,
-        cfg: &CfgSnomNotify,
-        msg: SnomNotifyMsg,
-    ) -> Option<SnomNotification> {
+    fn notification_for_msg(&self, cfg: &CfgSnomNotify, msg: SnomNotifyMsg) -> Option<SnomNotification> {
         match msg {
             SnomNotifyMsg::Event(TelemetryEvent::SdsLog {
                 direction,
@@ -278,17 +256,11 @@ struct SnomNotification {
 }
 
 fn direction_allowed(cfg: &CfgSnomNotify, direction: &str) -> bool {
-    cfg.sds_directions.is_empty()
-        || cfg
-            .sds_directions
-            .iter()
-            .any(|d| d.eq_ignore_ascii_case(direction.trim()))
+    cfg.sds_directions.is_empty() || cfg.sds_directions.iter().any(|d| d.eq_ignore_ascii_case(direction.trim()))
 }
 
 fn sds_issi_allowed(cfg: &CfgSnomNotify, source_issi: u32, dest_issi: u32) -> bool {
-    cfg.sds_allowed_issis.is_empty()
-        || cfg.sds_allowed_issis.contains(&source_issi)
-        || cfg.sds_allowed_issis.contains(&dest_issi)
+    cfg.sds_allowed_issis.is_empty() || cfg.sds_allowed_issis.contains(&source_issi) || cfg.sds_allowed_issis.contains(&dest_issi)
 }
 
 fn dapnet_ric_allowed(cfg: &CfgSnomNotify, recipient: &str) -> bool {
@@ -379,22 +351,15 @@ fn send_notification(cfg: &CfgSnomNotify, title: &str, lines: &[String]) -> Resu
             ("Endpoint", endpoint.to_string()),
             ("Variable", format!("Event={}", cfg.notify_event)),
             ("Variable", format!("Content-Type={}", cfg.content_type)),
-            (
-                "Variable",
-                format!("Subscription-State={}", cfg.subscription_state),
-            ),
+            ("Variable", format!("Subscription-State={}", cfg.subscription_state)),
             ("Variable", format!("Content={}", sanitize_ami_value(&xml))),
         ];
-        ami_action(&mut stream, &fields)
-            .map_err(|e| format!("PJSIPNotify endpoint {} failed: {}", endpoint, e))?;
+        ami_action(&mut stream, &fields).map_err(|e| format!("PJSIPNotify endpoint {} failed: {}", endpoint, e))?;
     }
 
     let _ = ami_action(
         &mut stream,
-        &[
-            ("Action", "Logoff".to_string()),
-            ("ActionID", next_action_id("logoff")),
-        ],
+        &[("Action", "Logoff".to_string()), ("ActionID", next_action_id("logoff"))],
     );
     Ok(())
 }
@@ -402,9 +367,7 @@ fn send_notification(cfg: &CfgSnomNotify, title: &str, lines: &[String]) -> Resu
 fn connect_ami(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, String> {
     let addr = format!("{host}:{port}");
     let mut last_err = None;
-    let addrs = addr
-        .to_socket_addrs()
-        .map_err(|e| format!("AMI resolve {} failed: {}", addr, e))?;
+    let addrs = addr.to_socket_addrs().map_err(|e| format!("AMI resolve {} failed: {}", addr, e))?;
     for socket in addrs {
         match TcpStream::connect_timeout(&socket, timeout) {
             Ok(stream) => {
@@ -422,9 +385,7 @@ fn connect_ami(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, St
     Err(format!(
         "AMI connect {} failed: {}",
         addr,
-        last_err
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "no socket addresses".to_string())
+        last_err.map(|e| e.to_string()).unwrap_or_else(|| "no socket addresses".to_string())
     ))
 }
 
@@ -486,11 +447,7 @@ fn sanitize_response(response: &str) -> String {
 }
 
 fn snom_ip_phone_text_xml(title: &str, lines: &[String]) -> String {
-    let text = lines
-        .iter()
-        .map(|l| xml_escape(l))
-        .collect::<Vec<_>>()
-        .join("<br/>");
+    let text = lines.iter().map(|l| xml_escape(l)).collect::<Vec<_>>().join("<br/>");
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?><SnomIPPhoneText has_scrollbar="yes"><Title>{}</Title><Text>{}</Text></SnomIPPhoneText>"#,
         xml_escape(title),
@@ -557,10 +514,7 @@ mod tests {
 
     #[test]
     fn snom_xml_escapes_dynamic_text_and_uses_br() {
-        let xml = snom_ip_phone_text_xml(
-            "Flow <SDS>",
-            &["From: 1".to_string(), "Text: a & b".to_string()],
-        );
+        let xml = snom_ip_phone_text_xml("Flow <SDS>", &["From: 1".to_string(), "Text: a & b".to_string()]);
         assert!(xml.contains("<SnomIPPhoneText"));
         assert!(xml.contains("<Title>Flow &lt;SDS&gt;</Title>"));
         assert!(xml.contains("From: 1<br/>Text: a &amp; b"));

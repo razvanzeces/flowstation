@@ -62,6 +62,13 @@ rx_freq = 433025000
 # If unset, the device-specific default is used.
 # sample_rate = 1800000
 
+# Optional SDR center frequencies in Hz for dual-carrier / phase-modulated operation.
+# For a single carrier, leave these commented and the radio tunes directly to tx_freq/rx_freq.
+# For adjacent carriers, place the center frequency midway between main_carrier and
+# secondary_carrier so both 25 kHz channels fit inside one SDR passband.
+# tx_center_freq = 438037500
+# rx_center_freq = 433037500
+
 # Optional RX/TX channel index for multi-channel SDRs (e.g. LimeSDR, USRP).
 # If unset, the device default channel (usually 0) is used.
 # rx_channel = 0
@@ -120,6 +127,7 @@ mnc = 1337
 # See ETSI TS 100 392-15 V1.5.1 Clause 6: Duplex spacing
 freq_band = 4                       # 400MHz band
 main_carrier = 1521                 # + 1521 * 25kHz = 38250kHz
+# secondary_carrier = 1522          # Optional second carrier, typically adjacent (+/- 25 kHz)
 duplex_spacing = 4                  # Use 5MHz spacing between ul and dl (for 400 MHz band)
 # custom_duplex_spacing = 7600000   # Do not uncomment unless you have programmed a custom duplex spacing entry in your radios
 freq_offset = 0                     # Carrier offset. Usually 0. Options: 0, 6250, -6250, 12500 Hz.

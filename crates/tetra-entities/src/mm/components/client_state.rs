@@ -181,7 +181,7 @@ impl MmClientMgr {
             // Every RSSI measurement is an uplink burst we just heard → the MS is on the air now.
             client.last_uplink_time = std::time::Instant::now();
             let should_log = match client.last_rssi {
-                None => true, // First measurement
+                None => true,                                  // First measurement
                 Some(prev) => (rssi_dbfs - prev).abs() >= 3.0, // Log on >=3dB change
             };
             client.last_rssi = Some(rssi_dbfs);
@@ -225,9 +225,7 @@ impl MmClientMgr {
             // Achieved by back-dating: last_registration_time = now - (interval - grace_secs)
             // But we don't know interval here, so we use a simpler approach:
             // collect_expired_registrations checks pending_command_sent + grace separately.
-            client.grace_expires_at = Some(
-                std::time::Instant::now() + std::time::Duration::from_secs(grace_secs as u64)
-            );
+            client.grace_expires_at = Some(std::time::Instant::now() + std::time::Duration::from_secs(grace_secs as u64));
         }
     }
 

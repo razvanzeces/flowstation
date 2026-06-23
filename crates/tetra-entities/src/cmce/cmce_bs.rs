@@ -111,7 +111,12 @@ impl CmceBs {
                     std::time::Duration::from_millis(500),
                 );
             }
-            ControlCommand::AddLiveSds { text, protocol_id, source_issi, repeat_count } => {
+            ControlCommand::AddLiveSds {
+                text,
+                protocol_id,
+                source_issi,
+                repeat_count,
+            } => {
                 let mut state = sds.shared_config().state_write();
                 let id = state.next_live_sds_id;
                 state.next_live_sds_id = state.next_live_sds_id.wrapping_add(1).max(1);

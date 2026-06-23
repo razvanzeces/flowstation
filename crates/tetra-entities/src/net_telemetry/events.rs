@@ -33,14 +33,39 @@ pub enum TelemetryEvent {
     /// Group call started. `priority` is the ETSI call priority (0..=15) from the originating
     /// U-SETUP / network call start; 15 denotes an emergency call (`priority` appended last so
     /// existing leading fields stay wire-stable for the bitcode codec).
-    GroupCallStarted { call_id: u16, gssi: u32, caller_issi: u32, ts: u8, priority: u8 },
+    GroupCallStarted {
+        call_id: u16,
+        gssi: u32,
+        caller_issi: u32,
+        carrier_num: u16,
+        ts: u8,
+        priority: u8,
+    },
     /// Group call ended
     GroupCallEnded { call_id: u16, gssi: u32 },
-    /// Speaker changed on active group call
-    GroupCallSpeakerChanged { call_id: u16, gssi: u32, speaker_issi: u32 },
+    /// Active speaker changed on a live call. `dest_addr` is the active destination
+    /// (GSSI for group, peer ISSI for individual/simplex).
+    CallSpeakerChanged {
+        call_id: u16,
+        is_group: bool,
+        dest_addr: u32,
+        speaker_issi: u32,
+        carrier_num: u16,
+        ts: u8,
+    },
     /// Individual (P2P) call started. `priority` is the ETSI call priority (0..=15) from the
     /// originating U-SETUP; 15 denotes an emergency call (appended last for bitcode wire-stability).
-    IndividualCallStarted { call_id: u16, calling_issi: u32, called_issi: u32, simplex: bool, ts: u8, priority: u8 },
+    IndividualCallStarted {
+        call_id: u16,
+        calling_issi: u32,
+        called_issi: u32,
+        simplex: bool,
+        carrier_num: u16,
+        ts: u8,
+        peer_carrier_num: Option<u16>,
+        peer_ts: Option<u8>,
+        priority: u8,
+    },
     /// Individual call ended
     IndividualCallEnded { call_id: u16 },
     /// Energy saving mode updated for MS (0=StayAlive, 1=Eg1..7=Eg7)
@@ -63,7 +88,11 @@ pub enum TelemetryEvent {
         text: String,
     },
     /// Voice frame activity on a traffic timeslot (UL or DL)
-    TsVoiceActivity { ts: u8 },
+    TsVoiceActivity {
+        carrier_num: u16,
+        ts: u8,
+        speaker_issi: Option<u32>,
+    },
     /// Fast visual feed for the RF dashboard: spectrum + constellation + RMS/peak.
     /// Emitted ~5 times per second so spectrum/constellation/waterfall feel fluid.
     /// Cheap to compute (FFT + magnitude). Constellation symbol recovery is the

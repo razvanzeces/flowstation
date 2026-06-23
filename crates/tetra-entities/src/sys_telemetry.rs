@@ -160,7 +160,9 @@ fn probe_vcgencmd() -> bool {
 /// rail and return the sum of W as the system total.
 fn read_pmic(out: &mut Vec<SysSensor>) -> Option<f32> {
     let result = Command::new("vcgencmd").arg("pmic_read_adc").output().ok()?;
-    if !result.status.success() { return None; }
+    if !result.status.success() {
+        return None;
+    }
     let text = String::from_utf8_lossy(&result.stdout);
 
     use std::collections::HashMap;
@@ -170,7 +172,9 @@ fn read_pmic(out: &mut Vec<SysSensor>) -> Option<f32> {
     // Parser is forgiving: any line matching "<NAME>_<A|V> <something>=<value><unit>"
     // contributes. Anything else is ignored.
     for line in text.lines() {
-        let Some((name, value)) = parse_pmic_line(line) else { continue; };
+        let Some((name, value)) = parse_pmic_line(line) else {
+            continue;
+        };
         if let Some(prefix) = name.strip_suffix("_A") {
             currents.insert(prefix.to_string(), value);
         } else if let Some(prefix) = name.strip_suffix("_V") {
@@ -181,14 +185,20 @@ fn read_pmic(out: &mut Vec<SysSensor>) -> Option<f32> {
     // Stable presentation order: most-interesting rails first so the badge
     // and tab both show the SoC power before peripheral rails.
     const RAIL_ORDER: &[&str] = &[
-        "VDD_CORE",          // ARM cores — biggest single consumer
-        "EXT5V",             // external 5V — voltage-only (no current measured)
-        "1V8_SYS", "3V3_SYS", "1V1_SYS",   // SoC supplies
-        "0V8_SW", "0V8_AON",                // switched and always-on
-        "DDR_VDD2", "DDR_VDDQ",             // memory
-        "3V7_WL_SW",                        // WiFi/BT
-        "3V3_DAC", "3V3_ADC",               // audio
-        "HDMI", "BATT",                     // peripherals
+        "VDD_CORE", // ARM cores — biggest single consumer
+        "EXT5V",    // external 5V — voltage-only (no current measured)
+        "1V8_SYS",
+        "3V3_SYS",
+        "1V1_SYS", // SoC supplies
+        "0V8_SW",
+        "0V8_AON", // switched and always-on
+        "DDR_VDD2",
+        "DDR_VDDQ",  // memory
+        "3V7_WL_SW", // WiFi/BT
+        "3V3_DAC",
+        "3V3_ADC", // audio
+        "HDMI",
+        "BATT", // peripherals
     ];
 
     // Build the ordered key list. Anything that appears in voltages or currents
@@ -198,7 +208,9 @@ fn read_pmic(out: &mut Vec<SysSensor>) -> Option<f32> {
         .map(|s| s.to_string())
         .filter(|s| voltages.contains_key(s) || currents.contains_key(s))
         .collect();
-    let mut extras: Vec<String> = voltages.keys().chain(currents.keys())
+    let mut extras: Vec<String> = voltages
+        .keys()
+        .chain(currents.keys())
         .cloned()
         .filter(|k| !RAIL_ORDER.contains(&k.as_str()))
         .collect();
@@ -251,7 +263,8 @@ fn parse_pmic_line(line: &str) -> Option<(String, f32)> {
     let name = lhs.split_whitespace().next()?.to_string();
     // rhs ends with 'A' or 'V' (the unit char). Trim it.
     let value_str = rhs.trim();
-    let value_str = value_str.strip_suffix('A')
+    let value_str = value_str
+        .strip_suffix('A')
         .or_else(|| value_str.strip_suffix('V'))
         .unwrap_or(value_str);
     let value: f32 = value_str.parse().ok()?;
@@ -271,7 +284,9 @@ fn parse_pmic_line(line: &str) -> Option<(String, f32)> {
 ///   powerN_input   → microwatts
 ///   <prefix>N_label → human-readable label for that channel
 fn scan_hwmon(out: &mut Vec<SysSensor>) {
-    let Ok(dir) = fs::read_dir("/sys/class/hwmon") else { return; };
+    let Ok(dir) = fs::read_dir("/sys/class/hwmon") else {
+        return;
+    };
     for entry in dir.flatten() {
         let path = entry.path();
         let chip_name = read_string_file(&path.join("name")).unwrap_or_else(|| "hwmon".into());
@@ -280,21 +295,22 @@ fn scan_hwmon(out: &mut Vec<SysSensor>) {
 }
 
 fn scan_hwmon_chip(path: &Path, chip_name: &str, out: &mut Vec<SysSensor>) {
-    let Ok(entries) = fs::read_dir(path) else { return; };
-    let names: Vec<String> = entries
-        .flatten()
-        .filter_map(|e| e.file_name().to_str().map(String::from))
-        .collect();
+    let Ok(entries) = fs::read_dir(path) else {
+        return;
+    };
+    let names: Vec<String> = entries.flatten().filter_map(|e| e.file_name().to_str().map(String::from)).collect();
 
     for name in &names {
-        let Some(stripped) = name.strip_suffix("_input") else { continue; };
+        let Some(stripped) = name.strip_suffix("_input") else {
+            continue;
+        };
         let (prefix, channel) = split_prefix_channel(stripped);
 
         let (kind, scale) = match prefix {
-            "temp"  => (SysSensorKind::Temperature, 1.0 / 1000.0),
-            "in"    => (SysSensorKind::Voltage,     1.0 / 1000.0),
-            "curr"  => (SysSensorKind::Current,     1.0 / 1000.0),
-            "power" => (SysSensorKind::Power,       1.0 / 1_000_000.0),
+            "temp" => (SysSensorKind::Temperature, 1.0 / 1000.0),
+            "in" => (SysSensorKind::Voltage, 1.0 / 1000.0),
+            "curr" => (SysSensorKind::Current, 1.0 / 1000.0),
+            "power" => (SysSensorKind::Power, 1.0 / 1_000_000.0),
             _ => continue,
         };
 
@@ -335,7 +351,9 @@ fn read_rapl_uj() -> Option<u64> {
 
 fn scan_power_supplies() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(dir) = fs::read_dir("/sys/class/power_supply") else { return out; };
+    let Ok(dir) = fs::read_dir("/sys/class/power_supply") else {
+        return out;
+    };
     for entry in dir.flatten() {
         let path = entry.path();
         if let Some(t) = read_string_file(&path.join("type")) {
@@ -352,7 +370,9 @@ fn scan_power_supplies() -> Vec<PathBuf> {
 // ─────────────────────────────────────────────────────────────────────────
 
 fn scan_nvme_temps(out: &mut Vec<SysSensor>) {
-    let Ok(dir) = fs::read_dir("/sys/class/nvme") else { return; };
+    let Ok(dir) = fs::read_dir("/sys/class/nvme") else {
+        return;
+    };
     for entry in dir.flatten() {
         let nvme_name = entry.file_name().to_string_lossy().into_owned();
         let candidates = [
@@ -398,7 +418,12 @@ pub fn cpu_temp_c() -> Option<f32> {
         .iter()
         .find(|(k, _)| k.contains("cpu") || k.contains("soc") || k.contains("pkg") || k.contains("x86"))
         .map(|(_, t)| *t)
-        .or_else(|| readings.iter().map(|(_, t)| *t).fold(None, |m, t| Some(m.map_or(t, |x: f32| x.max(t)))))
+        .or_else(|| {
+            readings
+                .iter()
+                .map(|(_, t)| *t)
+                .fold(None, |m, t| Some(m.map_or(t, |x: f32| x.max(t))))
+        })
 }
 
 /// Best-effort primary (outbound) host IPv4 address, for the U-STATUS info responder. Uses the
@@ -416,11 +441,15 @@ pub fn primary_ip() -> Option<String> {
 }
 
 fn scan_thermal_zones(out: &mut Vec<SysSensor>) {
-    let Ok(dir) = fs::read_dir("/sys/class/thermal") else { return; };
+    let Ok(dir) = fs::read_dir("/sys/class/thermal") else {
+        return;
+    };
     for entry in dir.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if !name_str.starts_with("thermal_zone") { continue; }
+        if !name_str.starts_with("thermal_zone") {
+            continue;
+        }
         let path = entry.path();
         let zone_type = read_string_file(&path.join("type")).unwrap_or_else(|| name_str.to_string());
         if let Some(millideg) = read_int_file(&path.join("temp")) {

@@ -101,7 +101,7 @@ impl ComponentTest {
                     self.register_entity(lmac);
                 }
                 TetraEntity::Umac => {
-                    let mut umac = UmacBs::new(self.config.clone());
+                    let mut umac = UmacBs::new(self.config.clone(), None);
                     // Prepare channel scheduler for next tick_start
                     umac.channel_scheduler.set_dl_time(self.start_dl_time.add_timeslots(-1));
                     self.router.register_entity(Box::new(umac));
