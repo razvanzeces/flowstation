@@ -21,7 +21,6 @@ html,body{height:100%;overflow:hidden;}
   --accent2: #4da6ff;
   --warn:    #ffb224;
   --danger:  #ff4d6d;
-  --ok:      #30d158;   /* premium status-OK green (health/integration cards) */
   --text:    #eef3fb;
   --text2:   #94abc9;
   --text3:   #4c628a;
@@ -30,24 +29,49 @@ html,body{height:100%;overflow:hidden;}
   --sidebar-border: #161d2c;
   --card-shadow: 0 1px 3px rgba(0,0,0,0.4);
   --r: 10px;
+
+  /* ── Design-system v3 "Instrument" tokens (single source of truth) ──
+     Semantic + structural tokens consumed by the reusable component classes
+     (.hero/.card/.pill/.gauge/.group-list/.field/.btn/.banner/.sheet …).
+     Define them HERE so nothing references them before they exist. */
+  --ok:    #2ec6a6;                         /* canonical "healthy" green — replaces every #3fb950 */
+  --info:  var(--accent2);                  /* neutral / idle accent */
+  --sep:   rgba(255,255,255,0.07);          /* hairline divider (inset from leading edge) */
+  --hair:  inset 0 1px 0 rgba(255,255,255,0.05);   /* top inner-highlight (was defined far below first use) */
+  --mat:   color-mix(in srgb, var(--bg2) 82%, transparent);   /* translucent material for sidebar/sheets/popovers */
+  --elev-1: 0 1px 2px rgba(0,0,0,.18), 0 8px 24px -12px rgba(0,0,0,.28);  /* the ONE card shadow */
+  --r-card: 12px;
+  --r-ctrl: 8px;
+  --r-pill: 999px;
+  --r-chip: 6px;
+
   --mono: 'ui-monospace','Cascadia Code','Consolas','Liberation Mono','Menlo',monospace;
   --sans: 'ui-sans-serif', system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'WenQuanYi Micro Hei', sans-serif;
 }
 [data-theme="light"]{
   --bg:#eceff4;--bg2:#ffffff;--bg3:#e6eaf1;--bg4:#d6dde7;
   --border:#dde3ec;--border2:#c4cdd9;
-  --accent:#00876a;--accent2:#1565c0;--warn:#9a5400;--danger:#c0203a;--ok:#2ea043;
+  --accent:#00876a;--accent2:#1565c0;--warn:#9a5400;--danger:#c0203a;
   --text:#16202e;--text2:#3d4f66;--text3:#5f7188;
   --sidebar:#ffffff;--sidebar-border:#e3e8ef;
   --card-shadow:0 1px 3px rgba(20,30,50,0.06),0 4px 16px -8px rgba(20,30,50,0.10);
+  --ok:#16876b;--info:var(--accent2);
+  --sep:rgba(20,30,50,0.09);
+  --hair: inset 0 1px 0 rgba(255,255,255,0.7);
+  --mat: color-mix(in srgb, var(--bg2) 82%, transparent);
+  --elev-1: 0 1px 2px rgba(20,30,50,.05), 0 10px 30px -16px rgba(20,30,50,.12);
 }
 [data-theme="blue"]{
   --bg:#03071e;--bg2:#060d2a;--bg3:#091235;--bg4:#0d1840;
   --border:#112060;--border2:#1a2e7a;
-  --accent:#00f5d4;--accent2:#60b8ff;--warn:#ffc947;--danger:#ff5577;--ok:#30d158;
+  --accent:#00f5d4;--accent2:#60b8ff;--warn:#ffc947;--danger:#ff5577;
   --text:#deeeff;--text2:#7ab0e0;--text3:#1a3a60;
   --sidebar:#020514;--sidebar-border:#0c1840;
   --card-shadow:0 1px 3px rgba(0,0,200,0.15);
+  --ok:#00f5d4;--info:var(--accent2);
+  --sep:rgba(120,180,255,0.10);
+  --mat: color-mix(in srgb, var(--bg2) 82%, transparent);
+  --elev-1: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px -12px rgba(0,0,200,.30);
 }
 
 /* ── Readability scale (eye control) ──────────────────────────────────────────
@@ -889,6 +913,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   display:block;
 }
 .rf-canvas.small{height:260px;}
+.rf-canvas.tall{height:320px;}
 
 @media(max-width:900px){
   .rf-grid{grid-template-columns:1fr;}
@@ -939,12 +964,13 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   transition:width 0.4s ease, background 0.3s;
   border-radius:2px;
 }
-/* Status colouring is driven by JS via these classes */
-.rf-q-good .rf-qmetric-fill{background:var(--accent);}
-.rf-q-warn .rf-qmetric-fill{background:#f5a623;}
+/* Status colouring is driven by JS via these classes (now drives the value text;
+   the meter itself is the shared .gauge with is-warn/is-danger). */
+.rf-q-good .rf-qmetric-fill{background:var(--ok);}
+.rf-q-warn .rf-qmetric-fill{background:var(--warn);}
 .rf-q-bad  .rf-qmetric-fill{background:var(--danger);}
-.rf-q-good .rf-qmetric-value{color:var(--accent);}
-.rf-q-warn .rf-qmetric-value{color:#f5a623;}
+.rf-q-good .rf-qmetric-value{color:var(--ok);}
+.rf-q-warn .rf-qmetric-value{color:var(--warn);}
 .rf-q-bad  .rf-qmetric-value{color:var(--danger);}
 
 /* ── Hardware health card ────────────────────────────────────────────── */
@@ -967,8 +993,8 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   letter-spacing:0.08em;text-transform:uppercase;
 }
 .rf-hw-temp-state.cold{color:var(--accent2);}
-.rf-hw-temp-state.nominal{color:var(--accent);}
-.rf-hw-temp-state.warm{color:#f5a623;}
+.rf-hw-temp-state.nominal{color:var(--ok);}
+.rf-hw-temp-state.warm{color:var(--warn);}
 .rf-hw-temp-state.hot{color:var(--danger);}
 .rf-hw-gain-block{
   background:var(--bg);border:1px solid var(--border);border-radius:6px;
@@ -1000,8 +1026,8 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 }
 .config-msg{padding:8px 16px;font-family:var(--mono);font-size:12px;border-top:1px solid var(--border);min-height:34px;}
 
-/* ── Empty state ── */
-.empty-state{text-align:center;padding:48px 20px;}
+/* ── Empty state (legacy children; the .empty-state container itself is the
+   v3 flex component defined in the design-system block below) ── */
 .empty-icon{font-size:32px;margin-bottom:10px;opacity:0.3;}
 .empty-text{font-size:13px;color:var(--text3);}
 
@@ -1328,13 +1354,12 @@ tbody td{transition:background .12s ease;}
    ════════════════════════════════════════════════════════════════════════ */
 :root{
   --brand: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
-  --hair:  inset 0 1px 0 rgba(255,255,255,0.05);
+  /* --hair now lives in the v3 token block at :root (defined before first use). */
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.45);
   --shadow-md: 0 10px 28px -14px rgba(0,0,0,0.65), 0 2px 6px rgba(0,0,0,0.32);
   --shadow-lg: 0 28px 64px -22px rgba(0,0,0,0.72), 0 6px 18px rgba(0,0,0,0.42);
   --glass: color-mix(in srgb, var(--bg2) 76%, transparent);
 }
-[data-theme="light"]{--hair: inset 0 1px 0 rgba(255,255,255,0.7);}
 
 /* Ambient backdrop — faint brand glows bleed in from the corners behind the
    content, giving the shell a sense of depth without distracting from data. */
@@ -1358,10 +1383,6 @@ body{
   box-shadow:1px 0 0 rgba(255,255,255,0.02), 8px 0 24px -16px rgba(0,0,0,0.6);
 }
 .sidebar-logo{padding-top:20px;padding-bottom:16px;}
-.logo-icon{
-  box-shadow:0 4px 14px -4px color-mix(in srgb,var(--accent) 60%, transparent), var(--hair);
-  border:1px solid color-mix(in srgb,var(--accent) 35%, transparent);
-}
 .logo-text .logo-name{font-weight:800;letter-spacing:0.01em;}
 
 /* ── Nav items: signature active treatment (left accent bar + soft wash) ── */
@@ -1456,6 +1477,306 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 /* ── Scrollbar thumb: brand-tinted on hover ── */
 ::-webkit-scrollbar-thumb{background:var(--border2);}
 ::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--accent) 40%, var(--border2));}
+
+/* ════════════════════════════════════════════════════════════════════════
+   DESIGN-SYSTEM v3 "INSTRUMENT" — reusable component library.
+   Defined ONCE here so the Tabs phase can apply these classes across every tab.
+   Everything maps to tokens (no hardcoded hex). This is the SINGLE source of
+   truth; the Health-tab premium look is generalized into these classes.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Section group label (Caption-2 above a card cluster) ── */
+.section-label{
+  font-size:12px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;
+  color:var(--text3);margin:0 2px 10px;
+}
+.section-label + .section-label{margin-top:4px;}
+
+/* ── Inline SVG icon sizing — any svg dropped into a slot reads as 1em-ish ── */
+.nav-icon svg,.btn-icon svg,.pill-icon svg,.hero-ico svg,.chip svg,
+.empty-ico svg,.banner-ico svg,.sheet-close svg,.section-act svg,.ico18 svg{
+  display:block;width:100%;height:100%;
+}
+/* Generic 18px square icon holder for chrome buttons (hamburger/logout/toggle). */
+.ico18{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;color:inherit;}
+
+/* ── Status pills — unified severity language (leading dot) ───────────────
+   Variants drive from --ok/--warn/--danger/--info/--text3. Tinted fill +
+   matching low-alpha border, mono tabular, 10/600. */
+.pill{
+  --pc:var(--text3);
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:0.02em;
+  line-height:1;padding:4px 9px;border-radius:var(--r-pill);
+  color:var(--pc);
+  background:color-mix(in srgb,var(--pc) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--pc) 32%,transparent);
+  font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:middle;
+}
+.pill::before{
+  content:"";flex-shrink:0;width:6px;height:6px;border-radius:50%;
+  background:var(--pc);
+}
+.pill.no-dot::before{display:none;}
+.pill-icon{flex-shrink:0;width:13px;height:13px;}
+.pill-ok    {--pc:var(--ok);}
+.pill-warn  {--pc:var(--warn);}
+.pill-danger{--pc:var(--danger);}
+.pill-info  {--pc:var(--accent2);}
+.pill-idle  {--pc:var(--text3);}
+
+/* ── Hero status banner (generalized from the Health hero) ── */
+.hero{
+  display:flex;align-items:center;gap:16px;
+  padding:18px 20px;margin-bottom:22px;
+  background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--r-card);box-shadow:var(--elev-1);
+}
+.hero-dot{
+  --pc:var(--text3);
+  width:10px;height:10px;flex:0 0 auto;border-radius:50%;
+  background:var(--pc);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--pc) 16%,transparent);
+}
+.hero-dot.is-ok{--pc:var(--ok);}
+.hero-dot.is-warn{--pc:var(--warn);}
+.hero-dot.is-danger{--pc:var(--danger);}
+.hero-dot.is-idle{--pc:var(--text3);}
+.hero-main{flex:1;min-width:0;}
+.hero-title{font-size:15px;font-weight:600;color:var(--text);letter-spacing:-0.01em;}
+.hero-sub{font-size:12px;font-weight:400;color:var(--text2);margin-top:3px;}
+.hero-metrics{display:flex;align-items:center;gap:22px;flex-shrink:0;}
+.hero-metric{display:flex;flex-direction:column;gap:2px;text-align:right;}
+.hero-metric-label{font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--text3);}
+.hero-metric-value{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;}
+
+/* ── Horizontal gauge — track + fill + trailing tabular value ── */
+.gauge{display:flex;align-items:center;gap:10px;min-width:0;}
+.gauge-track{
+  flex:1;height:4px;min-width:40px;border-radius:var(--r-pill);
+  background:var(--bg4);overflow:hidden;
+}
+.gauge-fill{
+  height:100%;width:0%;border-radius:var(--r-pill);
+  background:var(--ok);
+  transition:width .35s ease, background .25s ease;
+}
+.gauge.is-warn   .gauge-fill{background:var(--warn);}
+.gauge.is-danger .gauge-fill{background:var(--danger);}
+.gauge.is-info   .gauge-fill{background:var(--accent2);}
+.gauge.is-idle   .gauge-fill{background:var(--text3);}
+.gauge-value{
+  font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text2);
+  font-variant-numeric:tabular-nums;flex-shrink:0;min-width:42px;text-align:right;
+}
+
+/* ── macOS inset list (.group-list) + .field rows ── */
+.group-list{
+  display:flex;flex-direction:column;
+  background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--r-card);overflow:hidden;
+}
+.field{
+  display:flex;align-items:center;gap:14px;min-height:44px;
+  padding:10px 16px;position:relative;
+}
+.field + .field::before{
+  content:"";position:absolute;left:16px;right:0;top:0;height:1px;
+  background:var(--sep);
+}
+.field-label{
+  flex:0 0 auto;font-size:13px;font-weight:400;color:var(--text);
+}
+.field-control{
+  margin-left:auto;display:flex;align-items:center;gap:8px;
+  font-size:13px;font-weight:500;color:var(--text2);
+  font-variant-numeric:tabular-nums;text-align:right;min-width:0;
+}
+.field-hint{
+  flex-basis:100%;font-size:11px;font-weight:400;color:var(--text3);
+  margin-top:2px;
+}
+.field-status{
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:11px;font-weight:500;color:var(--text3);
+  opacity:0;transition:opacity .2s ease;
+}
+.field-status.show{opacity:1;}
+.field-status.ok{color:var(--ok);}
+.field-status.err{color:var(--danger);}
+.field-status svg{width:13px;height:13px;}
+
+/* ── Button leading-icon slot (glyphs split out of i18n strings) ── */
+.btn-icon{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:15px;height:15px;flex-shrink:0;margin-right:7px;margin-left:-2px;
+  vertical-align:-2px;
+}
+.btn .btn-icon{vertical-align:middle;}
+/* Destructive action group, separated from benign Save by a hairline. */
+.btn-group{display:inline-flex;align-items:center;gap:8px;}
+.btn-group.danger-group{
+  padding-left:12px;margin-left:4px;
+  border-left:1px solid var(--sep);
+}
+
+/* ── Calm banners (replace inline #fallback-banner / #emergency-banner) ── */
+.banner{
+  display:flex;align-items:center;gap:12px;flex-shrink:0;
+  padding:11px 18px;font-size:13px;font-weight:600;
+  color:var(--text);
+  background:color-mix(in srgb,var(--accent2) 12%,var(--bg2));
+  border-bottom:1px solid color-mix(in srgb,var(--accent2) 30%,transparent);
+}
+.banner-ico{width:18px;height:18px;flex-shrink:0;color:var(--accent2);}
+.banner-body{flex:1;min-width:0;}
+.banner-sub{font-size:11px;font-weight:400;color:var(--text2);margin-top:2px;}
+.banner-act{margin-left:auto;}
+.banner-warn{
+  background:color-mix(in srgb,var(--warn) 13%,var(--bg2));
+  border-bottom-color:color-mix(in srgb,var(--warn) 32%,transparent);
+}
+.banner-warn .banner-ico{color:var(--warn);}
+.banner-danger{
+  background:color-mix(in srgb,var(--danger) 13%,var(--bg2));
+  border-bottom-color:color-mix(in srgb,var(--danger) 34%,transparent);
+}
+.banner-danger .banner-ico{color:var(--danger);}
+/* Steady danger dot for emergency — soft breathe, never a harsh flash. */
+.banner-danger .banner-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--danger);flex-shrink:0;
+  animation:fs-breathe 2.5s ease-in-out infinite;
+}
+@keyframes fs-breathe{0%,100%{opacity:1;}50%{opacity:.45;}}
+
+/* ── Empty state (one component for the duplicated stubs) ──
+   v3 flex layout; keeps the legacy .empty-icon/.empty-text children working
+   (centered column) while the Tabs phase migrates them to .empty-ico/.empty-msg. */
+.empty-state{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;padding:40px 24px;text-align:center;color:var(--text3);
+}
+.empty-ico{width:34px;height:34px;color:var(--text3);opacity:.7;}
+.empty-msg{font-size:13px;font-weight:500;color:var(--text2);}
+.empty-sub{font-size:12px;font-weight:400;color:var(--text3);max-width:340px;}
+
+/* ── Unified sheet/modal (collapses .modal-overlay + .wifi-modal) ── */
+.sheet-overlay{
+  position:fixed;inset:0;z-index:1000;
+  display:none;align-items:center;justify-content:center;padding:24px;
+  background:rgba(0,0,0,.42);
+  -webkit-backdrop-filter:blur(24px) saturate(1.3);
+  backdrop-filter:blur(24px) saturate(1.3);
+}
+.sheet-overlay.open{display:flex;}
+.sheet{
+  width:100%;max-width:460px;max-height:88vh;overflow:auto;
+  background:var(--mat);border:1px solid var(--border2);
+  border-radius:var(--r-card);box-shadow:var(--shadow-lg),var(--hair);
+  -webkit-backdrop-filter:blur(24px) saturate(1.3);
+  backdrop-filter:blur(24px) saturate(1.3);
+}
+.sheet-head{
+  display:flex;align-items:center;gap:12px;
+  padding:16px 18px;border-bottom:1px solid var(--sep);
+}
+.sheet-title{font-size:15px;font-weight:600;color:var(--text);flex:1;letter-spacing:-0.01em;}
+.sheet-close{
+  width:28px;height:28px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  border-radius:var(--r-ctrl);border:1px solid transparent;
+  background:transparent;color:var(--text3);cursor:pointer;transition:all .15s;
+}
+.sheet-close:hover{background:var(--bg3);color:var(--text);}
+.sheet-close svg{width:16px;height:16px;}
+.sheet-body{padding:18px;}
+
+/* ── Ghost SVG stat-icon: the .stat-icon slot now hosts a faint inline SVG
+   (was an emoji glyph). Auto-themes via currentColor, sits at low opacity. ── */
+.stat-icon svg{display:block;width:30px;height:30px;color:var(--text);}
+.stat-icon:has(svg){font-size:0;line-height:0;}
+/* Text-valued stat cards (RF / Network / BREW) — smaller value, state tint
+   via ONE class instead of inline font-size + JS color hacks. */
+.stat-value.is-text{font-size:18px;letter-spacing:-0.01em;}
+.stat-card.is-ok    .stat-value.is-text{color:var(--ok);}
+.stat-card.is-ok::before    {--accent-line:var(--ok);}
+.stat-card.is-info  .stat-value.is-text{color:var(--accent2);}
+.stat-card.is-info::before  {--accent-line:var(--accent2);}
+.stat-card.is-warn  .stat-value.is-text{color:var(--warn);}
+.stat-card.is-warn::before  {--accent-line:var(--warn);}
+.stat-card.is-danger .stat-value.is-text{color:var(--danger);}
+.stat-card.is-danger::before{--accent-line:var(--danger);}
+.stat-card.is-idle  .stat-value.is-text{color:var(--text3);}
+.stat-card.is-idle::before  {--accent-line:var(--text3);}
+
+/* Tabular numeric cell + muted placeholder for tables (instrument feel). */
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px;color:var(--text2);}
+.num.accent{color:var(--accent2);font-weight:600;}
+.muted{color:var(--text3);}
+
+/* Filled selection-triangle marker (▶ replacement) inside a TG pill. */
+.tg-marker{display:inline-flex;align-items:center;width:9px;height:9px;margin-right:2px;}
+.tg-marker svg{width:100%;height:100%;display:block;}
+
+/* Soften the emergency table badge: steady fill + a calm 2.5s breathe
+   (no harsh expanding ring). Matches the emergency BANNER's fs-breathe. */
+.badge-emergency{animation:fs-breathe 2.5s ease-in-out infinite;}
+
+/* ── Numbered steps list (Telegram setup howto) ── */
+.steps{display:flex;flex-direction:column;gap:0;counter-reset:fs-step;}
+.step{
+  display:flex;align-items:flex-start;gap:13px;padding:11px 2px;position:relative;
+  font-size:13px;color:var(--text);line-height:1.55;
+}
+.step + .step::before{
+  content:"";position:absolute;left:32px;right:0;top:0;height:1px;background:var(--sep);
+}
+.step-num{
+  counter-increment:fs-step;flex:0 0 auto;
+  width:22px;height:22px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+  color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--accent) 34%,transparent);
+}
+.step-num::before{content:counter(fs-step);}
+.step-body{flex:1;min-width:0;padding-top:1px;}
+
+/* ── Styled terminal block (SoapySDR probe dump, etc.) ── */
+.terminal{
+  margin:0;padding:13px 15px;
+  background:var(--bg);border:1px solid var(--border);border-radius:var(--r-ctrl);
+  box-shadow:var(--hair);
+  font-family:var(--mono);font-size:11px;line-height:1.6;
+  color:var(--text2);white-space:pre-wrap;word-break:break-all;
+  max-height:340px;overflow:auto;font-variant-numeric:tabular-nums;
+}
+
+/* ── Big-Sur inset nav selection pill + SVG nav-icon slot ──────────────────
+   Re-skins the existing .nav-item.active (overriding the polish v2 left-bar)
+   to the System-Settings inset pill: accent-tinted fill + soft radius.
+   The .nav-icon slot becomes an 18px square SVG holder (was an emoji glyph). */
+.nav-icon{
+  width:18px;height:18px;font-size:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  flex-shrink:0;color:inherit;text-align:center;
+}
+.nav-item.active{
+  background:color-mix(in srgb,var(--accent) 12%,transparent);
+  border-color:transparent;
+  box-shadow:none;
+  color:var(--accent);
+}
+[data-theme="light"] .nav-item.active{
+  background:color-mix(in srgb,var(--accent) 10%,transparent);
+  border-color:transparent;box-shadow:none;
+}
+/* Keep the signature accent glow on the active icon (per nav spec). */
+.nav-item.active .nav-icon{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--accent) 55%,transparent));}
+
+/* ── Header status chips (BS / Brew / Emergency) — calm .pill in the topbar ── */
+.topbar-chips{display:flex;align-items:center;gap:8px;}
+@media(max-width:760px){.topbar-chips{display:none;}}
 
 /* ════ TETRA BTS Details card ════ */
 .bts-grid{
@@ -1872,68 +2193,73 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
        title="Click to update"></div>
 
   <div class="sidebar-nav">
+    <!-- MONITOR — live, read-mostly surfaces (ordered by glance-frequency). -->
     <div class="nav-section-label" data-i18n-section="monitor">MONITOR</div>
     <div class="nav-item active" onclick="showPage('stations',this)" id="nav-stations">
-      <span class="nav-icon">📡</span>
+      <span class="nav-icon" data-icon="radios"></span>
       <span class="nav-label" data-i18n="stations">RADIOS</span>
       <span class="nav-badge" id="badge-ms">0</span>
     </div>
     <div class="nav-item" onclick="showPage('calls',this)" id="nav-calls">
-      <span class="nav-icon">☎</span>
+      <span class="nav-icon" data-icon="calls"></span>
       <span class="nav-label" data-i18n="calls">CALLS</span>
       <span class="nav-badge" id="badge-calls" style="display:none">0</span>
     </div>
     <div class="nav-item" onclick="showPage('lastheard',this)" id="nav-lastheard">
-      <span class="nav-icon">🎙</span>
+      <span class="nav-icon" data-icon="lastheard"></span>
       <span class="nav-label" data-i18n="lastheard">LAST HEARD</span>
     </div>
-    <div class="nav-item" onclick="showPage('log',this)" id="nav-log">
-      <span class="nav-icon">📋</span>
-      <span class="nav-label" data-i18n="log">LOG</span>
-    </div>
-    <div class="nav-item" onclick="showPage('sdslog',this)" id="nav-sdslog">
-      <span class="nav-icon">✉</span>
-      <span class="nav-label" data-i18n="sdslog">SDS LOG</span>
-    </div>
     <div class="nav-item" onclick="showPage('rf',this)" id="nav-rf">
-      <span class="nav-icon">⚡</span>
+      <span class="nav-icon" data-icon="rf"></span>
       <span class="nav-label" data-i18n="rf">RF</span>
     </div>
     <div class="nav-item" onclick="showPage('health',this)" id="nav-health">
-      <span class="nav-icon">🩺</span>
+      <span class="nav-icon" data-icon="health"></span>
       <span class="nav-label">HEALTH</span>
     </div>
+    <div class="nav-item" onclick="showPage('log',this)" id="nav-log">
+      <span class="nav-icon" data-icon="log"></span>
+      <span class="nav-label" data-i18n="log">LOG</span>
+    </div>
+    <div class="nav-item" onclick="showPage('sdslog',this)" id="nav-sdslog">
+      <span class="nav-icon" data-icon="sdslog"></span>
+      <span class="nav-label" data-i18n="sdslog">SDS LOG</span>
+    </div>
 
-    <div class="nav-section-label" data-i18n-section="manage">MANAGE</div>
+    <!-- INTEGRATIONS — external services (each hidden until its probe succeeds). -->
+    <div class="nav-section-label" data-i18n-section="integrations">INTEGRATIONS</div>
     <div class="nav-item" onclick="showPage('asterisk',this)" id="nav-asterisk">
-      <span class="nav-icon">☎</span>
+      <span class="nav-icon" data-icon="asterisk"></span>
       <span class="nav-label" data-i18n="asterisk">Asterisk SIP</span>
     </div>
     <div class="nav-item" onclick="showPage('dapnet',this)" id="nav-dapnet">
-      <span class="nav-icon">📟</span>
+      <span class="nav-icon" data-icon="dapnet"></span>
       <span class="nav-label" data-i18n="dapnet">DAPNET</span>
     </div>
     <div class="nav-item" onclick="showPage('geoalarm',this)" id="nav-geoalarm">
-      <span class="nav-icon">◎</span>
+      <span class="nav-icon" data-icon="geoalarm"></span>
       <span class="nav-label" data-i18n="geoalarm">GeoAlarm</span>
     </div>
-    <div class="nav-item" onclick="showPage('config',this)" id="nav-config">
-      <span class="nav-icon">⚙</span>
-      <span class="nav-label" data-i18n="config">CONFIG</span>
-    </div>
     <div class="nav-item" onclick="showPage('telegram',this)" id="nav-telegram">
-      <span class="nav-icon">✈</span>
+      <span class="nav-icon" data-icon="telegram"></span>
       <span class="nav-label" data-i18n="telegram">Telegram</span>
     </div>
     <!-- WiFi tab is hidden until we confirm NetworkManager is available on
          the host. The probe runs once at dashboard boot via /api/wifi/available
          and toggles this element's display. -->
     <div class="nav-item" onclick="showPage('wifi',this)" id="nav-wifi" style="display:none">
-      <span class="nav-icon">📶</span>
+      <span class="nav-icon" data-icon="wifi"></span>
       <span class="nav-label" data-i18n="wifi">WIFI</span>
     </div>
+
+    <!-- SYSTEM — configure / operate the station. -->
+    <div class="nav-section-label" data-i18n-section="system_sec">SYSTEM</div>
+    <div class="nav-item" onclick="showPage('config',this)" id="nav-config">
+      <span class="nav-icon" data-icon="config"></span>
+      <span class="nav-label" data-i18n="config">CONFIG</span>
+    </div>
     <div class="nav-item" onclick="showPage('system',this)" id="nav-system">
-      <span class="nav-icon">🖥</span>
+      <span class="nav-icon" data-icon="system"></span>
       <span class="nav-label" data-i18n="system">SYSTEM</span>
     </div>
   </div>
@@ -1962,7 +2288,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <div class="cr-line" id="cr-ua">—</div>
     </div>
     <!-- Collapse toggle -->
-    <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">⇔</button>
+    <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" aria-label="Toggle sidebar"><span class="ico18" data-icon="collapse"></span></button>
   </div>
 </nav>
 
@@ -1970,8 +2296,17 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 <div id="main">
   <!-- Topbar -->
   <div id="topbar">
-    <button id="sidebar-toggle-btn" onclick="openMobileSidebar()">☰</button>
+    <button id="sidebar-toggle-btn" onclick="openMobileSidebar()" aria-label="Menu"><span class="ico18" data-icon="hamburger"></span></button>
     <div class="topbar-title" id="topbar-title">Radios</div>
+
+    <!-- Calm always-visible station-state chips (BS / Brew / Emergency-if-active). -->
+    <div class="topbar-chips" aria-hidden="false">
+      <span class="pill pill-idle" id="chip-bs" title="Base station link"><span data-i18n="bs_label">BS</span></span>
+      <span class="pill pill-idle" id="chip-brew" title="Brew network"><span>Brew</span></span>
+      <span class="pill pill-danger" id="chip-emergency" style="display:none" title="Emergency active">
+        <span class="pill-icon" data-icon="emergency"></span><span data-i18n="emg_chip">EMERGENCY</span>
+      </span>
+    </div>
 
     <div class="topbar-right">
       <!-- Readability: opens an Apple-style level popover (Small/Medium/High/Ultra). -->
@@ -2038,24 +2373,26 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <button class="lang-btn" onclick="setLang('zh',this)">CN</button>
       </div>
       <!-- Logout: clears session cookie and redirects to /login. Hidden when auth is off. -->
-      <button class="logout-btn" id="logout-btn" onclick="doLogout()" title="Log out" style="display:none">⏻</button>
+      <button class="logout-btn" id="logout-btn" onclick="doLogout()" title="Log out" aria-label="Log out" style="display:none"><span class="ico18" data-icon="shutdown"></span></button>
       <!-- Login: shown only in anonymous public-overview mode (FH-FEAT-033). -->
-      <button class="logout-btn" id="login-btn" onclick="window.location='/login'" title="Log in" style="display:none">🔑</button>
+      <button class="logout-btn" id="login-btn" onclick="window.location='/login'" title="Log in" aria-label="Log in" style="display:none"><span class="ico18" data-icon="login"></span></button>
     </div>
   </div>
 
   <!-- Fallback config warning banner — hidden until JS shows it -->
-  <div id="fallback-banner" style="display:none;background:var(--danger);color:#fff;padding:10px 18px;font-size:13px;font-weight:600;align-items:center;gap:10px;flex-shrink:0">
-    <span style="font-size:18px">⚠️</span>
-    <div>
+  <div id="fallback-banner" class="banner banner-warn" style="display:none">
+    <span class="banner-ico" data-icon="alert"></span>
+    <div class="banner-body">
       <div data-i18n="fallback_title">FALLBACK CONFIG ACTIVE — Primary config failed to load</div>
-      <div id="fallback-reason" style="font-size:11px;font-weight:400;opacity:0.85;margin-top:2px"></div>
+      <div id="fallback-reason" class="banner-sub"></div>
     </div>
   </div>
 
-  <!-- Emergency banner — persistent while >=1 ISSI is in active emergency; populated by JS. -->
-  <div id="emergency-banner" style="display:none;background:var(--danger);color:#fff;padding:10px 18px;font-size:13px;font-weight:700;align-items:center;gap:12px;flex-shrink:0;animation:badge-emergency-pulse 1.2s ease-in-out infinite">
-    <span style="font-size:18px">🆘</span>
+  <!-- Emergency banner — persistent while >=1 ISSI is in active emergency; populated by JS.
+       Single steady danger dot (soft breathe), never a harsh flashing ring. -->
+  <div id="emergency-banner" class="banner banner-danger" style="display:none">
+    <span class="banner-dot" aria-hidden="true"></span>
+    <span class="banner-ico" data-icon="emergency"></span>
     <span data-i18n="emg_banner_title">EMERGENCY ACTIVE</span>
     <div id="emergency-banner-list" style="display:flex;flex-wrap:wrap;gap:8px"></div>
   </div>
@@ -2070,56 +2407,78 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           <div class="stat-label">Radios</div>
           <div class="stat-value accent" id="pub-ms">—</div>
           <div class="stat-sub">registered</div>
-          <div class="stat-icon">📡</div>
+          <div class="stat-icon" data-icon="radios"></div>
         </div>
         <div class="stat-card blue">
           <div class="stat-label">Active Calls</div>
           <div class="stat-value blue" id="pub-calls">—</div>
           <div class="stat-sub">circuits in use</div>
-          <div class="stat-icon">☎</div>
+          <div class="stat-icon" data-icon="calls"></div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="pub-rf-card">
           <div class="stat-label">RF</div>
-          <div class="stat-value" id="pub-rf" style="font-size:20px">—</div>
+          <div class="stat-value is-text" id="pub-rf">—</div>
           <div class="stat-sub" id="pub-freq">—</div>
-          <div class="stat-icon">📶</div>
+          <div class="stat-icon" data-icon="rf"></div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="pub-brew-card">
           <div class="stat-label">Network</div>
-          <div class="stat-value" id="pub-brew" style="font-size:20px">—</div>
+          <div class="stat-value is-text" id="pub-brew">—</div>
           <div class="stat-sub" id="pub-ver">—</div>
-          <div class="stat-icon">🔗</div>
+          <div class="stat-icon" data-icon="network"></div>
         </div>
       </div>
       <div class="card">
         <div class="card-head"><div class="card-title">Cell Status</div></div>
-        <div style="padding:14px 18px;font-size:13px;opacity:.7">
-          Read-only public overview — log in for full access and controls.
+        <div class="card-body">
+          <div class="empty-state">
+            <span class="empty-ico" data-icon="login"></span>
+            <div class="empty-msg">Read-only public overview</div>
+            <div class="empty-sub">Log in for full access and controls.</div>
+          </div>
         </div>
       </div>
     </div>
 
     <!-- ── RADIOS ── -->
     <div class="page active" id="page-stations">
+      <!-- Hero summary -->
+      <div class="hero">
+        <span class="hero-dot is-idle" id="stations-hero-dot"></span>
+        <div class="hero-main">
+          <div class="hero-title" id="stations-hero-title" data-i18n="terminals">Radios</div>
+          <div class="hero-sub" id="stations-hero-sub" data-i18n="registered">registered</div>
+        </div>
+        <div class="hero-metrics">
+          <div class="hero-metric">
+            <div class="hero-metric-label" data-i18n="active_calls">Active Calls</div>
+            <div class="hero-metric-value" id="stations-hero-calls">0</div>
+          </div>
+          <div class="hero-metric">
+            <div class="hero-metric-label">BREW</div>
+            <div class="hero-metric-value" id="stations-hero-brew">—</div>
+          </div>
+        </div>
+      </div>
       <!-- Stat cards -->
       <div class="stat-grid">
         <div class="stat-card green">
           <div class="stat-label" data-i18n="terminals">Radios</div>
           <div class="stat-value accent" id="stat-ms">0</div>
           <div class="stat-sub" data-i18n="registered">registered</div>
-          <div class="stat-icon">📡</div>
+          <div class="stat-icon" data-icon="radios"></div>
         </div>
         <div class="stat-card blue">
           <div class="stat-label" data-i18n="active_calls">Active Calls</div>
           <div class="stat-value blue" id="stat-calls">0</div>
           <div class="stat-sub" data-i18n="circuits">circuits in use</div>
-          <div class="stat-icon">☎</div>
+          <div class="stat-icon" data-icon="calls"></div>
         </div>
-        <div class="stat-card" id="stat-brew-card">
+        <div class="stat-card is-danger" id="stat-brew-card">
           <div class="stat-label">BREW</div>
-          <div class="stat-value" id="stat-brew-val" style="font-size:20px;color:var(--danger)">OFFLINE</div>
+          <div class="stat-value is-text" id="stat-brew-val">OFFLINE</div>
           <div class="stat-sub" id="stat-brew-sub">—</div>
-          <div class="stat-icon">🔗</div>
+          <div class="stat-icon" data-icon="network"></div>
         </div>
       </div>
       <!-- TETRA BTS Details — static cell + RF identity from config.toml -->
@@ -2311,6 +2670,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="live_log">Live Log</div>
+          <div class="card-actions">
+            <button class="btn btn-sm" onclick="exportLog()"><span class="btn-icon" data-icon="export"></span><span data-i18n="export">Export</span></button>
+            <button class="btn btn-sm" onclick="clearLog()"><span class="btn-icon" data-icon="delete"></span><span data-i18n="clear">Clear</span></button>
+          </div>
         </div>
         <div id="log-container" class="log-wrap"></div>
         <div class="log-controls">
@@ -2324,10 +2687,6 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <input type="checkbox" id="log-autoscroll" checked>
             <span data-i18n="autoscroll">Auto-scroll</span>
           </label>
-          <div style="margin-left:auto;display:flex;gap:6px">
-            <button class="btn btn-sm" onclick="exportLog()" data-i18n="export">⤓ Export</button>
-            <button class="btn btn-sm" onclick="clearLog()" data-i18n="clear">Clear</button>
-          </div>
         </div>
       </div>
     </div>
@@ -2341,9 +2700,9 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="card-head">
           <div class="card-title" data-i18n="sdslog">SDS Log</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="loadSdsLog()" data-i18n="sds_refresh">⟳ Refresh</button>
-            <button class="btn btn-sm" onclick="exportSdsLog()" data-i18n="export">⤓ Export</button>
-            <button class="btn btn-sm btn-danger" onclick="clearSdsLog()" data-i18n="clear">Clear</button>
+            <button class="btn btn-sm" onclick="loadSdsLog()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="sds_refresh">Refresh</span></button>
+            <button class="btn btn-sm" onclick="exportSdsLog()"><span class="btn-icon" data-icon="export"></span><span data-i18n="export">Export</span></button>
+            <button class="btn btn-sm btn-danger" onclick="clearSdsLog()"><span class="btn-icon" data-icon="delete"></span><span data-i18n="clear">Clear</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -2374,6 +2733,25 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
          the radio. We do not rely on receive-side feedback. -->
     <div class="page" id="page-rf">
 
+      <!-- Hero summary -->
+      <div class="hero">
+        <span class="hero-dot is-idle" id="rf-hero-dot"></span>
+        <div class="hero-main">
+          <div class="hero-title" data-i18n="rf_spectrum">TX DSP Spectrum (pre-PA)</div>
+          <div class="hero-sub" id="rf-hero-sub" data-i18n="rf_waiting">waiting…</div>
+        </div>
+        <div class="hero-metrics">
+          <div class="hero-metric">
+            <div class="hero-metric-label" data-i18n="rf_freq">Center freq</div>
+            <div class="hero-metric-value" id="rf-hero-freq">—</div>
+          </div>
+          <div class="hero-metric">
+            <div class="hero-metric-label" data-i18n="rf_evm">EVM</div>
+            <div class="hero-metric-value" id="rf-hero-evm">—</div>
+          </div>
+        </div>
+      </div>
+
       <!-- Top stat strip: instantaneous big-number metrics -->
       <div class="rf-metrics">
         <div class="rf-metric">
@@ -2398,6 +2776,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </div>
       </div>
 
+      <div class="section-label" data-i18n="rf_visualizers">Visualizers</div>
       <!-- Visualizers grid: spectrum + constellation -->
       <div class="rf-grid">
         <div class="rf-panel">
@@ -2422,9 +2801,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           <span data-i18n="rf_waterfall">TX Spectrum Waterfall</span>
           <span class="rf-hint" data-i18n="rf_hint_waterfall">rolling · viridis</span>
         </div>
-        <canvas id="rf-waterfall" class="rf-canvas" style="height:320px"></canvas>
+        <canvas id="rf-waterfall" class="rf-canvas tall"></canvas>
       </div>
 
+      <div class="section-label" data-i18n="rf_quality">Signal Quality</div>
       <!-- Signal Quality strip — derived metrics with health badges (good/warn/bad) -->
       <div class="rf-quality-card">
         <div class="rf-panel-title">
@@ -2435,26 +2815,27 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           <div class="rf-qmetric" id="rf-q-evm-wrap">
             <div class="rf-qmetric-label" data-i18n="rf_evm">EVM</div>
             <div class="rf-qmetric-value" id="rf-evm">—</div>
-            <div class="rf-qmetric-bar"><div class="rf-qmetric-fill" id="rf-evm-bar"></div></div>
+            <div class="gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-evm-bar"></div></div></div>
           </div>
           <div class="rf-qmetric" id="rf-q-papr-wrap">
             <div class="rf-qmetric-label" data-i18n="rf_papr">PAPR</div>
             <div class="rf-qmetric-value" id="rf-papr">—</div>
-            <div class="rf-qmetric-bar"><div class="rf-qmetric-fill" id="rf-papr-bar"></div></div>
+            <div class="gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-papr-bar"></div></div></div>
           </div>
           <div class="rf-qmetric" id="rf-q-cl-wrap">
             <div class="rf-qmetric-label" data-i18n="rf_carrier">Carrier leak</div>
             <div class="rf-qmetric-value" id="rf-carrier">—</div>
-            <div class="rf-qmetric-bar"><div class="rf-qmetric-fill" id="rf-carrier-bar"></div></div>
+            <div class="gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-carrier-bar"></div></div></div>
           </div>
           <div class="rf-qmetric" id="rf-q-obw-wrap">
             <div class="rf-qmetric-label" data-i18n="rf_obw">Occupied BW (99%)</div>
             <div class="rf-qmetric-value" id="rf-obw">—</div>
-            <div class="rf-qmetric-bar"><div class="rf-qmetric-fill" id="rf-obw-bar"></div></div>
+            <div class="gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-obw-bar"></div></div></div>
           </div>
         </div>
       </div>
 
+      <div class="section-label" data-i18n="rf_hw_health">Hardware Health</div>
       <!-- Hardware Health — temperature + actual gain readback from the SDR. Updated every ~5s. -->
       <div class="rf-quality-card">
         <div class="rf-panel-title">
@@ -2464,13 +2845,9 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="rf-hw-grid">
           <div class="rf-hw-temp">
             <div class="rf-qmetric-label" data-i18n="rf_temp">SDR Temperature</div>
-            <div class="h-metric" id="rf-temp-metric" style="background:transparent;border:none;box-shadow:none;padding:0;margin-top:4px">
-              <div class="h-gauge" id="rf-temp-gauge"><span class="h-gauge-n" id="rf-temp-gauge-n">—</span></div>
-              <div class="h-mcol">
-                <div class="h-mval" id="rf-temp">—</div>
-                <div class="h-mlbl rf-hw-temp-state" id="rf-temp-state">—</div>
-              </div>
-            </div>
+            <div class="rf-hw-temp-value" id="rf-temp">—</div>
+            <div class="rf-hw-temp-state" id="rf-temp-state">—</div>
+            <div class="gauge" id="rf-temp-gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-temp-bar"></div></div></div>
           </div>
           <div class="rf-hw-gain-block">
             <div class="rf-qmetric-label" data-i18n="rf_tx_gain">TX Gain Stages (actual)</div>
@@ -2487,23 +2864,35 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 
     <!-- ── ASTERISK SIP ── -->
     <div class="page" id="page-asterisk">
+      <div class="section-label" data-i18n="integrations">Integrations</div>
+      <!-- Connection hero — live REGISTER state as a calm status pill. -->
+      <div class="hero">
+        <span class="hero-dot is-idle" id="ast-hero-dot"></span>
+        <div class="hero-main">
+          <div class="hero-title" data-i18n="asterisk_title">Asterisk SIP</div>
+          <div class="hero-sub" id="ast-hero-sub">—</div>
+        </div>
+        <div class="hero-metrics">
+          <span class="pill pill-idle" id="ast-hero-pill">—</span>
+        </div>
+      </div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="asterisk_title">Asterisk SIP</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="loadAsteriskStatus()" data-i18n="refresh">⟳ Refresh</button>
+            <button class="btn btn-sm" onclick="loadAsteriskStatus()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="refresh">Refresh</span></button>
           </div>
         </div>
         <div class="card-body">
           <div class="stat-grid" style="margin-bottom:14px">
-            <div class="stat-card">
+            <div class="stat-card" id="ast-configured-card">
               <div class="stat-label" data-i18n="ast_configured">Configured</div>
-              <div class="stat-value" id="ast-configured">—</div>
+              <div class="stat-value is-text" id="ast-configured">—</div>
               <div class="stat-sub" id="ast-enabled">—</div>
             </div>
-            <div class="stat-card blue">
+            <div class="stat-card blue" id="ast-register-card">
               <div class="stat-label" data-i18n="ast_register">REGISTER</div>
-              <div class="stat-value blue" id="ast-register">—</div>
+              <div class="stat-value is-text blue" id="ast-register">—</div>
               <div class="stat-sub" id="ast-dialogs">—</div>
             </div>
           </div>
@@ -2523,8 +2912,8 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="card-head">
           <div class="card-title">Snom SIP NOTIFY</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="loadSnomNotify()" data-i18n="refresh">⟳ Refresh</button>
-            <button class="btn btn-primary" onclick="saveSnomNotify()" data-i18n="save">Save</button>
+            <button class="btn btn-sm" onclick="loadSnomNotify()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="refresh">Refresh</span></button>
+            <button class="btn btn-primary" onclick="saveSnomNotify()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -2583,13 +2972,25 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 
     <!-- ── DAPNET ── -->
     <div class="page" id="page-dapnet">
+      <div class="section-label" data-i18n="integrations">Integrations</div>
+      <!-- Connection hero — DAPNET feed state as a calm status pill. -->
+      <div class="hero">
+        <span class="hero-dot is-idle" id="dap-hero-dot"></span>
+        <div class="hero-main">
+          <div class="hero-title" data-i18n="dapnet_title">DAPNET</div>
+          <div class="hero-sub" id="dap-hero-sub">—</div>
+        </div>
+        <div class="hero-metrics">
+          <span class="pill pill-idle" id="dap-hero-pill">—</span>
+        </div>
+      </div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="dapnet_log">DAPNET Log</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="loadDapnetLog()" data-i18n="refresh">⟳ Refresh</button>
-            <button class="btn btn-sm" onclick="exportDapnetLog()" data-i18n="export">⤓ Export</button>
-            <button class="btn btn-sm btn-danger" onclick="clearDapnetLog()" data-i18n="clear">Clear</button>
+            <button class="btn btn-sm" onclick="loadDapnetLog()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="refresh">Refresh</span></button>
+            <button class="btn btn-sm" onclick="exportDapnetLog()"><span class="btn-icon" data-icon="export"></span><span data-i18n="export">Export</span></button>
+            <button class="btn btn-sm btn-danger" onclick="clearDapnetLog()"><span class="btn-icon" data-icon="delete"></span><span data-i18n="clear">Clear</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -2618,7 +3019,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="card-head">
           <div class="card-title" data-i18n="dapnet_title">DAPNET</div>
           <div class="card-actions">
-            <button class="btn btn-primary" onclick="saveDapnet()" data-i18n="save">Save</button>
+            <button class="btn btn-primary" onclick="saveDapnet()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -2668,7 +3069,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="card-head">
           <div class="card-title" data-i18n="dapnet_routing">Routing</div>
           <div class="card-actions">
-            <button class="btn btn-primary" onclick="saveDapnet()" data-i18n="save">Save</button>
+            <button class="btn btn-primary" onclick="saveDapnet()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -2746,12 +3147,24 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 
     <!-- ── GEOALARM ── -->
     <div class="page" id="page-geoalarm">
+      <div class="section-label" data-i18n="integrations">Integrations</div>
+      <!-- Connection hero — GeoAlarm enabled state as a calm status pill. -->
+      <div class="hero">
+        <span class="hero-dot is-idle" id="geo-hero-dot"></span>
+        <div class="hero-main">
+          <div class="hero-title" data-i18n="geoalarm_title">GeoAlarm</div>
+          <div class="hero-sub" id="geo-hero-sub">—</div>
+        </div>
+        <div class="hero-metrics">
+          <span class="pill pill-idle" id="geo-hero-pill">—</span>
+        </div>
+      </div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="geoalarm_title">GeoAlarm</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="loadGeoalarm()" data-i18n="refresh">⟳ Refresh</button>
-            <button class="btn btn-primary" onclick="saveGeoalarm()" data-i18n="save">Save</button>
+            <button class="btn btn-sm" onclick="loadGeoalarm()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="refresh">Refresh</span></button>
+            <button class="btn btn-primary" onclick="saveGeoalarm()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -2903,14 +3316,17 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 
     <!-- ── CONFIG ── -->
     <div class="page" id="page-config">
+      <div class="section-label" data-i18n="cfg_sec_configuration">Configuration</div>
       <div class="card">
         <div class="card-head">
           <div class="card-title">config.toml</div>
           <div class="card-actions">
-            <button class="btn btn-warn" onclick="restartService()" data-i18n="restart">⟳ Restart</button>
-            <button class="btn btn-danger" onclick="shutdownService()" data-i18n="shutdown">⏻ Shutdown</button>
-            <button class="btn" id="update-btn" onclick="startUpdate()" data-i18n="update">⬆ Update</button>
-            <button class="btn btn-primary" onclick="saveConfig()" data-i18n="save">Save</button>
+            <button class="btn btn-primary" onclick="saveConfig()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
+            <span class="btn-group danger-group">
+              <button class="btn btn-warn" onclick="restartService()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="restart">Restart</span></button>
+              <button class="btn btn-danger" onclick="shutdownService()"><span class="btn-icon" data-icon="shutdown"></span><span data-i18n="shutdown">Shutdown</span></button>
+              <button class="btn" id="update-btn" onclick="startUpdate()"><span class="btn-icon" data-icon="update"></span><span data-i18n="update">Update</span></button>
+            </span>
           </div>
         </div>
         <div class="card-body">
@@ -2923,12 +3339,13 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
            Editable access-control list. Empty list = open network (any ISSI may
            register). Changes apply immediately at runtime AND are written back to
            config.toml so they survive a restart. -->
+      <div class="section-label" data-i18n="cfg_sec_access">Access Control</div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="whitelist_title">ISSI Whitelist</div>
           <div class="card-actions">
             <span id="whitelist-status" class="badge" style="margin-right:8px"></span>
-            <button class="btn btn-primary" onclick="saveWhitelist()" data-i18n="save">Save</button>
+            <button class="btn btn-primary" onclick="saveWhitelist()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -2941,7 +3358,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <input type="number" id="whitelist-input" class="form-input" min="1" max="16777215"
                    placeholder="e.g. 2260571" style="flex:1;min-width:160px"
                    onkeydown="if(event.key==='Enter'){addWhitelistEntry();}">
-            <button class="btn" onclick="addWhitelistEntry()" data-i18n="whitelist_add">+ Add ISSI</button>
+            <button class="btn" onclick="addWhitelistEntry()"><span class="btn-icon" data-icon="add"></span><span data-i18n="whitelist_add">Add ISSI</span></button>
           </div>
           <div id="whitelist-chips" style="display:flex;gap:8px;flex-wrap:wrap;min-height:32px"></div>
           <div class="config-msg" id="whitelist-msg"></div>
@@ -2953,11 +3370,12 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
            service ISSI and gets a decoded reply. Periodic: auto-sends a station's METAR
            to a chosen ISSI/GSSI at an interval. Toggles + targets editable here; applies
            instantly and persists to config.toml. -->
+      <div class="section-label" data-i18n="cfg_sec_wx">WX / METAR</div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="wx_title">WX / METAR Service</div>
           <div class="card-actions">
-            <button class="btn btn-primary" onclick="saveWx()" data-i18n="save">Save</button>
+            <button class="btn btn-primary" onclick="saveWx()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -2967,41 +3385,44 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             ISSI or talkgroup at a set interval. Data from aviationweather.gov.
           </div>
 
-          <label class="sw-row">
-            <span class="sw-text" data-i18n="wx_enabled">Enable on-demand METAR responder</span>
-            <span class="sw"><input type="checkbox" id="wx-enabled"><i></i></span>
-          </label>
-
-          <div style="display:flex;gap:8px;align-items:center;margin:12px 0 18px;flex-wrap:wrap">
-            <label style="color:var(--muted);font-size:13px;min-width:140px" data-i18n="wx_service_issi">Service ISSI</label>
-            <input type="number" id="wx-service-issi" class="form-input" min="1" max="16777215"
-                   placeholder="9998" style="flex:1;min-width:140px">
-          </div>
-
-          <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
-
-          <label class="sw-row" style="margin-bottom:8px">
-            <span class="sw-text" data-i18n="wx_periodic_enabled">Enable periodic auto-broadcast</span>
-            <span class="sw"><input type="checkbox" id="wx-periodic-enabled"><i></i></span>
-          </label>
-
-          <div style="display:grid;grid-template-columns:140px 1fr;gap:10px;align-items:center">
-            <label style="color:var(--muted);font-size:13px" data-i18n="wx_periodic_icao">Station ICAO</label>
-            <input type="text" id="wx-periodic-icao" class="form-input" maxlength="4" placeholder="LROP" style="text-transform:uppercase">
-
-            <label style="color:var(--muted);font-size:13px" data-i18n="wx_periodic_dest">Destination</label>
-            <input type="number" id="wx-periodic-issi" class="form-input" min="1" max="16777215" placeholder="ISSI or GSSI">
-
-            <label style="color:var(--muted);font-size:13px" data-i18n="wx_periodic_isgroup">Destination is group</label>
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-              <span class="sw"><input type="checkbox" id="wx-periodic-isgroup"><i></i></span>
-              <span style="color:var(--muted);font-size:12px" data-i18n="wx_periodic_isgroup_hint">(GSSI instead of individual ISSI)</span>
+          <div class="group-list" style="margin-bottom:18px">
+            <label class="field" style="cursor:pointer">
+              <span class="field-label" data-i18n="wx_enabled">Enable on-demand METAR responder</span>
+              <span class="field-control"><span class="sw"><input type="checkbox" id="wx-enabled"><i></i></span></span>
             </label>
-
-            <label style="color:var(--muted);font-size:13px" data-i18n="wx_periodic_interval">Interval (seconds)</label>
-            <input type="number" id="wx-periodic-interval" class="form-input" min="300" placeholder="1800">
+            <div class="field">
+              <span class="field-label" data-i18n="wx_service_issi">Service ISSI</span>
+              <span class="field-control"><input type="number" id="wx-service-issi" class="form-input" min="1" max="16777215"
+                     placeholder="9998" style="width:160px"></span>
+            </div>
           </div>
-          <div style="color:var(--muted);font-size:11px;margin-top:6px" data-i18n="wx_interval_hint">Minimum 300 s (5 min) to avoid hammering the weather API.</div>
+
+          <div class="group-list">
+            <label class="field" style="cursor:pointer">
+              <span class="field-label" data-i18n="wx_periodic_enabled">Enable periodic auto-broadcast</span>
+              <span class="field-control"><span class="sw"><input type="checkbox" id="wx-periodic-enabled"><i></i></span></span>
+            </label>
+            <div class="field">
+              <span class="field-label" data-i18n="wx_periodic_icao">Station ICAO</span>
+              <span class="field-control"><input type="text" id="wx-periodic-icao" class="form-input" maxlength="4" placeholder="LROP" style="text-transform:uppercase;width:160px"></span>
+            </div>
+            <div class="field">
+              <span class="field-label" data-i18n="wx_periodic_dest">Destination</span>
+              <span class="field-control"><input type="number" id="wx-periodic-issi" class="form-input" min="1" max="16777215" placeholder="ISSI or GSSI" style="width:160px"></span>
+            </div>
+            <label class="field" style="cursor:pointer">
+              <span class="field-label" data-i18n="wx_periodic_isgroup">Destination is group</span>
+              <span class="field-control">
+                <span style="color:var(--muted);font-size:12px" data-i18n="wx_periodic_isgroup_hint">(GSSI instead of individual ISSI)</span>
+                <span class="sw"><input type="checkbox" id="wx-periodic-isgroup"><i></i></span>
+              </span>
+            </label>
+            <div class="field">
+              <span class="field-label" data-i18n="wx_periodic_interval">Interval (seconds)</span>
+              <span class="field-control"><input type="number" id="wx-periodic-interval" class="form-input" min="300" placeholder="1800" style="width:160px"></span>
+              <span class="field-hint" data-i18n="wx_interval_hint">Minimum 300 s (5 min) to avoid hammering the weather API.</span>
+            </div>
+          </div>
           <div class="config-msg" id="wx-msg"></div>
         </div>
       </div>
@@ -3013,12 +3434,13 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
          which categories to receive, and saves. Applies instantly and persists to
          config.toml. -->
     <div class="page" id="page-telegram">
+      <div class="section-label" data-i18n="integrations">Integrations</div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="tg_title">Telegram Alerts</div>
           <div class="card-actions">
-            <button class="btn" onclick="testTelegram()" data-i18n="tg_test">Send test</button>
-            <button class="btn btn-primary" onclick="saveTelegram()" data-i18n="save">Save</button>
+            <button class="btn" onclick="testTelegram()"><span class="btn-icon" data-icon="telegram"></span><span data-i18n="tg_test">Send test</span></button>
+            <button class="btn btn-primary" onclick="saveTelegram()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -3035,11 +3457,13 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 
       <div class="card">
         <div class="card-head"><div class="card-title" data-i18n="tg_howto_title">Setup — 4 steps</div></div>
-        <div class="card-body" style="color:var(--muted);font-size:13px;line-height:1.7">
-          <div data-i18n="tg_step1">1. In Telegram, open @BotFather, send /newbot and copy the bot token.</div>
-          <div data-i18n="tg_step2">2. Paste the token below and click Verify.</div>
-          <div data-i18n="tg_step3">3. Send your bot any message, e.g. /start.</div>
-          <div data-i18n="tg_step4">4. Click Detect Chat ID, add your chat, then Save.</div>
+        <div class="card-body">
+          <div class="steps">
+            <div class="step"><span class="step-num"></span><span class="step-body" data-i18n="tg_step1">In Telegram, open @BotFather, send /newbot and copy the bot token.</span></div>
+            <div class="step"><span class="step-num"></span><span class="step-body" data-i18n="tg_step2">Paste the token below and click Verify.</span></div>
+            <div class="step"><span class="step-num"></span><span class="step-body" data-i18n="tg_step3">Send your bot any message, e.g. /start.</span></div>
+            <div class="step"><span class="step-num"></span><span class="step-body" data-i18n="tg_step4">Click Detect Chat ID, add your chat, then Save.</span></div>
+          </div>
         </div>
       </div>
 
@@ -3053,7 +3477,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <input type="text" id="tg-token" class="form-input" placeholder="123456789:AA…"
                    autocomplete="off" spellcheck="false" oninput="tgTokenDirty=true"
                    style="flex:1;min-width:220px">
-            <button class="btn" onclick="verifyTelegram()" data-i18n="tg_verify">Verify</button>
+            <button class="btn" onclick="verifyTelegram()"><span class="btn-icon" data-icon="search"></span><span data-i18n="tg_verify">Verify</span></button>
           </div>
           <div id="tg-verify-status" style="margin-top:8px;font-size:13px;min-height:18px"></div>
         </div>
@@ -3066,10 +3490,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             Every alert is sent to each recipient.
           </div>
           <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-            <button class="btn" onclick="detectTelegramChats()" data-i18n="tg_detect">📥 Detect Chat ID</button>
+            <button class="btn" onclick="detectTelegramChats()"><span class="btn-icon" data-icon="detect"></span><span data-i18n="tg_detect">Detect Chat ID</span></button>
             <input type="number" id="tg-chat-input" class="form-input" placeholder="-1001234567890"
                    style="flex:1;min-width:180px" onkeydown="if(event.key==='Enter'){addRecipient();}">
-            <button class="btn" onclick="addRecipient()" data-i18n="tg_add">+ Add</button>
+            <button class="btn" onclick="addRecipient()"><span class="btn-icon" data-icon="add"></span><span data-i18n="tg_add">Add</span></button>
           </div>
           <div id="tg-detected" style="margin-bottom:10px"></div>
           <div id="tg-chips" style="display:flex;gap:8px;flex-wrap:wrap;min-height:32px"></div>
@@ -3096,27 +3520,27 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
          attached to a nav button when /api/wifi/available reports true so
          we never tease functionality the host can't deliver. -->
     <div class="page" id="page-wifi">
+      <div class="section-label" data-i18n="integrations">Integrations</div>
       <!-- Status card: who we're connected to right now, IP, signal -->
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="wifi_status">Current connection</div>
           <div class="card-actions">
             <button class="btn btn-sm" id="wifi-radio-btn" onclick="wifiToggleRadio()" data-i18n="wifi_radio_off">Disable WiFi</button>
-            <button class="btn btn-sm" onclick="wifiRefresh()" data-i18n="wifi_refresh">↻ Refresh</button>
+            <button class="btn btn-sm" onclick="wifiRefresh()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="wifi_refresh">Refresh</span></button>
           </div>
         </div>
-        <div class="card-body">
-          <div class="wifi-status-grid" id="wifi-status-grid">
+        <div class="card-body" style="padding:0">
+          <!-- Connection safety warning: changing WiFi while connected through
+               it can lock the operator out of the dashboard. -->
+          <div class="banner banner-warn">
+            <span class="banner-ico" data-icon="alert"></span>
+            <div class="banner-body" data-i18n="wifi_warn_lose_access">If you're connected to the dashboard via WiFi, changing networks may temporarily disconnect you. Make sure you have a backup access path (Ethernet or known good network).</div>
+          </div>
+          <div class="wifi-status-grid" id="wifi-status-grid" style="padding:16px 18px">
             <div class="wifi-status-loading" data-i18n="wifi_loading">Loading…</div>
           </div>
         </div>
-      </div>
-
-      <!-- Connection safety warning: changing WiFi while connected through
-           it can lock the operator out of the dashboard. We show this
-           prominently above the actionable cards. -->
-      <div class="callout wifi-warn" data-i18n="wifi_warn_lose_access">
-        ⚠ If you're connected to the dashboard via WiFi, changing networks may temporarily disconnect you. Make sure you have a backup access path (Ethernet or known good network).
       </div>
 
       <!-- Saved profiles: networks NM already has credentials for. Each row
@@ -3141,8 +3565,8 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="card-head">
           <div class="card-title" data-i18n="wifi_visible">Available networks</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="wifiShowHiddenModal()" data-i18n="wifi_add_hidden">+ Hidden network</button>
-            <button class="btn btn-sm" onclick="wifiScan()" data-i18n="wifi_scan">↻ Scan</button>
+            <button class="btn btn-sm" onclick="wifiShowHiddenModal()"><span class="btn-icon" data-icon="add"></span><span data-i18n="wifi_add_hidden">Hidden network</span></button>
+            <button class="btn btn-sm" onclick="wifiScan()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="wifi_scan">Scan</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -3154,14 +3578,14 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
     </div>
 
     <!-- WiFi password modal — used both when joining a visible network with
-         security and when adding a hidden network manually. -->
-    <div id="wifi-modal" class="wifi-modal" style="display:none">
-      <div class="wifi-modal-box">
-        <div class="wifi-modal-head">
-          <div class="wifi-modal-title" id="wifi-modal-title">Connect</div>
-          <button class="wifi-modal-x" onclick="wifiCloseModal()">×</button>
+         security and when adding a hidden network manually. Unified .sheet. -->
+    <div id="wifi-modal" class="sheet-overlay">
+      <div class="sheet">
+        <div class="sheet-head">
+          <div class="sheet-title" id="wifi-modal-title">Connect</div>
+          <button class="sheet-close" onclick="wifiCloseModal()"><span data-icon="close"></span></button>
         </div>
-        <div class="wifi-modal-body">
+        <div class="sheet-body">
           <div class="wifi-modal-row" id="wifi-modal-ssid-row">
             <label for="wifi-modal-ssid" data-i18n="wifi_ssid">SSID</label>
             <input id="wifi-modal-ssid" type="text" autocomplete="off" spellcheck="false">
@@ -3176,10 +3600,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </label>
           </div>
           <div class="wifi-modal-msg" id="wifi-modal-msg"></div>
-        </div>
-        <div class="wifi-modal-foot">
-          <button class="btn" onclick="wifiCloseModal()" data-i18n="cancel">Cancel</button>
-          <button class="btn btn-primary" id="wifi-modal-ok" onclick="wifiModalSubmit()" data-i18n="wifi_connect">Connect</button>
+          <div class="wifi-modal-foot">
+            <button class="btn" onclick="wifiCloseModal()" data-i18n="cancel">Cancel</button>
+            <button class="btn btn-primary" id="wifi-modal-ok" onclick="wifiModalSubmit()" data-i18n="wifi_connect">Connect</button>
+          </div>
         </div>
       </div>
     </div>
@@ -3215,26 +3639,46 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
     </div>
 
     <div class="page" id="page-system">
+      <!-- System hero — at-a-glance BTS / Brew / uptime / CPU temp summary. -->
+      <div class="hero">
+        <span class="hero-dot is-idle" id="sysHeroDot"></span>
+        <div class="hero-main">
+          <div class="hero-title" id="sysHeroTitle" data-i18n="sys_title">System</div>
+          <div class="hero-sub" id="sysHeroSub">—</div>
+        </div>
+        <div class="hero-metrics">
+          <div class="hero-metric">
+            <div class="hero-metric-label" data-i18n="sys_uptime">Uptime</div>
+            <div class="hero-metric-value" id="sysHeroUptime">—</div>
+          </div>
+          <div class="hero-metric">
+            <div class="hero-metric-label" data-i18n="sys_temp">CPU Temp</div>
+            <div class="hero-metric-value" id="sysHeroTemp">—</div>
+          </div>
+        </div>
+      </div>
+
       <!-- BTS + Brew status -->
+      <div class="section-label" data-i18n="sys_sec_status">Status</div>
       <div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-        <div class="stat-card green">
+        <div class="stat-card is-danger" id="sysBtsCard">
           <div class="stat-label" data-i18n="sys_bts">BTS Connection</div>
-          <div class="stat-value" id="sysBtsStatus" style="font-size:18px;color:var(--danger)">OFFLINE</div>
+          <div class="stat-value is-text" id="sysBtsStatus">OFFLINE</div>
           <div class="stat-sub" id="sysBtsIp">—</div>
         </div>
-        <div class="stat-card blue">
+        <div class="stat-card is-danger" id="sysBrewCard">
           <div class="stat-label">BREW</div>
-          <div class="stat-value" id="sysBrewStatus" style="font-size:18px;color:var(--danger)">OFFLINE</div>
+          <div class="stat-value is-text" id="sysBrewStatus">OFFLINE</div>
           <div class="stat-sub" id="sysBrewBadge">—</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card is-idle">
           <div class="stat-label" data-i18n="sys_uptime">Uptime</div>
-          <div class="stat-value" id="sysUptime" style="font-size:20px;color:var(--text2)">—</div>
+          <div class="stat-value is-text" id="sysUptime">—</div>
           <div class="stat-sub" id="sysHostname">—</div>
         </div>
-        <div class="stat-card" id="cpu-temp-card" style="display:none">
+        <div class="stat-card is-warn" id="cpu-temp-card" style="display:none">
           <div class="stat-label" data-i18n="sys_temp">CPU Temp</div>
-          <div class="stat-value" id="sysCpuTemp" style="font-size:20px;color:var(--warn)">—</div>
+          <div class="stat-value is-text" id="sysCpuTemp">—</div>
           <div class="stat-sub" id="sysCpuTempSub">—</div>
         </div>
       </div>
@@ -3251,6 +3695,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
 
       <!-- System info + CPU/RAM -->
+      <div class="section-label" data-i18n="sys_sec_host">Host</div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="sys_info">System Info</div>
@@ -3259,7 +3704,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
               <input type="checkbox" id="sys-autorefresh" onchange="toggleSysAutoRefresh(this.checked)" style="cursor:pointer">
               <span data-i18n="sys_autorefresh">Auto-refresh 5s</span>
             </label>
-            <button class="btn btn-sm" onclick="loadSystemInfo()">↻ Refresh</button>
+            <button class="btn btn-sm" onclick="loadSystemInfo()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="sys_refresh">Refresh</span></button>
           </div>
         </div>
         <div class="card-body">
@@ -3269,46 +3714,48 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           <div class="info-row"><div class="info-key" data-i18n="sys_cpu">CPU</div><div class="info-val" id="sysCpu">—</div></div>
           <div class="info-row">
             <div class="info-key" data-i18n="sys_cpu_load">CPU Load</div>
-            <div class="info-val" style="display:flex;align-items:center;gap:8px">
-              <div style="flex:1;height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;max-width:120px">
-                <div id="sysCpuBar" style="height:100%;width:0%;background:var(--accent);border-radius:3px;transition:width 0.3s"></div>
+            <div class="info-val" style="flex:1;max-width:220px">
+              <div class="gauge" id="sysCpuGauge">
+                <div class="gauge-track"><div class="gauge-fill" id="sysCpuBar"></div></div>
+                <span class="gauge-value" id="sysCpuPct">—</span>
               </div>
-              <span id="sysCpuPct" style="font-family:var(--mono);font-size:12px;color:var(--text2)">—</span>
             </div>
           </div>
           <div class="info-row">
             <div class="info-key" data-i18n="sys_ram">RAM</div>
-            <div class="info-val" style="display:flex;align-items:center;gap:8px">
-              <div style="flex:1;height:6px;background:var(--bg4);border-radius:3px;overflow:hidden;max-width:120px">
-                <div id="sysRamBar" style="height:100%;width:0%;background:var(--accent2);border-radius:3px;transition:width 0.3s"></div>
+            <div class="info-val" style="flex:1;max-width:260px">
+              <div class="gauge is-info" id="sysRamGauge">
+                <div class="gauge-track"><div class="gauge-fill" id="sysRamBar"></div></div>
+                <span class="gauge-value" id="sysRamVal" style="min-width:118px">—</span>
               </div>
-              <span id="sysRamVal" style="font-family:var(--mono);font-size:12px;color:var(--text2)">—</span>
             </div>
           </div>
         </div>
       </div>
 
       <!-- RF / SDR Hardware -->
+      <div class="section-label" data-i18n="sys_sec_radio">Radio Hardware</div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="sys_rf">RF Hardware (SoapySDR)</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="loadSystemInfo()">↻ Probe</button>
+            <button class="btn btn-sm" onclick="loadSystemInfo()"><span class="btn-icon" data-icon="search"></span><span data-i18n="sys_probe">Probe</span></button>
           </div>
         </div>
         <div class="card-body">
-          <pre id="sysSoapy" style="font-family:var(--mono);font-size:11px;color:var(--text2);white-space:pre-wrap;word-break:break-all;margin:0;padding:0">—</pre>
+          <pre id="sysSoapy" class="terminal">—</pre>
         </div>
       </div>
 
       <!-- Host hardware sensors (temps, voltages, currents, power) -->
       <!-- Populated from /sys via sys_telemetry. Layout adapts: if no sensors are
            found (non-Linux, locked-down kernel) the whole card is hidden. -->
+      <div class="section-label" id="sys-sensors-label" data-i18n="sys_sec_sensors" style="display:none">Sensors</div>
       <div class="card" id="sys-sensors-card" style="display:none">
         <div class="card-head">
           <div class="card-title" data-i18n="sys_sensors">Host Hardware Sensors</div>
           <div class="card-actions">
-            <span id="sys-sensors-power-total" style="font-family:var(--mono);font-size:12px;color:#c8a4f5;font-weight:600"></span>
+            <span id="sys-sensors-power-total" style="font-family:var(--mono);font-size:12px;color:var(--accent2);font-weight:600"></span>
           </div>
         </div>
         <div class="card-body" style="padding:14px 18px">
@@ -3318,11 +3765,12 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
 
       <!-- Config profiles -->
+      <div class="section-label" data-i18n="sys_sec_profiles">Profiles</div>
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="sys_profiles">Config Profiles</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="loadConfigProfiles()">↻ Refresh</button>
+            <button class="btn btn-sm" onclick="loadConfigProfiles()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="sys_refresh">Refresh</span></button>
           </div>
         </div>
         <div class="card-body" style="padding:14px 18px">
@@ -3331,12 +3779,13 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
 
       <!-- Live SDS Broadcast -->
+      <div class="section-label" data-i18n="sys_sec_sds">SDS Broadcast</div>
       <div class="card">
         <div class="card-head">
-          <div class="card-title">📢 Live SDS Broadcast</div>
+          <div class="card-title" style="display:flex;align-items:center;gap:7px"><span class="btn-icon" data-icon="broadcast" style="margin:0;width:14px;height:14px"></span>Live SDS Broadcast</div>
           <div class="card-actions">
-            <button class="btn btn-sm" onclick="loadLiveSds()">↻ Refresh</button>
-            <button class="btn btn-sm btn-danger" onclick="clearAllLiveSds()" id="live-sds-clear-btn" style="display:none" data-i18n="live_sds_clear_all">Clear All</button>
+            <button class="btn btn-sm" onclick="loadLiveSds()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="sys_refresh">Refresh</span></button>
+            <button class="btn btn-sm btn-danger" onclick="clearAllLiveSds()" id="live-sds-clear-btn" style="display:none"><span class="btn-icon" data-icon="delete"></span><span data-i18n="live_sds_clear_all">Clear All</span></button>
           </div>
         </div>
         <div class="card-body" style="padding:14px 18px">
@@ -3350,7 +3799,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
               <label class="form-label" data-i18n="live_sds_repeat">Repeat (0=∞)</label>
               <input type="number" id="live-sds-repeat" class="form-input" value="0" min="0" max="999" style="width:100%">
             </div>
-            <button class="btn btn-primary" onclick="addLiveSds()" data-i18n="live_sds_send">📢 Broadcast</button>
+            <button class="btn btn-primary" onclick="addLiveSds()"><span class="btn-icon" data-icon="broadcast"></span><span data-i18n="live_sds_send">Broadcast</span></button>
           </div>
           <div id="live-sds-list" style="margin-top:14px"></div>
         </div>
@@ -3363,8 +3812,8 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 <!-- ── Edit Profile Modal ── -->
 <div class="modal-overlay" id="edit-profile-modal">
   <div class="modal" style="width:min(700px,95vw);max-height:90vh;display:flex;flex-direction:column">
-    <div class="modal-title">
-      ✏️ <span data-i18n="profile_edit_title">Edit Config Profile</span>:
+    <div class="modal-title" style="display:flex;align-items:center;gap:7px">
+      <span class="btn-icon" data-icon="edit" style="margin:0"></span><span data-i18n="profile_edit_title">Edit Config Profile</span>:
       <span id="edit-profile-name" style="color:var(--accent);font-family:var(--mono);font-size:14px"></span>
     </div>
     <div style="flex:1;overflow:hidden;display:flex;flex-direction:column;gap:8px;min-height:0">
@@ -3465,16 +3914,87 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 </div>
 
 <script>
+// ── Icon system (SF-Symbols-style, design-language v3) ────────────────────
+// One cohesive family: 24×24 viewBox, fill=none, stroke=currentColor,
+// stroke-width 1.8, round caps/joins — monochrome so each glyph inherits the
+// adjacent text colour and auto-themes. svgIcon(name[,size]) returns an inline
+// <svg> string; status is conveyed by the dot, never the icon. The Tabs phase
+// reuses ICONS / svgIcon verbatim for every emoji site.
+const ICONS = {
+  // nav — monitor
+  radios:'<path d="M5 14a9 9 0 0 1 9-9"/><path d="M5 14a5.5 5.5 0 0 1 5.5-5.5"/><circle cx="6.5" cy="12.5" r="1.6"/><path d="M7.5 13.5 13 19"/>',
+  calls:'<path d="M6.5 4.5h3l1.2 3.2-1.7 1.3a11 11 0 0 0 4.7 4.7l1.3-1.7 3.2 1.2v3a1.5 1.5 0 0 1-1.6 1.5A13.5 13.5 0 0 1 5 6.1 1.5 1.5 0 0 1 6.5 4.5Z"/>',
+  lastheard:'<path d="M4 12h2M8 8v8M12 5v14M16 8v8M20 12h-2"/>',
+  log:'<rect x="5" y="4" width="14" height="16" rx="2.5"/><path d="M9 9h6M9 13h6M9 17h3"/>',
+  sdslog:'<path d="M4.5 6.5A1.5 1.5 0 0 1 6 5h12a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 18 16H9l-4 3v-3a1.5 1.5 0 0 1-.5-1.1Z"/>',
+  rf:'<circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 5a9 9 0 0 0 0 14M19 5a9 9 0 0 1 0 14"/>',
+  health:'<path d="M3 12h3l2-5 3 10 2.5-7 1.5 2h6"/>',
+  // nav — integrations / system
+  config:'<circle cx="12" cy="12" r="3"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8 6 18M18 6l1.8-1.8"/>',
+  telegram:'<path d="M20 4 3.5 11.2l6 2.1M20 4l-2.8 14-7-3.6M20 4 9.6 13.6M9.6 13.6V18l2.6-2.6"/>',
+  wifi:'<path d="M4.5 9a11 11 0 0 1 15 0M7.5 12.5a6.5 6.5 0 0 1 9 0"/><circle cx="12" cy="16.5" r="1.2" fill="currentColor" stroke="none"/>',
+  system:'<rect x="6" y="6" width="12" height="12" rx="2.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 3.5v2.5M15 3.5v2.5M9 18v2.5M15 18v2.5M3.5 9H6M3.5 15H6M18 9h2.5M18 15h2.5"/>',
+  asterisk:'<circle cx="12" cy="12" r="7.5"/><path d="M12 7.5v9M8.1 9.75l7.8 4.5M15.9 9.75l-7.8 4.5"/>',
+  dapnet:'<path d="M6.5 16v-4a5.5 5.5 0 0 1 11 0v4l1.5 2h-14Z"/><path d="M10.5 18.5a1.6 1.6 0 0 0 3 0"/>',
+  geoalarm:'<path d="M12 21s6.5-5.4 6.5-10.5A6.5 6.5 0 0 0 5.5 10.5C5.5 15.6 12 21 12 21Z"/><circle cx="12" cy="10.3" r="2.3"/>',
+  overview:'<rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/>',
+  // kpi / domain
+  network:'<path d="M9.5 14.5 14.5 9.5M8 12l-1.8 1.8a3.4 3.4 0 0 0 4.8 4.8L13 16.5M16 11.5l1.8-1.8a3.4 3.4 0 0 0-4.8-4.8L11 6.5"/>',
+  backhaul:'<path d="M5 12a7 7 0 0 1 7-7M5 12a4 4 0 0 1 4-4"/><circle cx="6" cy="11" r="1.4"/><path d="M16 8l4 4M15 13l-3 3 5 0Z"/>',
+  congestion:'<path d="M6 19v-5M12 19V8M18 19v-9"/>',
+  // actions
+  save:'<path d="M5 12.5 10 17.5 19 7"/>',
+  restart:'<path d="M19 12a7 7 0 1 1-2.1-5"/><path d="M17 4v3.5h-3.5"/>',
+  shutdown:'<path d="M12 4v7"/><path d="M7.5 7.2a7 7 0 1 0 9 0"/>',
+  update:'<path d="M12 19V6M7 11l5-5 5 5"/><path d="M6 4h12"/>',
+  edit:'<path d="M14.5 5.5 18.5 9.5 8 20H4v-4Z"/><path d="M13 7 17 11"/>',
+  add:'<path d="M12 5v14M5 12h14"/>',
+  delete:'<path d="M5 7h14M9 7V5h6v2M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/>',
+  export:'<path d="M12 4v10M8 10l4 4 4-4M5 18h14"/>',
+  search:'<circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5"/>',
+  detect:'<path d="M4 14v4.5a1.5 1.5 0 0 0 1.5 1.5h13a1.5 1.5 0 0 0 1.5-1.5V14M8 11l4 4 4-4M12 4v11"/>',
+  broadcast:'<path d="M4 10v4l9 4V6Z"/><path d="M13 8a4 4 0 0 1 0 8M6 14v3.5a1.5 1.5 0 0 0 3 0V15"/>',
+  // status / domain
+  alert:'<path d="M12 4.5 21 19H3Z"/><path d="M12 10v4M12 16.5v.2"/>',
+  emergency:'<path d="M12 3 19 6v5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6Z"/><path d="M12 8v4M12 15v.2"/>',
+  power:'<path d="M13 3 5 13h6l-1 8 8-10h-6Z"/>',
+  login:'<circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H20M17 12v3M20 12v2.5"/>',
+  // chrome
+  collapse:'<path d="M14 7l-5 5 5 5"/><path d="M19 5v14"/>',
+  hamburger:'<path d="M4 7h16M4 12h16M4 17h16"/>',
+  close:'<path d="M6 6l12 12M18 6 6 18"/>',
+};
+// Glyphs that read better at a heavier weight (checkmarks, plus, close).
+const ICON_BOLD = { save:1, add:1 };
+function svgIcon(name, size){
+  const body = ICONS[name]; if(body===undefined) return '';
+  const sw = ICON_BOLD[name] ? 2 : 1.8;
+  const px = size ? ' width="'+size+'" height="'+size+'"' : '';
+  return '<svg viewBox="0 0 24 24"'+px+' fill="none" stroke="currentColor" stroke-width="'+sw+
+         '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+body+'</svg>';
+}
+// Filled selection marker (▶ in selected-TG rows) — own fill, no stroke.
+const ICON_MARKER = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M8 5l11 7-11 7Z"/></svg>';
+// Paint every declarative icon slot ([data-icon="name"]) from the ICONS map.
+// Keeps the nav/header markup DRY; the Tabs phase can drop more [data-icon] slots.
+function paintIcons(root){
+  (root||document).querySelectorAll('[data-icon]').forEach(function(el){
+    if(el.dataset.iconPainted) return;
+    el.innerHTML = svgIcon(el.getAttribute('data-icon'));
+    el.dataset.iconPainted = '1';
+  });
+}
+
 // ── i18n ─────────────────────────────────────────────────────────────────
 const LANGS={
   en:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
     stations:'Radios',calls:'Calls',lastheard:'Last Heard',log:'Log',rf:'RF',health:'Health',asterisk:'Asterisk SIP',dapnet:'DAPNET',echolink:'EchoLink',echolink_title:'EchoLink',meshcom:'MeshCom',meshcom_title:'MeshCom',geoalarm:'GeoAlarm',geoalarm_title:'GeoAlarm',config:'Config',
-    sdslog:'SDS Log',th_dir:'Dir',th_from:'From',th_to:'To',th_message:'Message',no_sds:'No SDS messages yet',sds_refresh:'⟳ Refresh',
+    sdslog:'SDS Log',th_dir:'Dir',th_from:'From',th_to:'To',th_message:'Message',no_sds:'No SDS messages yet',sds_refresh:'Refresh',
     rf_freq:'Center freq',rf_rate:'Sample rate',rf_rms:'RMS',rf_peak:'Peak',rf_age:'Snapshot',
     rf_waiting:'waiting…',rf_live:'live',rf_stale:'stale',
-    rf_spectrum:'TX DSP Spectrum (pre-PA)',rf_constellation:'TX DSP Constellation',
+    rf_visualizers:'Visualizers',rf_spectrum:'TX DSP Spectrum (pre-PA)',rf_constellation:'TX DSP Constellation',
     rf_hint_spectrum:'live · 512-bin FFT',rf_hint_constellation:'π/4-DQPSK',
     rf_waterfall:'TX Spectrum Waterfall',rf_hint_waterfall:'rolling · viridis',
     rf_quality:'Signal Quality',rf_hint_quality:'measured pre-PA · derived from same DSP snapshot',
@@ -3498,8 +4018,8 @@ const LANGS={
     readability:'Readability',size_small:'Small',size_small_d:'Compact · normal contrast',size_medium:'Medium',size_medium_d:'Default · comfortable',size_high:'High',size_high_d:'Larger · stronger contrast',size_ultra:'Ultra',size_ultra_d:'Largest · maximum contrast',sdr:'SDR',power:'Power',
     no_terminals:'No radios registered',no_calls:'No active calls',
     live_log:'Live Log',autoscroll:'Auto-scroll',filter_all:'All',
-    clear:'Clear',export:'⤓ Export',restart:'⟳ Restart',shutdown:'⏻ Shutdown',save:'Save',
-    whitelist_title:'ISSI Whitelist',whitelist_add:'+ Add ISSI',whitelist_empty:'List empty — open network (any radio may register).',
+    clear:'Clear',export:'Export',restart:'Restart',shutdown:'Shutdown',save:'Save',
+    cfg_sec_configuration:'Configuration',cfg_sec_access:'Access Control',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI Whitelist',whitelist_add:'Add ISSI',whitelist_empty:'List empty — open network (any radio may register).',
     whitelist_help:'When the list is empty, any radio may register (open network). When non-empty, only the listed ISSIs are accepted; all others are rejected. Changes apply instantly and persist across restarts.',
     whitelist_enforced:'ENFORCED',whitelist_open:'OPEN',whitelist_invalid:'Enter a valid ISSI (1–16777215).',
     wx_title:'WX / METAR Service',wx_help:'Built-in weather service. Radios send an SDS like "METAR LROP" to the service ISSI to get a decoded report. Optionally auto-send a fixed station\'s METAR to an ISSI or talkgroup at a set interval. Data from aviationweather.gov.',
@@ -3514,7 +4034,7 @@ const LANGS={
     sds_callout_raw:'Raw Hex Payload optional',
     sds_callout_help:'Incidents 1-15 use the confirmed byte formula (N << 4) | 0x01: 1=11, 2=21, 3=31, 4=41. Incidents 16-256 use the extended one-byte selector. Raw Hex overrides automatic payload generation.',
     live_sds_desc:'Broadcast a text message to all radios on the cell, repeating at the Home Mode Display interval. Repeats until deleted or the repeat count is reached.',
-    live_sds_text:'Message text (max 251 chars)',live_sds_repeat:'Repeat (0=∞)',live_sds_send:'📢 Broadcast',
+    live_sds_text:'Message text (max 251 chars)',live_sds_repeat:'Repeat (0=∞)',live_sds_send:'Broadcast',
     live_sds_clear_all:'Clear All',live_sds_empty:'No active broadcasts.',
     live_sds_sent:'sent',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
     fallback_title:'⚠ FALLBACK CONFIG ACTIVE — Primary config failed to load',
@@ -3530,14 +4050,14 @@ const LANGS={
     act_call_group:'Group Call',act_call_individual:'P2P Call',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
     call_group:'GROUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'EMERGENCY',
-    emg_banner_title:'EMERGENCY ACTIVE',emg_clear:'Clear',confirm_clear_emergency:'Clear emergency for ISSI {issi}?',
+    emg_banner_title:'EMERGENCY ACTIVE',integrations:'Integrations',integ_enabled:'Enabled',integ_disabled:'Disabled',integ_error:'Error',system_sec:'System',emg_chip:'EMERGENCY',bs_label:'BS',emg_clear:'Clear',confirm_clear_emergency:'Clear emergency for ISSI {issi}?',
     confirm_kick:'Kick ISSI {issi}?\nTerminal will be deregistered and forced to re-attach.',
     dgna:'DGNA',dgna_title:'Dynamic group assignment',dgna_modal_title:'⬡ Dynamic Group Assignment',dgna_issi:'Terminal ISSI',dgna_current:'Current groups',dgna_gssi:'Group (GSSI)',dgna_assign:'Assign',dgna_deassign:'Deassign',
     confirm_restart:'Restart FlowStation?\nAll active calls will be dropped.',
     confirm_shutdown:'Shutdown FlowStation?\nThe service will stop and must be restarted manually.',
     confirm_logout:'Log out?',
     saved:'✓ Saved — restart to apply.',save_fail:'✗ Save failed',conn_error:'Connection error.',
-    update:'⬆ Update',update_available:'Update available',update_title:'OTA Update — github.com/razvanzeces/flowstation',
+    update:'Update',update_available:'Update available',update_title:'OTA Update — github.com/razvanzeces/flowstation',
     update_confirm:'Pull latest from main and rebuild?\nThe service will restart automatically.',
     update_running:'Updating… do not close this window.',
     update_done_ok:'✓ Update complete. Restarting…',
@@ -3546,45 +4066,46 @@ const LANGS={
     system:'System',sys_info:'System Info',sys_hostname:'Hostname',sys_uptime:'Uptime',
     sys_version:'FS Version',sys_os:'OS',sys_config:'Active Config',
     sys_cpu:'CPU',sys_cpu_load:'CPU Load',sys_ram:'RAM',sys_temp:'CPU Temp',
-    wifi:'WiFi',wifi_status:'Current connection',wifi_saved:'Saved networks',wifi_visible:'Available networks',wifi_loading:'Loading…',wifi_scanning:'Scanning…',wifi_no_device:'No WiFi device detected on this host.',wifi_radio_disabled:'WiFi radio is disabled.',wifi_not_connected:'Not connected to any network.',wifi_no_saved:'No saved networks.',wifi_no_networks:'No networks in range.',wifi_ssid:'Network',wifi_signal:'Signal',wifi_ip:'IP address',wifi_actions:'Actions',wifi_disconnect:'Disconnect',wifi_connect:'Connect',wifi_connect_to:'Connect to',wifi_connecting:'Connecting…',wifi_connected:'CONNECTED',wifi_connected_ok:'Connected.',wifi_saved_tag:'SAVED',wifi_open:'OPEN',wifi_forget:'Forget',wifi_confirm_forget:'Forget network',wifi_password:'Password',wifi_hidden:'Hidden network (SSID not broadcast)',wifi_add_hidden:'+ Hidden network',wifi_scan:'↻ Scan',wifi_refresh:'↻ Refresh',wifi_radio_off:'Disable WiFi',wifi_radio_on:'Enable WiFi',wifi_warn_lose_access:'⚠ If connected to the dashboard via WiFi, changing networks may temporarily disconnect you. Make sure you have a backup access path (Ethernet or known good network).',wifi_err_no_ssid:'SSID required',cancel:'Cancel',sys_sensors:'Host Hardware Sensors',sys_sensors_empty:'No sensors detected on this host.',sys_rf:'RF Hardware (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
+    wifi:'WiFi',wifi_status:'Current connection',wifi_saved:'Saved networks',wifi_visible:'Available networks',wifi_loading:'Loading…',wifi_scanning:'Scanning…',wifi_no_device:'No WiFi device detected on this host.',wifi_radio_disabled:'WiFi radio is disabled.',wifi_not_connected:'Not connected to any network.',wifi_no_saved:'No saved networks.',wifi_no_networks:'No networks in range.',wifi_ssid:'Network',wifi_signal:'Signal',wifi_ip:'IP address',wifi_actions:'Actions',wifi_disconnect:'Disconnect',wifi_connect:'Connect',wifi_connect_to:'Connect to',wifi_connecting:'Connecting…',wifi_connected:'CONNECTED',wifi_connected_ok:'Connected.',wifi_saved_tag:'SAVED',wifi_open:'OPEN',wifi_forget:'Forget',wifi_confirm_forget:'Forget network',wifi_password:'Password',wifi_hidden:'Hidden network (SSID not broadcast)',wifi_add_hidden:'Hidden network',wifi_scan:'Scan',wifi_refresh:'Refresh',wifi_radio_off:'Disable WiFi',wifi_radio_on:'Enable WiFi',wifi_warn_lose_access:'If connected to the dashboard via WiFi, changing networks may temporarily disconnect you. Make sure you have a backup access path (Ethernet or known good network).',wifi_err_no_ssid:'SSID required',cancel:'Cancel',sys_sensors:'Host Hardware Sensors',sys_sensors_empty:'No sensors detected on this host.',sys_rf:'RF Hardware (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
     profile_edit_title:'Edit Config Profile',profile_edit_btn:'Edit',
     profile_edit_save_ok:'✓ Saved',profile_edit_save_fail:'✗ Save failed',
     sys_os:'OS',sys_version:'FS Version',sys_config:'Active Config',
     sys_profiles:'Config Profiles',sys_activate:'Activate & Restart',
     sys_active_badge:'ACTIVE',sys_no_profiles:'No .toml profiles found in config directory.',
     sys_activate_confirm:'Switch to profile "{name}" and restart?\nCurrent config will be backed up.',
+    sys_title:'System',sys_sec_status:'Status',sys_sec_host:'Host',sys_sec_radio:'Radio Hardware',sys_sec_sensors:'Sensors',sys_sec_profiles:'Profiles',sys_sec_sds:'SDS Broadcast',sys_refresh:'Refresh',sys_probe:'Probe',sys_temp_hot:'HOT',sys_temp_warm:'Warm',sys_temp_ok:'OK',
     sys_bts:'BTS Connection',
     telegram:'Telegram',tg_title:'Telegram Alerts',
     tg_help:'Get instant Telegram messages when something happens on the station — a radio attaches or drops, the backhaul goes up or down, a position beacon arrives, or the stack logs a warning/error.',
     tg_enabled:'Enable Telegram alerts',
     tg_test:'Send test',tg_testing:'Sending test…',tg_test_ok:'✓ Test sent to {n} chat(s)',
     tg_howto_title:'Setup — 4 steps',
-    tg_step1:'1. In Telegram, open @BotFather, send /newbot and follow the prompts. Copy the bot token it gives you.',
-    tg_step2:'2. Paste the token below and click Verify — you should see your bot\'s @username.',
-    tg_step3:'3. Open a chat with your new bot (or add it to a group) and send it any message, e.g. /start.',
-    tg_step4:'4. Click "Detect Chat ID", add your chat to the recipients, then Save. Use "Send test" to confirm.',
+    tg_step1:'In Telegram, open @BotFather, send /newbot and follow the prompts. Copy the bot token it gives you.',
+    tg_step2:'Paste the token below and click Verify — you should see your bot\'s @username.',
+    tg_step3:'Open a chat with your new bot (or add it to a group) and send it any message, e.g. /start.',
+    tg_step4:'Click "Detect Chat ID", add your chat to the recipients, then Save. Use "Send test" to confirm.',
     tg_bot_title:'Bot token',
     tg_bot_help:'The token from @BotFather looks like 123456789:AAExampleTokenString. It is stored masked and never shown in full again.',
     tg_verify:'Verify',tg_verifying:'Verifying…',
     tg_recipients_title:'Recipients (Chat IDs)',
     tg_recipients_help:'Every alert is sent to each recipient. A positive ID is a private chat; a negative ID is a group or channel.',
-    tg_detect:'📥 Detect Chat ID',tg_detecting:'Reading recent messages…',
+    tg_detect:'Detect Chat ID',tg_detecting:'Reading recent messages…',
     tg_detect_none:'No recent messages found. Send your bot a message first, then try again.',
     tg_detect_found:'Chats that messaged your bot — click Add:',
     tg_add:'Add',tg_no_recipients:'No recipients yet.',tg_invalid_chat:'Enter a valid Chat ID.',
     tg_categories_title:'Alert categories',
-    tg_cat_connect:'🟢 Radio connected',tg_cat_disconnect:'🔴 Radio disconnected',
-    tg_cat_t351:'📴 Radio dropped (no T351 response)',tg_cat_lip:'📍 LIP/APRS position beacon',
-    tg_cat_backhaul:'🛰 Brew backhaul up/down',tg_cat_logs:'🚨 Critical log (warnings/errors)',
+    tg_cat_connect:'Radio connected',tg_cat_disconnect:'Radio disconnected',
+    tg_cat_t351:'Radio dropped (no T351 response)',tg_cat_lip:'LIP/APRS position beacon',
+    tg_cat_backhaul:'Brew backhaul up/down',tg_cat_logs:'Critical log (warnings/errors)',
   },
   ro:{
     bts_ip:'IP BTS',offline:'DECONECTAT',online:'CONECTAT',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
     stations:'Radiouri',calls:'Apeluri',lastheard:'Ultima Activitate',log:'Log',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Config',
-    sdslog:'Jurnal SDS',th_dir:'Dir',th_from:'De la',th_to:'Către',th_message:'Mesaj',no_sds:'Niciun mesaj SDS încă',sds_refresh:'⟳ Reîmprospătează',
+    sdslog:'Jurnal SDS',th_dir:'Dir',th_from:'De la',th_to:'Către',th_message:'Mesaj',no_sds:'Niciun mesaj SDS încă',sds_refresh:'Reîmprospătează',
     rf_freq:'Frecvență centru',rf_rate:'Rată eșantion',rf_rms:'RMS',rf_peak:'Vârf',rf_age:'Captură',
     rf_waiting:'în așteptare…',rf_live:'live',rf_stale:'expirat',
-    rf_spectrum:'Spectru TX DSP (pre-PA)',rf_constellation:'Constelație TX DSP',
+    rf_visualizers:'Vizualizatoare',rf_spectrum:'Spectru TX DSP (pre-PA)',rf_constellation:'Constelație TX DSP',
     rf_hint_spectrum:'live · FFT 512-bin',rf_hint_constellation:'π/4-DQPSK',
     rf_waterfall:'Cascadă Spectru TX',rf_hint_waterfall:'derulant · viridis',
     rf_quality:'Calitate Semnal',rf_hint_quality:'măsurat pre-PA · din același snapshot DSP',
@@ -3604,8 +4125,8 @@ const LANGS={
     readability:'Lizibilitate',size_small:'Mic',size_small_d:'Compact · contrast normal',size_medium:'Mediu',size_medium_d:'Implicit · confortabil',size_high:'Mare',size_high_d:'Mai mare · contrast sporit',size_ultra:'Ultra',size_ultra_d:'Cel mai mare · contrast maxim',sdr:'SDR',power:'Consum',
     no_terminals:'Niciun radio înregistrat',no_calls:'Niciun apel activ',
     live_log:'Log Live',autoscroll:'Auto-scroll',filter_all:'Toate',
-    clear:'Șterge',export:'⤓ Export',restart:'⟳ Repornire',shutdown:'⏻ Oprire',save:'Salvează',
-    whitelist_title:'Listă albă ISSI',whitelist_add:'+ Adaugă ISSI',whitelist_empty:'Listă goală — rețea deschisă (orice radio se poate înregistra).',
+    clear:'Șterge',export:'Export',restart:'Repornire',shutdown:'Oprire',save:'Salvează',
+    cfg_sec_configuration:'Configurație',cfg_sec_access:'Control acces',cfg_sec_wx:'WX / METAR',whitelist_title:'Listă albă ISSI',whitelist_add:'Adaugă ISSI',whitelist_empty:'Listă goală — rețea deschisă (orice radio se poate înregistra).',
     whitelist_help:'Când lista e goală, orice radio se poate înregistra (rețea deschisă). Când are intrări, doar ISSI-urile listate sunt acceptate; restul sunt respinse. Modificările se aplică instant și persistă după repornire.',
     whitelist_enforced:'ACTIVĂ',whitelist_open:'DESCHISĂ',whitelist_invalid:'Introdu un ISSI valid (1–16777215).',
     wx_title:'Serviciu WX / METAR',wx_help:'Serviciu meteo integrat. Radiourile trimit un SDS de forma "METAR LROP" către ISSI-ul serviciului și primesc raportul decodat. Opțional, trimite automat METAR-ul unei stații fixe către un ISSI sau grup la interval. Date de la aviationweather.gov.',
@@ -3613,7 +4134,7 @@ const LANGS={
     wx_periodic_icao:'Cod ICAO stație',wx_periodic_dest:'Destinație',wx_periodic_isgroup:'Destinația e grup',wx_periodic_isgroup_hint:'(GSSI în loc de ISSI individual)',
     wx_periodic_interval:'Interval (secunde)',wx_interval_hint:'Minim 300 s (5 min) ca să nu suprasolicităm API-ul meteo.',wx_periodic_incomplete:'Setează și ICAO stație și destinație pentru modul periodic.',
     live_sds_desc:'Transmite un mesaj text către toate radiourile din celulă, repetând la intervalul Home Mode Display.',
-    live_sds_text:'Text mesaj (max 251 caractere)',live_sds_repeat:'Repetări (0=∞)',live_sds_send:'📢 Broadcast',
+    live_sds_text:'Text mesaj (max 251 caractere)',live_sds_repeat:'Repetări (0=∞)',live_sds_send:'Broadcast',
     live_sds_clear_all:'Șterge Tot',live_sds_empty:'Niciun broadcast activ.',
     live_sds_sent:'trimis',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
     fallback_title:'⚠ CONFIG DE REZERVĂ ACTIV — Config principal nu a putut fi încărcat',
@@ -3630,14 +4151,14 @@ const LANGS={
     act_call_group:'Apel Grup',act_call_individual:'Apel P2P',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
     call_group:'GRUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'URGENȚĂ',
-    emg_banner_title:'URGENȚĂ ACTIVĂ',emg_clear:'Anulează',confirm_clear_emergency:'Anulezi urgența pentru ISSI {issi}?',
+    emg_banner_title:'URGENȚĂ ACTIVĂ',integrations:'Integrări',integ_enabled:'Activat',integ_disabled:'Dezactivat',integ_error:'Eroare',system_sec:'Sistem',emg_chip:'URGENȚĂ',bs_label:'BS',emg_clear:'Anulează',confirm_clear_emergency:'Anulezi urgența pentru ISSI {issi}?',
     confirm_kick:'Kick ISSI {issi}?\nTerminalul va fi deînregistrat și forțat să se reconecteze.',
     dgna:'DGNA',dgna_title:'Atribuire dinamică de grup',dgna_modal_title:'⬡ Atribuire dinamică de grup',dgna_issi:'ISSI terminal',dgna_current:'Grupuri curente',dgna_gssi:'Grup (GSSI)',dgna_assign:'Atribuie',dgna_deassign:'Retrage',
     confirm_restart:'Repornire FlowStation?\nToate apelurile active vor fi întrerupte.',
     confirm_shutdown:'Oprire FlowStation?\nServiciul se va opri și trebuie repornit manual.',
     confirm_logout:'Deconectare?',
     saved:'✓ Salvat — repornire pentru aplicare.',save_fail:'✗ Salvare eșuată',conn_error:'Eroare de conexiune.',
-    update:'⬆ Update',update_available:'Actualizare disponibilă',update_title:'Update OTA — github.com/razvanzeces/flowstation',
+    update:'Update',update_available:'Actualizare disponibilă',update_title:'Update OTA — github.com/razvanzeces/flowstation',
     update_confirm:'Descarcă ultima versiune din main și recompilează?\nServiciul va reporni automat.',
     update_running:'Se actualizează… nu închide fereastra.',
     update_done_ok:'✓ Update finalizat. Se repornește…',
@@ -3646,44 +4167,45 @@ const LANGS={
     system:'Sistem',sys_info:'Info Sistem',sys_hostname:'Hostname',sys_uptime:'Uptime',
     sys_os:'OS',sys_version:'Versiune FS',sys_config:'Config Activ',
     sys_cpu:'CPU',sys_cpu_load:'Încărcare CPU',sys_ram:'RAM',sys_temp:'Temp CPU',
-    wifi:'WiFi',wifi_status:'Conexiunea curentă',wifi_saved:'Rețele salvate',wifi_visible:'Rețele disponibile',wifi_loading:'Se încarcă…',wifi_scanning:'Se scanează…',wifi_no_device:'Niciun dispozitiv WiFi detectat.',wifi_radio_disabled:'Radioul WiFi este dezactivat.',wifi_not_connected:'Neconectat la nicio rețea.',wifi_no_saved:'Nicio rețea salvată.',wifi_no_networks:'Nicio rețea în rază.',wifi_ssid:'Rețea',wifi_signal:'Semnal',wifi_ip:'Adresă IP',wifi_actions:'Acțiuni',wifi_disconnect:'Deconectează',wifi_connect:'Conectează',wifi_connect_to:'Conectează la',wifi_connecting:'Se conectează…',wifi_connected:'CONECTAT',wifi_connected_ok:'Conectat.',wifi_saved_tag:'SALVAT',wifi_open:'DESCHIS',wifi_forget:'Uită',wifi_confirm_forget:'Uită rețeaua',wifi_password:'Parolă',wifi_hidden:'Rețea ascunsă (SSID nedifuzat)',wifi_add_hidden:'+ Rețea ascunsă',wifi_scan:'↻ Scanează',wifi_refresh:'↻ Reîncarcă',wifi_radio_off:'Dezactivează WiFi',wifi_radio_on:'Activează WiFi',wifi_warn_lose_access:'⚠ Dacă ești conectat la dashboard prin WiFi, schimbarea rețelei te poate deconecta temporar. Asigură-te că ai o cale alternativă (Ethernet sau rețea de încredere).',wifi_err_no_ssid:'SSID necesar',cancel:'Anulează',sys_sensors:'Senzori Hardware Gazdă',sys_sensors_empty:'Niciun senzor detectat.',sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
+    wifi:'WiFi',wifi_status:'Conexiunea curentă',wifi_saved:'Rețele salvate',wifi_visible:'Rețele disponibile',wifi_loading:'Se încarcă…',wifi_scanning:'Se scanează…',wifi_no_device:'Niciun dispozitiv WiFi detectat.',wifi_radio_disabled:'Radioul WiFi este dezactivat.',wifi_not_connected:'Neconectat la nicio rețea.',wifi_no_saved:'Nicio rețea salvată.',wifi_no_networks:'Nicio rețea în rază.',wifi_ssid:'Rețea',wifi_signal:'Semnal',wifi_ip:'Adresă IP',wifi_actions:'Acțiuni',wifi_disconnect:'Deconectează',wifi_connect:'Conectează',wifi_connect_to:'Conectează la',wifi_connecting:'Se conectează…',wifi_connected:'CONECTAT',wifi_connected_ok:'Conectat.',wifi_saved_tag:'SALVAT',wifi_open:'DESCHIS',wifi_forget:'Uită',wifi_confirm_forget:'Uită rețeaua',wifi_password:'Parolă',wifi_hidden:'Rețea ascunsă (SSID nedifuzat)',wifi_add_hidden:'Rețea ascunsă',wifi_scan:'Scanează',wifi_refresh:'Reîncarcă',wifi_radio_off:'Dezactivează WiFi',wifi_radio_on:'Activează WiFi',wifi_warn_lose_access:'Dacă ești conectat la dashboard prin WiFi, schimbarea rețelei te poate deconecta temporar. Asigură-te că ai o cale alternativă (Ethernet sau rețea de încredere).',wifi_err_no_ssid:'SSID necesar',cancel:'Anulează',sys_sensors:'Senzori Hardware Gazdă',sys_sensors_empty:'Niciun senzor detectat.',sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
     profile_edit_title:'Editare Profil Config',profile_edit_btn:'Editează',
     profile_edit_save_ok:'✓ Salvat',profile_edit_save_fail:'✗ Salvare eșuată',
     sys_profiles:'Profile Config',sys_activate:'Activează & Repornire',
     sys_active_badge:'ACTIV',sys_no_profiles:'Niciun profil .toml găsit în directorul config.',
     sys_activate_confirm:'Comutare la profilul "{name}" și repornire?\nConfig-ul curent va fi salvat.',
+    sys_title:'Sistem',sys_sec_status:'Stare',sys_sec_host:'Gazdă',sys_sec_radio:'Hardware radio',sys_sec_sensors:'Senzori',sys_sec_profiles:'Profiluri',sys_sec_sds:'Difuzare SDS',sys_refresh:'Reîncarcă',sys_probe:'Sondează',sys_temp_hot:'FIERBINTE',sys_temp_warm:'Cald',sys_temp_ok:'OK',
     sys_bts:'Conexiune BTS',
     telegram:'Telegram',tg_title:'Alerte Telegram',
     tg_help:'Primește mesaje Telegram instant când se întâmplă ceva pe stație — un radio se conectează sau cade, backhaul-ul urcă/coboară, sosește o baliză de poziție, sau stack-ul logează un avertisment/eroare.',
     tg_enabled:'Activează alertele Telegram',
     tg_test:'Trimite test',tg_testing:'Se trimite testul…',tg_test_ok:'✓ Test trimis către {n} conversație(i)',
     tg_howto_title:'Configurare — 4 pași',
-    tg_step1:'1. În Telegram, deschide @BotFather, trimite /newbot și urmează pașii. Copiază token-ul botului.',
-    tg_step2:'2. Lipește token-ul mai jos și apasă Verifică — ar trebui să vezi @username-ul botului tău.',
-    tg_step3:'3. Deschide o conversație cu botul (sau adaugă-l într-un grup) și trimite-i orice mesaj, ex. /start.',
-    tg_step4:'4. Apasă „Detectează Chat ID", adaugă conversația la destinatari, apoi Salvează. Folosește „Trimite test" pentru confirmare.',
+    tg_step1:'În Telegram, deschide @BotFather, trimite /newbot și urmează pașii. Copiază token-ul botului.',
+    tg_step2:'Lipește token-ul mai jos și apasă Verifică — ar trebui să vezi @username-ul botului tău.',
+    tg_step3:'Deschide o conversație cu botul (sau adaugă-l într-un grup) și trimite-i orice mesaj, ex. /start.',
+    tg_step4:'Apasă „Detectează Chat ID", adaugă conversația la destinatari, apoi Salvează. Folosește „Trimite test" pentru confirmare.',
     tg_bot_title:'Token bot',
     tg_bot_help:'Token-ul de la @BotFather arată ca 123456789:AAExempluToken. Este stocat mascat și nu mai e afișat integral.',
     tg_verify:'Verifică',tg_verifying:'Se verifică…',
     tg_recipients_title:'Destinatari (Chat ID-uri)',
     tg_recipients_help:'Fiecare alertă e trimisă către toți destinatarii. Un ID pozitiv e o conversație privată; unul negativ e un grup sau canal.',
-    tg_detect:'📥 Detectează Chat ID',tg_detecting:'Se citesc mesajele recente…',
+    tg_detect:'Detectează Chat ID',tg_detecting:'Se citesc mesajele recente…',
     tg_detect_none:'Niciun mesaj recent. Trimite întâi un mesaj botului, apoi încearcă din nou.',
     tg_detect_found:'Conversații care au scris botului — apasă Adaugă:',
     tg_add:'Adaugă',tg_no_recipients:'Niciun destinatar încă.',tg_invalid_chat:'Introdu un Chat ID valid.',
     tg_categories_title:'Categorii de alerte',
-    tg_cat_connect:'🟢 Radio conectat',tg_cat_disconnect:'🔴 Radio deconectat',
-    tg_cat_t351:'📴 Radio căzut (fără răspuns T351)',tg_cat_lip:'📍 Baliză poziție LIP/APRS',
-    tg_cat_backhaul:'🛰 Backhaul Brew up/down',tg_cat_logs:'🚨 Log critic (avertismente/erori)',
+    tg_cat_connect:'Radio conectat',tg_cat_disconnect:'Radio deconectat',
+    tg_cat_t351:'Radio căzut (fără răspuns T351)',tg_cat_lip:'Baliză poziție LIP/APRS',
+    tg_cat_backhaul:'Backhaul Brew up/down',tg_cat_logs:'Log critic (avertismente/erori)',
   },
   de:{
     bts_ip:'BTS-IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
     stations:'Radios',calls:'Anrufe',lastheard:'Zuletzt Gehört',log:'Log',rf:'RF',health:'Health',asterisk:'Asterisk SIP',dapnet:'DAPNET',echolink:'EchoLink',echolink_title:'EchoLink',meshcom:'MeshCom',meshcom_title:'MeshCom',geoalarm:'GeoAlarm',geoalarm_title:'GeoAlarm',config:'Config',
-    sdslog:'SDS-Log',th_dir:'Ri.',th_from:'Von',th_to:'An',th_message:'Nachricht',no_sds:'Noch keine SDS-Nachrichten',sds_refresh:'⟳ Aktualisieren',
+    sdslog:'SDS-Log',th_dir:'Ri.',th_from:'Von',th_to:'An',th_message:'Nachricht',no_sds:'Noch keine SDS-Nachrichten',sds_refresh:'Aktualisieren',
     rf_freq:'Mittenfrequenz',rf_rate:'Abtastrate',rf_rms:'RMS',rf_peak:'Spitze',rf_age:'Aufnahme',
     rf_waiting:'wartet…',rf_live:'live',rf_stale:'veraltet',
-    rf_spectrum:'TX-DSP-Spektrum (vor PA)',rf_constellation:'TX-DSP-Konstellation',
+    rf_visualizers:'Visualisierungen',rf_spectrum:'TX-DSP-Spektrum (vor PA)',rf_constellation:'TX-DSP-Konstellation',
     rf_hint_spectrum:'live · 512-bin FFT',rf_hint_constellation:'π/4-DQPSK',
     rf_waterfall:'TX-Spektrum-Wasserfall',rf_hint_waterfall:'rollend · viridis',
     rf_quality:'Signalqualität',rf_hint_quality:'gemessen vor PA · aus selbem DSP-Snapshot',
@@ -3703,8 +4225,8 @@ const LANGS={
     registered_terminals:'Registrierte Radios',
     no_terminals:'Keine Radios registriert',no_calls:'Keine aktiven Anrufe',
     live_log:'Live-Log',autoscroll:'Auto-Scroll',filter_all:'Alle',
-    clear:'Löschen',export:'⤓ Exportieren',restart:'⟳ Neustart',shutdown:'⏻ Herunterfahren',save:'Speichern',
-    whitelist_title:'ISSI-Whitelist',whitelist_add:'+ ISSI hinzufügen',whitelist_empty:'Liste leer — offenes Netz (jedes Funkgerät darf sich anmelden).',
+    clear:'Löschen',export:'Exportieren',restart:'Neustart',shutdown:'Herunterfahren',save:'Speichern',
+    cfg_sec_configuration:'Konfiguration',cfg_sec_access:'Zugriffskontrolle',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI-Whitelist',whitelist_add:'ISSI hinzufügen',whitelist_empty:'Liste leer — offenes Netz (jedes Funkgerät darf sich anmelden).',
     whitelist_help:'Ist die Liste leer, darf sich jedes Funkgerät anmelden (offenes Netz). Bei Einträgen werden nur die gelisteten ISSIs akzeptiert; alle anderen werden abgewiesen. Änderungen wirken sofort und bleiben nach Neustart erhalten.',
     whitelist_enforced:'AKTIV',whitelist_open:'OFFEN',whitelist_invalid:'Gültige ISSI eingeben (1–16777215).',
     wx_title:'WX / METAR-Dienst',wx_help:'Integrierter Wetterdienst. Funkgeräte senden eine SDS wie "METAR LROP" an die Dienst-ISSI und erhalten einen dekodierten Bericht. Optional automatisches Senden des METAR einer festen Station an eine ISSI oder Gruppe in Intervallen. Daten von aviationweather.gov.',
@@ -3712,7 +4234,7 @@ const LANGS={
     wx_periodic_icao:'Stations-ICAO',wx_periodic_dest:'Ziel',wx_periodic_isgroup:'Ziel ist Gruppe',wx_periodic_isgroup_hint:'(GSSI statt einzelner ISSI)',
     wx_periodic_interval:'Intervall (Sekunden)',wx_interval_hint:'Mindestens 300 s (5 Min), um die Wetter-API nicht zu überlasten.',wx_periodic_incomplete:'Stations-ICAO und Ziel für den periodischen Modus setzen.',
     live_sds_desc:'Sendet eine Textnachricht an alle Funkgeräte der Zelle, wiederholt im Home-Mode-Display-Intervall.',
-    live_sds_text:'Nachrichtentext (max. 251 Zeichen)',live_sds_repeat:'Wiederh. (0=∞)',live_sds_send:'📢 Senden',
+    live_sds_text:'Nachrichtentext (max. 251 Zeichen)',live_sds_repeat:'Wiederh. (0=∞)',live_sds_send:'Senden',
     live_sds_clear_all:'Alle löschen',live_sds_empty:'Keine aktiven Broadcasts.',
     live_sds_sent:'gesendet',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
     fallback_title:'⚠ FALLBACK-KONFIGURATION AKTIV — Primäre Konfiguration konnte nicht geladen werden',
@@ -3733,14 +4255,14 @@ const LANGS={
     act_call_group:'Gruppenruf',act_call_individual:'P2P-Ruf',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Entfernen',sds:'SDS',
     call_group:'GRUPPE',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'NOTRUF',
-    emg_banner_title:'NOTFALL AKTIV',emg_clear:'Löschen',confirm_clear_emergency:'Notfall für ISSI {issi} löschen?',
+    emg_banner_title:'NOTFALL AKTIV',integrations:'Integrationen',integ_enabled:'Aktiviert',integ_disabled:'Deaktiviert',integ_error:'Fehler',system_sec:'System',emg_chip:'NOTFALL',bs_label:'BS',emg_clear:'Löschen',confirm_clear_emergency:'Notfall für ISSI {issi} löschen?',
     confirm_kick:'ISSI {issi} entfernen?\nDas Terminal wird abgemeldet und zur Neuanmeldung gezwungen.',
     dgna:'DGNA',dgna_title:'Dynamische Gruppenzuweisung',dgna_modal_title:'⬡ Dynamische Gruppenzuweisung',dgna_issi:'Terminal-ISSI',dgna_current:'Aktuelle Gruppen',dgna_gssi:'Gruppe (GSSI)',dgna_assign:'Zuweisen',dgna_deassign:'Entfernen',
     confirm_restart:'FlowStation neu starten?\nAlle aktiven Anrufe werden beendet.',
     confirm_shutdown:'FlowStation herunterfahren?\nDer Dienst wird gestoppt und muss manuell neu gestartet werden.',
     confirm_logout:'Abmelden?',
     saved:'✓ Gespeichert — Neustart zum Anwenden.',save_fail:'✗ Fehler beim Speichern',conn_error:'Verbindungsfehler.',
-    update:'⬆ Update',update_available:'Update verfügbar',update_title:'OTA-Update — github.com/razvanzeces/flowstation',
+    update:'Update',update_available:'Update verfügbar',update_title:'OTA-Update — github.com/razvanzeces/flowstation',
     update_confirm:'Neueste Version von main holen und neu bauen?\nDer Dienst startet automatisch neu.',
     update_running:'Aktualisierung läuft… Fenster nicht schließen.',
     update_done_ok:'✓ Update abgeschlossen. Neustart…',
@@ -3749,22 +4271,23 @@ const LANGS={
     system:'System',sys_info:'Systeminfo',sys_hostname:'Hostname',sys_uptime:'Laufzeit',
     sys_os:'OS',sys_version:'FS-Version',sys_config:'Aktive Konfig',
     sys_cpu:'CPU',sys_cpu_load:'CPU-Auslastung',sys_ram:'RAM',sys_temp:'CPU-Temp',
-    wifi:'WLAN',wifi_status:'Aktuelle Verbindung',wifi_saved:'Gespeicherte Netzwerke',wifi_visible:'Verfügbare Netzwerke',wifi_loading:'Wird geladen…',wifi_scanning:'Suche läuft…',wifi_no_device:'Kein WLAN-Gerät erkannt.',wifi_radio_disabled:'WLAN-Funk ist deaktiviert.',wifi_not_connected:'Mit keinem Netzwerk verbunden.',wifi_no_saved:'Keine gespeicherten Netzwerke.',wifi_no_networks:'Keine Netzwerke in Reichweite.',wifi_ssid:'Netzwerk',wifi_signal:'Signal',wifi_ip:'IP-Adresse',wifi_actions:'Aktionen',wifi_disconnect:'Trennen',wifi_connect:'Verbinden',wifi_connect_to:'Verbinden mit',wifi_connecting:'Verbinde…',wifi_connected:'VERBUNDEN',wifi_connected_ok:'Verbunden.',wifi_saved_tag:'GESPEICHERT',wifi_open:'OFFEN',wifi_forget:'Vergessen',wifi_confirm_forget:'Netzwerk vergessen',wifi_password:'Passwort',wifi_hidden:'Verstecktes Netzwerk (SSID nicht gesendet)',wifi_add_hidden:'+ Verstecktes Netzwerk',wifi_scan:'↻ Suchen',wifi_refresh:'↻ Aktualisieren',wifi_radio_off:'WLAN deaktivieren',wifi_radio_on:'WLAN aktivieren',wifi_warn_lose_access:'⚠ Wenn Sie über WLAN mit dem Dashboard verbunden sind, kann ein Netzwerkwechsel die Verbindung trennen. Stellen Sie sicher, dass Sie einen alternativen Zugang haben.',wifi_err_no_ssid:'SSID erforderlich',cancel:'Abbrechen',sys_sensors:'Host-Hardware-Sensoren',sys_sensors_empty:'Keine Sensoren erkannt.',sys_rf:'RF-Hardware (SoapySDR)',sys_autorefresh:'Auto-Aktualisierung 5s',
+    wifi:'WLAN',wifi_status:'Aktuelle Verbindung',wifi_saved:'Gespeicherte Netzwerke',wifi_visible:'Verfügbare Netzwerke',wifi_loading:'Wird geladen…',wifi_scanning:'Suche läuft…',wifi_no_device:'Kein WLAN-Gerät erkannt.',wifi_radio_disabled:'WLAN-Funk ist deaktiviert.',wifi_not_connected:'Mit keinem Netzwerk verbunden.',wifi_no_saved:'Keine gespeicherten Netzwerke.',wifi_no_networks:'Keine Netzwerke in Reichweite.',wifi_ssid:'Netzwerk',wifi_signal:'Signal',wifi_ip:'IP-Adresse',wifi_actions:'Aktionen',wifi_disconnect:'Trennen',wifi_connect:'Verbinden',wifi_connect_to:'Verbinden mit',wifi_connecting:'Verbinde…',wifi_connected:'VERBUNDEN',wifi_connected_ok:'Verbunden.',wifi_saved_tag:'GESPEICHERT',wifi_open:'OFFEN',wifi_forget:'Vergessen',wifi_confirm_forget:'Netzwerk vergessen',wifi_password:'Passwort',wifi_hidden:'Verstecktes Netzwerk (SSID nicht gesendet)',wifi_add_hidden:'Verstecktes Netzwerk',wifi_scan:'Suchen',wifi_refresh:'Aktualisieren',wifi_radio_off:'WLAN deaktivieren',wifi_radio_on:'WLAN aktivieren',wifi_warn_lose_access:'Wenn Sie über WLAN mit dem Dashboard verbunden sind, kann ein Netzwerkwechsel die Verbindung trennen. Stellen Sie sicher, dass Sie einen alternativen Zugang haben.',wifi_err_no_ssid:'SSID erforderlich',cancel:'Abbrechen',sys_sensors:'Host-Hardware-Sensoren',sys_sensors_empty:'Keine Sensoren erkannt.',sys_rf:'RF-Hardware (SoapySDR)',sys_autorefresh:'Auto-Aktualisierung 5s',
     profile_edit_title:'Konfigprofil bearbeiten',profile_edit_btn:'Bearbeiten',
     profile_edit_save_ok:'✓ Gespeichert',profile_edit_save_fail:'✗ Speichern fehlgeschlagen',
     sys_profiles:'Konfigprofile',sys_activate:'Aktivieren & Neustart',
     sys_active_badge:'AKTIV',sys_no_profiles:'Keine .toml-Profile im Konfigverzeichnis gefunden.',
     sys_activate_confirm:'Zum Profil "{name}" wechseln und neu starten?\nAktuelle Konfig wird gesichert.',
+    sys_title:'System',sys_sec_status:'Status',sys_sec_host:'Host',sys_sec_radio:'Funk-Hardware',sys_sec_sensors:'Sensoren',sys_sec_profiles:'Profile',sys_sec_sds:'SDS-Rundsendung',sys_refresh:'Aktualisieren',sys_probe:'Prüfen',sys_temp_hot:'HEISS',sys_temp_warm:'Warm',sys_temp_ok:'OK',
     sys_bts:'BTS-Verbindung',
   },
   es:{
     bts_ip:'IP BTS',offline:'SIN CONEXIÓN',online:'EN LÍNEA',
     brew_online:'EN LÍNEA',brew_offline:'SIN CONEXIÓN',
     stations:'Radios',calls:'Llamadas',lastheard:'Última Actividad',log:'Log',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Config',
-    sdslog:'Registro SDS',th_dir:'Dir',th_from:'De',th_to:'Para',th_message:'Mensaje',no_sds:'Aún no hay mensajes SDS',sds_refresh:'⟳ Actualizar',
+    sdslog:'Registro SDS',th_dir:'Dir',th_from:'De',th_to:'Para',th_message:'Mensaje',no_sds:'Aún no hay mensajes SDS',sds_refresh:'Actualizar',
     rf_freq:'Frecuencia central',rf_rate:'Tasa de muestreo',rf_rms:'RMS',rf_peak:'Pico',rf_age:'Captura',
     rf_waiting:'esperando…',rf_live:'en vivo',rf_stale:'obsoleto',
-    rf_spectrum:'Espectro TX DSP (pre-PA)',rf_constellation:'Constelación TX DSP',
+    rf_visualizers:'Visualizadores',rf_spectrum:'Espectro TX DSP (pre-PA)',rf_constellation:'Constelación TX DSP',
     rf_hint_spectrum:'en vivo · FFT 512-bin',rf_hint_constellation:'π/4-DQPSK',
     rf_waterfall:'Cascada Espectro TX',rf_hint_waterfall:'desplazándose · viridis',
     rf_quality:'Calidad de Señal',rf_hint_quality:'medido pre-PA · del mismo snapshot DSP',
@@ -3780,8 +4303,8 @@ const LANGS={
     registered_terminals:'Radios Registrados',
     no_terminals:'No hay radios registrados',no_calls:'No hay llamadas activas',
     live_log:'Log en Vivo',autoscroll:'Auto-desplaz.',filter_all:'Todos',
-    clear:'Limpiar',export:'⤓ Exportar',restart:'⟳ Reiniciar',shutdown:'⏻ Apagar',save:'Guardar',
-    whitelist_title:'Lista blanca ISSI',whitelist_add:'+ Añadir ISSI',whitelist_empty:'Lista vacía — red abierta (cualquier radio puede registrarse).',
+    clear:'Limpiar',export:'Exportar',restart:'Reiniciar',shutdown:'Apagar',save:'Guardar',
+    cfg_sec_configuration:'Configuración',cfg_sec_access:'Control de acceso',cfg_sec_wx:'WX / METAR',whitelist_title:'Lista blanca ISSI',whitelist_add:'Añadir ISSI',whitelist_empty:'Lista vacía — red abierta (cualquier radio puede registrarse).',
     whitelist_help:'Cuando la lista está vacía, cualquier radio puede registrarse (red abierta). Con entradas, solo se aceptan los ISSI listados; el resto se rechazan. Los cambios se aplican al instante y persisten tras reiniciar.',
     whitelist_enforced:'ACTIVA',whitelist_open:'ABIERTA',whitelist_invalid:'Introduce un ISSI válido (1–16777215).',
     wx_title:'Servicio WX / METAR',wx_help:'Servicio meteorológico integrado. Las radios envían un SDS como "METAR LROP" al ISSI del servicio y reciben un informe decodificado. Opcionalmente envía automáticamente el METAR de una estación fija a un ISSI o grupo a intervalos. Datos de aviationweather.gov.',
@@ -3789,7 +4312,7 @@ const LANGS={
     wx_periodic_icao:'ICAO de estación',wx_periodic_dest:'Destino',wx_periodic_isgroup:'El destino es grupo',wx_periodic_isgroup_hint:'(GSSI en vez de ISSI individual)',
     wx_periodic_interval:'Intervalo (segundos)',wx_interval_hint:'Mínimo 300 s (5 min) para no saturar la API meteorológica.',wx_periodic_incomplete:'Indica ICAO de estación y destino para el modo periódico.',
     live_sds_desc:'Transmite un mensaje de texto a todos los radios de la celda, repitiéndose al intervalo de Home Mode Display.',
-    live_sds_text:'Texto del mensaje (máx. 251 caracteres)',live_sds_repeat:'Repetir (0=∞)',live_sds_send:'📢 Difundir',
+    live_sds_text:'Texto del mensaje (máx. 251 caracteres)',live_sds_repeat:'Repetir (0=∞)',live_sds_send:'Difundir',
     live_sds_clear_all:'Borrar Todo',live_sds_empty:'No hay difusiones activas.',
     live_sds_sent:'enviado',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
     fallback_title:'⚠ CONFIGURACIÓN DE RESERVA ACTIVA — No se pudo cargar la configuración principal',
@@ -3804,14 +4327,14 @@ const LANGS={
     act_call_group:'Llamada Grupo',act_call_individual:'Llamada P2P',act_sds:'SDS',
     online_badge:'EN LÍNEA',kick:'Expulsar',sds:'SDS',
     call_group:'GRUPO',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'EMERGENCIA',
-    emg_banner_title:'EMERGENCIA ACTIVA',emg_clear:'Borrar',confirm_clear_emergency:'¿Borrar emergencia para ISSI {issi}?',
+    emg_banner_title:'EMERGENCIA ACTIVA',integrations:'Integraciones',integ_enabled:'Activado',integ_disabled:'Desactivado',integ_error:'Error',system_sec:'Sistema',emg_chip:'EMERGENCIA',bs_label:'BS',emg_clear:'Borrar',confirm_clear_emergency:'¿Borrar emergencia para ISSI {issi}?',
     confirm_kick:'¿Expulsar ISSI {issi}?\nEl terminal será desregistrado y forzado a reconectarse.',
     dgna:'DGNA',dgna_title:'Asignación dinámica de grupo',dgna_modal_title:'⬡ Asignación dinámica de grupo',dgna_issi:'ISSI del terminal',dgna_current:'Grupos actuales',dgna_gssi:'Grupo (GSSI)',dgna_assign:'Asignar',dgna_deassign:'Quitar',
     confirm_restart:'¿Reiniciar FlowStation?\nTodas las llamadas activas se interrumpirán.',
     confirm_shutdown:'¿Apagar FlowStation?\nEl servicio se detendrá y deberá reiniciarse manualmente.',
     confirm_logout:'¿Cerrar sesión?',
     saved:'✓ Guardado — reinicia para aplicar.',save_fail:'✗ Error al guardar',conn_error:'Error de conexión.',
-    update:'⬆ Update',update_available:'Actualización disponible',update_title:'Actualización OTA — github.com/razvanzeces/flowstation',
+    update:'Update',update_available:'Actualización disponible',update_title:'Actualización OTA — github.com/razvanzeces/flowstation',
     update_confirm:'¿Obtener la última versión de main y recompilar?\nEl servicio se reiniciará automáticamente.',
     update_running:'Actualizando… no cierres esta ventana.',
     update_done_ok:'✓ Actualización completa. Reiniciando…',
@@ -3820,22 +4343,23 @@ const LANGS={
     system:'Sistema',sys_info:'Info del Sistema',sys_hostname:'Hostname',sys_uptime:'Tiempo activo',
     sys_os:'OS',sys_version:'Versión FS',sys_config:'Config Activa',
     sys_cpu:'CPU',sys_cpu_load:'Carga CPU',sys_ram:'RAM',sys_temp:'Temp CPU',
-    wifi:'WiFi',wifi_status:'Conexión actual',wifi_saved:'Redes guardadas',wifi_visible:'Redes disponibles',wifi_loading:'Cargando…',wifi_scanning:'Escaneando…',wifi_no_device:'No se detectó dispositivo WiFi.',wifi_radio_disabled:'Radio WiFi desactivada.',wifi_not_connected:'No conectado a ninguna red.',wifi_no_saved:'Sin redes guardadas.',wifi_no_networks:'Sin redes en rango.',wifi_ssid:'Red',wifi_signal:'Señal',wifi_ip:'Dirección IP',wifi_actions:'Acciones',wifi_disconnect:'Desconectar',wifi_connect:'Conectar',wifi_connect_to:'Conectar a',wifi_connecting:'Conectando…',wifi_connected:'CONECTADO',wifi_connected_ok:'Conectado.',wifi_saved_tag:'GUARDADO',wifi_open:'ABIERTO',wifi_forget:'Olvidar',wifi_confirm_forget:'Olvidar red',wifi_password:'Contraseña',wifi_hidden:'Red oculta (SSID no difundido)',wifi_add_hidden:'+ Red oculta',wifi_scan:'↻ Escanear',wifi_refresh:'↻ Actualizar',wifi_radio_off:'Desactivar WiFi',wifi_radio_on:'Activar WiFi',wifi_warn_lose_access:'⚠ Si estás conectado al dashboard vía WiFi, cambiar de red puede desconectarte temporalmente. Asegúrate de tener una vía de acceso alternativa.',wifi_err_no_ssid:'SSID requerido',cancel:'Cancelar',sys_sensors:'Sensores del Sistema',sys_sensors_empty:'No se detectaron sensores.',sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-actualización 5s',
+    wifi:'WiFi',wifi_status:'Conexión actual',wifi_saved:'Redes guardadas',wifi_visible:'Redes disponibles',wifi_loading:'Cargando…',wifi_scanning:'Escaneando…',wifi_no_device:'No se detectó dispositivo WiFi.',wifi_radio_disabled:'Radio WiFi desactivada.',wifi_not_connected:'No conectado a ninguna red.',wifi_no_saved:'Sin redes guardadas.',wifi_no_networks:'Sin redes en rango.',wifi_ssid:'Red',wifi_signal:'Señal',wifi_ip:'Dirección IP',wifi_actions:'Acciones',wifi_disconnect:'Desconectar',wifi_connect:'Conectar',wifi_connect_to:'Conectar a',wifi_connecting:'Conectando…',wifi_connected:'CONECTADO',wifi_connected_ok:'Conectado.',wifi_saved_tag:'GUARDADO',wifi_open:'ABIERTO',wifi_forget:'Olvidar',wifi_confirm_forget:'Olvidar red',wifi_password:'Contraseña',wifi_hidden:'Red oculta (SSID no difundido)',wifi_add_hidden:'Red oculta',wifi_scan:'Escanear',wifi_refresh:'Actualizar',wifi_radio_off:'Desactivar WiFi',wifi_radio_on:'Activar WiFi',wifi_warn_lose_access:'Si estás conectado al dashboard vía WiFi, cambiar de red puede desconectarte temporalmente. Asegúrate de tener una vía de acceso alternativa.',wifi_err_no_ssid:'SSID requerido',cancel:'Cancelar',sys_sensors:'Sensores del Sistema',sys_sensors_empty:'No se detectaron sensores.',sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-actualización 5s',
     profile_edit_title:'Editar Perfil Config',profile_edit_btn:'Editar',
     profile_edit_save_ok:'✓ Guardado',profile_edit_save_fail:'✗ Error al guardar',
     sys_profiles:'Perfiles de Config',sys_activate:'Activar y Reiniciar',
     sys_active_badge:'ACTIVO',sys_no_profiles:'No se encontraron perfiles .toml en el directorio.',
     sys_activate_confirm:'¿Cambiar al perfil "{name}" y reiniciar?\nLa config actual será respaldada.',
+    sys_title:'Sistema',sys_sec_status:'Estado',sys_sec_host:'Host',sys_sec_radio:'Hardware de radio',sys_sec_sensors:'Sensores',sys_sec_profiles:'Perfiles',sys_sec_sds:'Difusión SDS',sys_refresh:'Actualizar',sys_probe:'Sondear',sys_temp_hot:'CALIENTE',sys_temp_warm:'Templado',sys_temp_ok:'OK',
     sys_bts:'Conexión BTS',
   },
   hu:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
     stations:'Rádiók',calls:'Hívások',lastheard:'Utoljára Hallott',log:'Napló',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Konfig',
-    sdslog:'SDS Napló',th_dir:'Irány',th_from:'Feladó',th_to:'Címzett',th_message:'Üzenet',no_sds:'Még nincs SDS üzenet',sds_refresh:'⟳ Frissítés',
+    sdslog:'SDS Napló',th_dir:'Irány',th_from:'Feladó',th_to:'Címzett',th_message:'Üzenet',no_sds:'Még nincs SDS üzenet',sds_refresh:'Frissítés',
     rf_freq:'Központi frekvencia',rf_rate:'Mintavételezési ráta',rf_rms:'RMS',rf_peak:'Csúcs',rf_age:'Pillanatkép',
     rf_waiting:'várakozás…',rf_live:'élő',rf_stale:'elavult',
-    rf_spectrum:'TX DSP spektrum (PA előtt)',rf_constellation:'TX DSP konstelláció',
+    rf_visualizers:'Vizualizációk',rf_spectrum:'TX DSP spektrum (PA előtt)',rf_constellation:'TX DSP konstelláció',
     rf_hint_spectrum:'élő · 512-bin FFT',rf_hint_constellation:'π/4-DQPSK',
     rf_waterfall:'TX Spektrum Vízesés',rf_hint_waterfall:'gördülő · viridis',
     rf_quality:'Jelminőség',rf_hint_quality:'PA előtt mérve · ugyanazon DSP pillanatképből',
@@ -3851,8 +4375,8 @@ const LANGS={
     registered_terminals:'Regisztrált rádiók',
     no_terminals:'Nincs regisztrált rádió',no_calls:'Nincs aktív hívás',
     live_log:'Élő napló',autoscroll:'Automatikus görgetés',filter_all:'Mind',
-    clear:'Törlés',export:'⤓ Exportálás',restart:'⟳ Újraindítás',shutdown:'⏻ Leállítás',save:'Mentés',
-    whitelist_title:'ISSI engedélyezőlista',whitelist_add:'+ ISSI hozzáadása',whitelist_empty:'Üres lista — nyílt hálózat (bármely rádió regisztrálhat).',
+    clear:'Törlés',export:'Exportálás',restart:'Újraindítás',shutdown:'Leállítás',save:'Mentés',
+    cfg_sec_configuration:'Konfiguráció',cfg_sec_access:'Hozzáférés-vezérlés',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI engedélyezőlista',whitelist_add:'ISSI hozzáadása',whitelist_empty:'Üres lista — nyílt hálózat (bármely rádió regisztrálhat).',
     whitelist_help:'Ha a lista üres, bármely rádió regisztrálhat (nyílt hálózat). Ha vannak elemek, csak a listázott ISSI-k engedélyezettek; a többit elutasítja. A módosítások azonnal érvénybe lépnek és újraindítás után is megmaradnak.',
     whitelist_enforced:'AKTÍV',whitelist_open:'NYÍLT',whitelist_invalid:'Adjon meg érvényes ISSI-t (1–16777215).',
     wx_title:'WX / METAR szolgáltatás',wx_help:'Beépített időjárás-szolgáltatás. A rádiók "METAR LROP" formájú SDS-t küldenek a szolgáltatás ISSI-jére, és dekódolt jelentést kapnak. Opcionálisan automatikusan elküldi egy rögzített állomás METAR-ját egy ISSI-re vagy csoportra adott időközönként. Adatok: aviationweather.gov.',
@@ -3870,14 +4394,14 @@ const LANGS={
     act_call_group:'Csoportos hívás',act_call_individual:'P2P hívás',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kizárás',sds:'SDS',
     call_group:'CSOPORT',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'VÉSZHÍVÁS',
-    emg_banner_title:'VÉSZHELYZET AKTÍV',emg_clear:'Törlés',confirm_clear_emergency:'Vészhelyzet törlése ISSI {issi}?',
+    emg_banner_title:'VÉSZHELYZET AKTÍV',integrations:'Integrációk',integ_enabled:'Engedélyezve',integ_disabled:'Letiltva',integ_error:'Hiba',system_sec:'Rendszer',emg_chip:'VÉSZHELYZET',bs_label:'BS',emg_clear:'Törlés',confirm_clear_emergency:'Vészhelyzet törlése ISSI {issi}?',
     confirm_kick:'ISSI {issi} kizárása?\nA terminál törlésre kerül és újra kell csatlakoznia.',
     dgna:'DGNA',dgna_title:'Dinamikus csoport-hozzárendelés',dgna_modal_title:'⬡ Dinamikus csoport-hozzárendelés',dgna_issi:'Terminál ISSI',dgna_current:'Jelenlegi csoportok',dgna_gssi:'Csoport (GSSI)',dgna_assign:'Hozzárendel',dgna_deassign:'Eltávolít',
     confirm_restart:'Újraindítja a FlowStation-t?\nAz összes aktív hívás megszakad.',
     confirm_shutdown:'Leállítja a FlowStation-t?\nA szolgáltatást kézzel kell újraindítani.',
     confirm_logout:'Kijelentkezik?',
     saved:'✓ Mentve — újraindítás szükséges az alkalmazáshoz.',save_fail:'✗ Mentési hiba',conn_error:'Kapcsolódási hiba.',
-    update:'⬆ Frissítés',update_available:'Elérhető frissítés',update_title:'OTA frissítés — github.com/razvanzeces/flowstation',
+    update:'Frissítés',update_available:'Elérhető frissítés',update_title:'OTA frissítés — github.com/razvanzeces/flowstation',
     update_confirm:'Letölti a legújabb verziót a main ágból és újraépíti?\nA szolgáltatás automatikusan újraindul.',
     update_running:'Frissítés folyamatban… ne zárja be az ablakot.',
     update_done_ok:'✓ Frissítés kész. Újraindul…',
@@ -3888,17 +4412,18 @@ const LANGS={
     sys_profiles:'Konfig profilok',sys_activate:'Aktiválás és újraindítás',
     sys_active_badge:'AKTÍV',sys_no_profiles:'Nem található .toml profil a könyvtárban.',
     sys_activate_confirm:'Váltás a(z) "{name}" profilra és újraindítás?\nAz aktuális konfig mentésre kerül.',
+    sys_title:'Rendszer',sys_sec_status:'Állapot',sys_sec_host:'Gazda',sys_sec_radio:'Rádió hardver',sys_sec_sensors:'Szenzorok',sys_sec_profiles:'Profilok',sys_sec_sds:'SDS sugárzás',sys_refresh:'Frissítés',sys_probe:'Vizsgálat',sys_temp_hot:'FORRÓ',sys_temp_warm:'Meleg',sys_temp_ok:'OK',
     sys_bts:'BTS kapcsolat',
-    wifi:'WiFi',wifi_status:'Jelenlegi kapcsolat',wifi_saved:'Mentett hálózatok',wifi_visible:'Elérhető hálózatok',wifi_loading:'Betöltés…',wifi_scanning:'Keresés…',wifi_no_device:'Nem észlelhető WiFi eszköz.',wifi_radio_disabled:'WiFi rádió letiltva.',wifi_not_connected:'Nincs kapcsolat hálózathoz.',wifi_no_saved:'Nincs mentett hálózat.',wifi_no_networks:'Nincs hálózat hatótávolságon belül.',wifi_ssid:'Hálózat',wifi_signal:'Jelerősség',wifi_ip:'IP-cím',wifi_actions:'Műveletek',wifi_disconnect:'Bontás',wifi_connect:'Csatlakozás',wifi_connect_to:'Csatlakozás:',wifi_connecting:'Csatlakozás…',wifi_connected:'KAPCSOLÓDVA',wifi_connected_ok:'Csatlakoztatva.',wifi_saved_tag:'MENTETT',wifi_open:'NYITOTT',wifi_forget:'Elfelejtés',wifi_confirm_forget:'Hálózat elfelejtése',wifi_password:'Jelszó',wifi_hidden:'Rejtett hálózat (SSID nem sugárzott)',wifi_add_hidden:'+ Rejtett hálózat',wifi_scan:'↻ Keresés',wifi_refresh:'↻ Frissítés',wifi_radio_off:'WiFi letiltása',wifi_radio_on:'WiFi engedélyezése',wifi_warn_lose_access:'⚠ Ha WiFi-n keresztül csatlakozol a vezérlőpulthoz, a hálózat módosítása lecsatlakoztathat. Biztosíts alternatív hozzáférést.',wifi_err_no_ssid:'SSID szükséges',cancel:'Mégse',sys_sensors:'Gazdagép szenzorok',sys_sensors_empty:'Nem észlelhetők szenzorok.',
+    wifi:'WiFi',wifi_status:'Jelenlegi kapcsolat',wifi_saved:'Mentett hálózatok',wifi_visible:'Elérhető hálózatok',wifi_loading:'Betöltés…',wifi_scanning:'Keresés…',wifi_no_device:'Nem észlelhető WiFi eszköz.',wifi_radio_disabled:'WiFi rádió letiltva.',wifi_not_connected:'Nincs kapcsolat hálózathoz.',wifi_no_saved:'Nincs mentett hálózat.',wifi_no_networks:'Nincs hálózat hatótávolságon belül.',wifi_ssid:'Hálózat',wifi_signal:'Jelerősség',wifi_ip:'IP-cím',wifi_actions:'Műveletek',wifi_disconnect:'Bontás',wifi_connect:'Csatlakozás',wifi_connect_to:'Csatlakozás:',wifi_connecting:'Csatlakozás…',wifi_connected:'KAPCSOLÓDVA',wifi_connected_ok:'Csatlakoztatva.',wifi_saved_tag:'MENTETT',wifi_open:'NYITOTT',wifi_forget:'Elfelejtés',wifi_confirm_forget:'Hálózat elfelejtése',wifi_password:'Jelszó',wifi_hidden:'Rejtett hálózat (SSID nem sugárzott)',wifi_add_hidden:'Rejtett hálózat',wifi_scan:'Keresés',wifi_refresh:'Frissítés',wifi_radio_off:'WiFi letiltása',wifi_radio_on:'WiFi engedélyezése',wifi_warn_lose_access:'Ha WiFi-n keresztül csatlakozol a vezérlőpulthoz, a hálózat módosítása lecsatlakoztathat. Biztosíts alternatív hozzáférést.',wifi_err_no_ssid:'SSID szükséges',cancel:'Mégse',sys_sensors:'Gazdagép szenzorok',sys_sensors_empty:'Nem észlelhetők szenzorok.',
   },
   zh:{
     bts_ip:'BTS IP',offline:'离线',online:'在线',
     brew_online:'在线',brew_offline:'离线',
     stations:'终端',calls:'通话',lastheard:'最近通话',log:'日志',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'配置',
-    sdslog:'SDS日志',th_dir:'方向',th_from:'发件',th_to:'收件',th_message:'消息',no_sds:'暂无SDS消息',sds_refresh:'⟳ 刷新',
+    sdslog:'SDS日志',th_dir:'方向',th_from:'发件',th_to:'收件',th_message:'消息',no_sds:'暂无SDS消息',sds_refresh:'刷新',
     rf_freq:'中心频率',rf_rate:'采样率',rf_rms:'RMS',rf_peak:'峰值',rf_age:'快照',
     rf_waiting:'等待中…',rf_live:'实时',rf_stale:'已过期',
-    rf_spectrum:'TX DSP 频谱（功放前）',rf_constellation:'TX DSP 星座图',
+    rf_visualizers:'可视化',rf_spectrum:'TX DSP 频谱（功放前）',rf_constellation:'TX DSP 星座图',
     rf_hint_spectrum:'实时 · 512 点 FFT',rf_hint_constellation:'π/4-DQPSK',
     rf_waterfall:'TX 频谱瀑布图',rf_hint_waterfall:'滚动 · viridis 配色',
     rf_quality:'信号质量',rf_hint_quality:'功放前测量 · 来自同一 DSP 快照',
@@ -3914,8 +4439,8 @@ const LANGS={
     registered_terminals:'已注册终端',
     no_terminals:'暂无终端注册',no_calls:'无活跃通话',
     live_log:'实时日志',autoscroll:'自动滚动',filter_all:'全部',
-    clear:'清除',export:'⤓ 导出',restart:'⟳ 重启',shutdown:'⏻ 关机',save:'保存',
-    whitelist_title:'ISSI 白名单',whitelist_add:'+ 添加 ISSI',whitelist_empty:'列表为空 — 开放网络（任何电台均可注册）。',
+    clear:'清除',export:'导出',restart:'重启',shutdown:'关机',save:'保存',
+    cfg_sec_configuration:'配置',cfg_sec_access:'访问控制',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI 白名单',whitelist_add:'添加 ISSI',whitelist_empty:'列表为空 — 开放网络（任何电台均可注册）。',
     whitelist_help:'列表为空时，任何电台均可注册（开放网络）。有条目时，仅接受列出的 ISSI，其余一律拒绝。更改即时生效并在重启后保留。',
     whitelist_enforced:'已启用',whitelist_open:'开放',whitelist_invalid:'请输入有效的 ISSI（1–16777215）。',
     wx_title:'WX / METAR 服务',wx_help:'内置气象服务。电台向服务 ISSI 发送如 "METAR LROP" 的 SDS 即可获得解码报告。可选择按间隔自动向 ISSI 或群组发送固定台站的 METAR。数据来自 aviationweather.gov。',
@@ -3924,7 +4449,7 @@ const LANGS={
     wx_periodic_interval:'间隔（秒）',wx_interval_hint:'最少 300 秒（5 分钟），以免频繁请求气象 API。',wx_periodic_incomplete:'定时模式需同时设置台站 ICAO 和目标。',
     sds_title:'⬡ 发送 SDS 短消息',sds_dest:'目标 ISSI',
     live_sds_desc:'向本小区所有终端广播文本消息，按 Home Mode Display 间隔重复发送。直到删除或达到重复次数为止。',
-    live_sds_text:'消息内容（最多 251 字符）',live_sds_repeat:'重复次数 (0=无限)',live_sds_send:'📢 广播',
+    live_sds_text:'消息内容（最多 251 字符）',live_sds_repeat:'重复次数 (0=无限)',live_sds_send:'广播',
     live_sds_clear_all:'清除全部',live_sds_empty:'暂无广播任务。',
     live_sds_sent:'已发送',live_sds_times:'次',live_sds_forever:'∞',live_sds_delete:'删除',
     fallback_title:'⚠ 正在使用后备配置 — 主配置加载失败',
@@ -3938,14 +4463,14 @@ const LANGS={
     act_call_group:'组呼',act_call_individual:'点对点',act_sds:'SDS',
     online_badge:'在线',kick:'踢下线',sds:'SDS',
     call_group:'组呼',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'紧急呼叫',
-    emg_banner_title:'紧急状态激活',emg_clear:'清除',confirm_clear_emergency:'清除 ISSI {issi} 的紧急状态？',
+    emg_banner_title:'紧急状态激活',integrations:'集成',integ_enabled:'已启用',integ_disabled:'已禁用',integ_error:'错误',system_sec:'系统',emg_chip:'紧急',bs_label:'BS',emg_clear:'清除',confirm_clear_emergency:'清除 ISSI {issi} 的紧急状态？',
     confirm_kick:'确定踢下 ISSI {issi}？\n终端将被注销并强制重新注册。',
     dgna:'DGNA',dgna_title:'动态组分配',dgna_modal_title:'⬡ 动态组分配',dgna_issi:'终端 ISSI',dgna_current:'当前组',dgna_gssi:'组 (GSSI)',dgna_assign:'分配',dgna_deassign:'移除',
     confirm_restart:'确定重启 FlowStation？\n所有正在进行的通话将被中断。',
     confirm_shutdown:'确定关闭 FlowStation？\n服务将停止，需要手动重启。',
     confirm_logout:'确定注销吗？',
     saved:'✓ 已保存 — 重启后生效',save_fail:'✗ 保存失败',conn_error:'连接错误',
-    update:'⬆ 更新',update_available:'有可用更新',update_title:'OTA 在线更新 — github.com/razvanzeces/flowstation',
+    update:'更新',update_available:'有可用更新',update_title:'OTA 在线更新 — github.com/razvanzeces/flowstation',
     update_confirm:'是否从 main 分支拉取最新代码并重新构建？\n服务将自动重启。',
     update_running:'正在更新… 请不要关闭此窗口',
     update_done_ok:'✓ 更新完成，正在重启…',
@@ -3954,12 +4479,13 @@ const LANGS={
     system:'系统',sys_info:'系统信息',sys_hostname:'主机名',sys_uptime:'运行时间',
     sys_version:'FS 版本',sys_os:'操作系统',sys_config:'当前配置',
     sys_cpu:'CPU',sys_cpu_load:'CPU 负载',sys_ram:'内存',sys_temp:'CPU 温度',
-    wifi:'WiFi',wifi_status:'当前连接',wifi_saved:'已保存的网络',wifi_visible:'可用网络',wifi_loading:'加载中…',wifi_scanning:'扫描中…',wifi_no_device:'未检测到 WiFi 设备。',wifi_radio_disabled:'WiFi 已禁用。',wifi_not_connected:'未连接任何网络。',wifi_no_saved:'无已保存的网络。',wifi_no_networks:'范围内无可用网络。',wifi_ssid:'网络',wifi_signal:'信号',wifi_ip:'IP 地址',wifi_actions:'操作',wifi_disconnect:'断开',wifi_connect:'连接',wifi_connect_to:'连接到',wifi_connecting:'连接中…',wifi_connected:'已连接',wifi_connected_ok:'已连接。',wifi_saved_tag:'已保存',wifi_open:'开放',wifi_forget:'忘记',wifi_confirm_forget:'忘记网络',wifi_password:'密码',wifi_hidden:'隐藏网络 (SSID 不广播)',wifi_add_hidden:'+ 隐藏网络',wifi_scan:'↻ 扫描',wifi_refresh:'↻ 刷新',wifi_radio_off:'禁用 WiFi',wifi_radio_on:'启用 WiFi',wifi_warn_lose_access:'⚠ 如果您通过 WiFi 连接到仪表板,更换网络可能会暂时断开您的连接。请确保有备用访问方式。',wifi_err_no_ssid:'需要 SSID',cancel:'取消',sys_sensors:'主机硬件传感器',sys_sensors_empty:'未检测到传感器。',sys_rf:'RF 硬件 (SoapySDR)',sys_autorefresh:'自动刷新 5秒',
+    wifi:'WiFi',wifi_status:'当前连接',wifi_saved:'已保存的网络',wifi_visible:'可用网络',wifi_loading:'加载中…',wifi_scanning:'扫描中…',wifi_no_device:'未检测到 WiFi 设备。',wifi_radio_disabled:'WiFi 已禁用。',wifi_not_connected:'未连接任何网络。',wifi_no_saved:'无已保存的网络。',wifi_no_networks:'范围内无可用网络。',wifi_ssid:'网络',wifi_signal:'信号',wifi_ip:'IP 地址',wifi_actions:'操作',wifi_disconnect:'断开',wifi_connect:'连接',wifi_connect_to:'连接到',wifi_connecting:'连接中…',wifi_connected:'已连接',wifi_connected_ok:'已连接。',wifi_saved_tag:'已保存',wifi_open:'开放',wifi_forget:'忘记',wifi_confirm_forget:'忘记网络',wifi_password:'密码',wifi_hidden:'隐藏网络 (SSID 不广播)',wifi_add_hidden:'隐藏网络',wifi_scan:'扫描',wifi_refresh:'刷新',wifi_radio_off:'禁用 WiFi',wifi_radio_on:'启用 WiFi',wifi_warn_lose_access:'如果您通过 WiFi 连接到仪表板,更换网络可能会暂时断开您的连接。请确保有备用访问方式。',wifi_err_no_ssid:'需要 SSID',cancel:'取消',sys_sensors:'主机硬件传感器',sys_sensors_empty:'未检测到传感器。',sys_rf:'RF 硬件 (SoapySDR)',sys_autorefresh:'自动刷新 5秒',
     profile_edit_title:'编辑配置文件',profile_edit_btn:'编辑',
     profile_edit_save_ok:'✓ 已保存',profile_edit_save_fail:'✗ 保存失败',
     sys_profiles:'配置文件',sys_activate:'激活并重启',
     sys_active_badge:'当前使用',sys_no_profiles:'配置目录中未找到 .toml 配置文件。',
     sys_activate_confirm:'切换到配置文件 "{name}" 并重启？\n当前配置将被备份。',
+    sys_title:'系统',sys_sec_status:'状态',sys_sec_host:'主机',sys_sec_radio:'射频硬件',sys_sec_sensors:'传感器',sys_sec_profiles:'配置档案',sys_sec_sds:'SDS 广播',sys_refresh:'刷新',sys_probe:'探测',sys_temp_hot:'过热',sys_temp_warm:'温热',sys_temp_ok:'正常',
     sys_bts:'BTS 连接',
   },
 };
@@ -4301,7 +4827,7 @@ function wifiShowPasswordModal(ssid, isOpen){
   pskRow.style.display = isOpen ? 'none' : '';
   hiddenRow.style.display = 'none';
   title.textContent = `${t('wifi_connect_to')||'Connect to'}: ${ssid}`;
-  document.getElementById('wifi-modal').style.display = 'flex';
+  document.getElementById('wifi-modal').classList.add('open'); paintIcons(document.getElementById('wifi-modal'));
   if(!isOpen) setTimeout(()=>pskInput.focus(), 50);
 }
 
@@ -4325,12 +4851,12 @@ function wifiShowHiddenModal(){
   pskRow.style.display = '';
   hiddenRow.style.display = '';
   title.textContent = t('wifi_add_hidden')||'Add hidden network';
-  document.getElementById('wifi-modal').style.display = 'flex';
+  document.getElementById('wifi-modal').classList.add('open'); paintIcons(document.getElementById('wifi-modal'));
   setTimeout(()=>ssidInput.focus(), 50);
 }
 
 function wifiCloseModal(){
-  document.getElementById('wifi-modal').style.display = 'none';
+  document.getElementById('wifi-modal').classList.remove('open');
 }
 
 async function wifiModalSubmit(){
@@ -4443,6 +4969,7 @@ function renderEmergencyBanner(){
   const titleEl=b.querySelector('[data-i18n="emg_banner_title"]');
   if(titleEl)titleEl.textContent=t('emg_banner_title');
   const arr=Object.values(state.emergencies||{});
+  syncTopbarChips();
   if(!arr.length){b.style.display='none';list.innerHTML='';return;}
   b.style.display='flex';
   list.innerHTML=arr.sort((a,b)=>a.issi-b.issi).map(e=>{
@@ -4454,6 +4981,27 @@ function renderEmergencyBanner(){
   }).join('');
 }
 function clearEmergency(issi){if(!confirm(t('confirm_clear_emergency',{issi})))return;wsSend({type:'emergency_clear',issi});}
+
+// ── Topbar status chips (BS / Brew / Emergency) — calm always-visible state.
+// Mirrors the footer LEDs + emergency state onto the .pill chips in the header.
+function syncTopbarChips(){
+  const led=document.getElementById('connLed');
+  const bsOn=!!(led&&led.classList.contains('on'));
+  const bs=document.getElementById('chip-bs');
+  if(bs){
+    bs.className='pill '+(bsOn?'pill-ok':'pill-idle');
+    const lbl=bs.querySelector('[data-i18n="bs_label"]');
+    if(lbl)lbl.textContent='BS '+(bsOn?t('online'):t('offline'));
+  }
+  const brew=document.getElementById('chip-brew');
+  if(brew){
+    brew.className='pill '+(state.brewOnline?'pill-info':'pill-idle');
+    const span=brew.querySelector('span');
+    if(span)span.textContent=state.brewOnline?('Brew v'+(state.brewVer||0)):'Brew';
+  }
+  const emg=document.getElementById('chip-emergency');
+  if(emg)emg.style.display=Object.keys(state.emergencies||{}).length?'inline-flex':'none';
+}
 
 function setBrewStatus(online,version){
   state.brewOnline=online;state.brewVer=version||0;
@@ -4473,13 +5021,18 @@ function setBrewStatus(online,version){
     led.classList.remove('on');txt.textContent=t('brew_offline');txt.style.color='';
     if(vbadge)vbadge.style.display='none';
   }
-  // Update stat card
+  // Update stat card — state via ONE class (kills inline color split).
   const bv=document.getElementById('stat-brew-val');
   const bs=document.getElementById('stat-brew-sub');
-  if(bv){bv.textContent=online?t('brew_online'):t('brew_offline');bv.style.color=online?'var(--accent2)':'var(--danger)';}
+  const bcard=document.getElementById('stat-brew-card');
+  if(bv){bv.textContent=online?t('brew_online'):t('brew_offline');}
+  if(bcard){bcard.classList.remove('is-info','is-danger');bcard.classList.add(online?'is-info':'is-danger');}
   if(bs)bs.textContent=online?`Brew v${version||0}`:'—';
+  const hb=document.getElementById('stations-hero-brew');
+  if(hb)hb.textContent=online?`v${version||0}`:t('brew_offline');
   // System panel
   updateSysBtsPanel(document.getElementById('connLed').classList.contains('on'),online,version||0);
+  syncTopbarChips();
 }
 
 function connect(){
@@ -4489,6 +5042,7 @@ function connect(){
     document.getElementById('connLed').classList.add('on');
     const ct=document.getElementById('connText');ct.textContent=t('online');ct.style.color='var(--accent)';
     updateSysBtsPanel(true,state.brewOnline,state.brewVer);
+    syncTopbarChips();
     ws.send(JSON.stringify({type:'subscribe'}));
   };
   ws.onclose=()=>{
@@ -4496,6 +5050,7 @@ function connect(){
     const ct=document.getElementById('connText');ct.textContent=t('offline');ct.style.color='var(--danger)';
     setBrewStatus(false,0);
     updateSysBtsPanel(false,false,0);
+    syncTopbarChips();
     setTimeout(connect,3000);
   };
   ws.onmessage=(e)=>{try{handleMsg(JSON.parse(e.data));}catch{}};
@@ -4621,19 +5176,20 @@ function handleMsg(msg){
 // Small battery-with-bolt glyph — conveys "Energy Economy" (power-saving) at a glance.
 const EE_ICON='<svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;flex-shrink:0"><rect x="2" y="7" width="16" height="10" rx="2"/><path d="M22 10v4" stroke-linecap="round"/><path d="M10.5 9.5 8 13h3l-2.5 3.5" fill="none" stroke-linecap="round"/></svg>';
 function eeLabel(mode){
-  if(!mode||mode===0)return '<span style="color:var(--text3);font-size:10px">—</span>';
+  if(!mode||mode===0)return '<span class="muted" style="font-size:10px">—</span>';
   const labels=['','EG1','EG2','EG3','EG4','EG5','EG6','EG7'];
-  const colors=['','var(--accent)','var(--accent)','var(--accent2)','var(--accent2)','var(--warn)','var(--danger)','var(--danger)'];
+  // Severity tier → .pill variant (no inline color literals).
+  const variants=['','pill-ok','pill-ok','pill-info','pill-info','pill-warn','pill-danger','pill-danger'];
   const tips=['','~1s','~2s','~3s','~4s','~5s','~6s','~7s'];
-  const col=colors[mode]||'var(--text2)';
-  return `<span class="badge" title="Energy Economy Mode ${mode} — wake ${tips[mode]}" style="display:inline-flex;align-items:center;background:color-mix(in srgb,${col} 12%,transparent);border-color:${col};color:${col};font-size:9px">${EE_ICON}${labels[mode]}</span>`;
+  const v=variants[mode]||'pill-idle';
+  return `<span class="pill ${v} no-dot" title="Energy Economy Mode ${mode} — wake ${tips[mode]}"><span class="pill-icon">${EE_ICON}</span>${labels[mode]}</span>`;
 }
 function lastSeenLabel(secs){
-  if(secs==null)return'—';
-  if(secs<5)return'<span style="color:var(--accent)">now</span>';
-  if(secs<60)return`<span style="color:var(--accent2)">${secs}s</span>`;
-  if(secs<3600)return`<span style="color:var(--text2)">${Math.floor(secs/60)}m${secs%60}s</span>`;
-  return`<span style="color:var(--warn)">${Math.floor(secs/3600)}h${Math.floor((secs%3600)/60)}m</span>`;
+  if(secs==null)return'<span class="muted num">—</span>';
+  if(secs<5)return'<span class="num" style="color:var(--ok)">now</span>';
+  if(secs<60)return`<span class="num accent">${secs}s</span>`;
+  if(secs<3600)return`<span class="num">${Math.floor(secs/60)}m${secs%60}s</span>`;
+  return`<span class="num" style="color:var(--warn)">${Math.floor(secs/3600)}h${Math.floor((secs%3600)/60)}m</span>`;
 }
 function pushLastHeard(entry){
   const now=new Date().toTimeString().slice(0,8);
@@ -4641,13 +5197,16 @@ function pushLastHeard(entry){
   if(state.lastHeard.length>50)state.lastHeard.length=50;
 }
 function activityBadge(activity){
-  if(activity==='call_group')return`<span class="badge badge-blue">${t('act_call_group')}</span>`;
-  if(activity==='call_individual')return`<span class="badge badge-yellow">${t('act_call_individual')}</span>`;
-  if(activity==='sds')return`<span class="badge" style="background:rgba(180,100,255,0.15);color:#c87aff;border-color:rgba(180,100,255,0.4)">${t('act_sds')}</span>`;
-  return`<span class="badge badge-dim">${activity}</span>`;
+  if(activity==='call_group')return`<span class="pill pill-info">${t('act_call_group')}</span>`;
+  if(activity==='call_individual')return`<span class="pill pill-warn">${t('act_call_individual')}</span>`;
+  if(activity==='sds')return`<span class="pill pill-info">${t('act_sds')}</span>`;
+  return`<span class="pill pill-idle">${activity}</span>`;
 }
 function rssiColor(v){if(v==null)return'var(--text3)';if(v>-20)return'var(--accent)';if(v>-30)return'var(--accent2)';if(v>-40)return'var(--warn)';return'var(--danger)';}
 function rssiPct(v){if(v==null)return 0;return Math.max(0,Math.min(100,(v+60)/50*100));}
+// Map RSSI to a .gauge threshold class (no JS color literals): strong=ok,
+// usable=info, marginal=warn, weak/none=danger/idle.
+function rssiGaugeClass(v){if(v==null)return'is-idle';if(v>-20)return'';if(v>-30)return'is-info';if(v>-40)return'is-warn';return'is-danger';}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocks();}
 
@@ -4802,10 +5361,19 @@ function renderStations(){
   document.getElementById('badge-ms').textContent=msCount;
   const bc=document.getElementById('badge-calls');
   if(bc){bc.textContent=callCount;bc.style.display=callCount?'flex':'none';}
+  // Hero summary
+  const hd=document.getElementById('stations-hero-dot');
+  const ht=document.getElementById('stations-hero-title');
+  const hs=document.getElementById('stations-hero-sub');
+  const hc=document.getElementById('stations-hero-calls');
+  if(hd){hd.className='hero-dot '+(msCount?'is-ok':'is-idle');}
+  if(ht)ht.textContent=msCount+' '+t('terminals');
+  if(hs)hs.textContent=msCount?t('registered'):t('no_terminals');
+  if(hc)hc.textContent=callCount;
   const tb=document.getElementById('ms-tbody');
-  if(!ms.length){tb.innerHTML=`<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📡</div><div class="empty-text">${t('no_terminals')}</div></div></td></tr>`;return;}
+  if(!ms.length){tb.innerHTML=`<tr><td colspan="7"><div class="empty-state"><span class="empty-ico">${svgIcon('radios')}</span><div class="empty-msg">${t('no_terminals')}</div></div></td></tr>`;return;}
   tb.innerHTML=ms.sort((a,b)=>a.issi-b.issi).map(m=>{
-    const r=m.rssi_dbfs,rL=r!=null?`${r.toFixed(1)} dBFS`:'—',pct=rssiPct(r),col=rssiColor(r);
+    const r=m.rssi_dbfs,rL=r!=null?`${r.toFixed(1)} dBFS`:'—',pct=rssiPct(r),gcls=rssiGaugeClass(r);
     let grps;
     const gl=m.groups||[],sel=m.selected_group;
     // The selected/active TG (the one the MS last keyed up on) is rendered as a solid blue
@@ -4813,7 +5381,7 @@ function renderStations(){
     // on a call sel is null — so right after a restart all groups show dim (scanned), without
     // implying the station is actively on any of them.
     const gBadge=g=>g===sel
-      ?`<span class="badge badge-blue" style="font-weight:700;font-size:9px" title="${t('tg_selected')}">▶ ${g}</span>`
+      ?`<span class="badge badge-blue" style="font-weight:700;font-size:9px" title="${t('tg_selected')}"><span class="tg-marker">${ICON_MARKER}</span>${g}</span>`
       :`<span class="badge badge-dim" style="font-size:9px">${g}</span>`;
     if(gl.length>1){
       const gList=gl.slice().sort((a,b)=>(b===sel)-(a===sel)||a-b).map(gBadge).join(' ');
@@ -4838,8 +5406,8 @@ function renderStations(){
     return`<tr${emg?' class="row-emergency"':''}>
       <td>${emg?'<span class="badge badge-emergency">'+t('call_emergency')+'</span> ':''}${idCell(m.issi)}</td><td>${grps}</td>
       <td class="col-mobile-hide">${eeLabel(m.energy_saving_mode||0)}</td>
-      <td><div class="rssi-bar"><div class="rssi-track"><div class="rssi-fill" style="width:${pct}%;background:${col}"></div></div><span class="rssi-val" style="color:${col}">${rL}</span></div></td>
-      <td><span class="badge badge-green">${t('online_badge')}</span></td>
+      <td><div class="gauge ${gcls}"><div class="gauge-track"><div class="gauge-fill" style="width:${pct}%"></div></div><span class="gauge-value">${rL}</span></div></td>
+      <td><span class="pill pill-ok">${t('online_badge')}</span></td>
       <td class="col-mobile-hide">${lastSeenLabel(ls)}</td>
       <td><button class="btn btn-sm" onclick="openSds(${m.issi})">${t('sds')}</button> <button class="btn btn-sm" onclick="openDgna(${m.issi})" title="${t('dgna_title')}">${t('dgna')}</button> <button class="btn btn-sm btn-danger" onclick="kickMs(${m.issi})">${t('kick')}</button>${emg?` <button class="btn btn-sm btn-danger" onclick="clearEmergency(${m.issi})">${t('emg_clear')}</button>`:''}</td>
     </tr>`;
@@ -4849,31 +5417,31 @@ function renderStations(){
 function renderCalls(){
   document.getElementById('stat-calls').textContent=Object.keys(state.calls).length;
   const tb=document.getElementById('calls-tbody'),calls=Object.values(state.calls);
-  if(!calls.length){tb.innerHTML=`<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">☎</div><div class="empty-text">${t('no_calls')}</div></div></td></tr>`;return;}
+  if(!calls.length){tb.innerHTML=`<tr><td colspan="6"><div class="empty-state"><span class="empty-ico">${svgIcon('calls')}</span><div class="empty-msg">${t('no_calls')}</div></div></td></tr>`;return;}
   tb.innerHTML=calls.map(c=>{
     const dur=Math.floor((Date.now()-(c.started_at||Date.now()))/1000);
     const mm=String(Math.floor(dur/60)).padStart(2,'0'),ss=String(dur%60).padStart(2,'0');
-    const badge=c.call_type==='group'?'badge-blue':'badge-yellow';
+    const pillv=c.call_type==='group'?'pill-info':'pill-warn';
     const label=c.call_type==='group'?t('call_group'):(c.simplex?t('call_p2p_s'):t('call_p2p_d'));
     const to=c.call_type==='group'?`GSSI ${c.gssi}`:idCell(c.called_issi);
-    const spk=c.active_speaker?idCell(c.active_speaker):'<span style="color:var(--text3)">—</span>';
+    const spk=c.active_speaker?idCell(c.active_speaker):'<span class="muted">—</span>';
     // Emergency call = ETSI call priority 15 (terminal emergency button). Flag it prominently.
     const emg=(c.priority||0)>=15;
-    const emgBadge=emg?`<span class="badge badge-emergency">${t('call_emergency')}</span> `:'';
-    return`<tr${emg?' class="row-emergency"':''}><td class="col-mobile-hide"><code>${c.call_id}</code></td><td>${emgBadge}<span class="badge ${badge}">${label}</span></td><td>${c.caller_issi?idCell(c.caller_issi):'—'}</td><td>${to}</td><td>${spk}</td><td style="font-family:var(--mono);font-size:12px;color:var(--accent2);font-weight:600">${mm}:${ss}</td></tr>`;
+    const emgBadge=emg?`<span class="pill pill-danger"><span class="pill-icon">${svgIcon('emergency')}</span>${t('call_emergency')}</span> `:'';
+    return`<tr${emg?' class="row-emergency"':''}><td class="col-mobile-hide"><code>${c.call_id}</code></td><td>${emgBadge}<span class="pill ${pillv}">${label}</span></td><td>${c.caller_issi?idCell(c.caller_issi):'<span class="muted">—</span>'}</td><td>${to}</td><td>${spk}</td><td><span class="num accent">${mm}:${ss}</span></td></tr>`;
   }).join('');
 }
 
 function renderLastHeard(){
   const tb=document.getElementById('lastheard-tbody');
   if(!tb)return;
-  if(!state.lastHeard.length){tb.innerHTML=`<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🎙</div><div class="empty-text">${t('no_activity')}</div></div></td></tr>`;return;}
+  if(!state.lastHeard.length){tb.innerHTML=`<tr><td colspan="4"><div class="empty-state"><span class="empty-ico">${svgIcon('lastheard')}</span><div class="empty-msg">${t('no_activity')}</div></div></td></tr>`;return;}
   tb.innerHTML=state.lastHeard.map(e=>{
-    const destStr=e.dest?`<code>${e.dest}</code>`:'<span style="color:var(--text3)">—</span>';
+    const destStr=e.dest?`<code>${e.dest}</code>`:'<span class="muted">—</span>';
     const isOnline=!!state.ms[e.issi];
-    const issiHtml=`${idCell(e.issi)}${isOnline?` <span class="badge badge-green" style="font-size:9px">${t('online_badge')}</span>`:''}`;
+    const issiHtml=`${idCell(e.issi)}${isOnline?` <span class="pill pill-ok">${t('online_badge')}</span>`:''}`;
     return`<tr>
-      <td style="font-family:var(--mono);font-size:11px;color:var(--text2)">${e.ts}</td>
+      <td><span class="num">${e.ts}</span></td>
       <td>${issiHtml}</td><td>${activityBadge(e.activity)}</td><td>${destStr}</td>
     </tr>`;
   }).join('');
@@ -4915,8 +5483,8 @@ function downloadTextFile(filename,text){
 // Human label for known SDS protocol-identifier bytes so binary payloads (no decoded text)
 // still read meaningfully. 0x02/0x09/0x82/0x89 = text; 0x0A = LIP position; 0xDC = Home Mode Display.
 function pidLabel(pid){const m={2:'text',9:'text',10:'LIP position',12:'concat',128:'text',130:'text',137:'text',218:'status',220:'home-display'};return m[pid]||('PID '+pid);}
-const SDS_DIR={rx:['badge-green','RX'],net:['badge-blue','NET'],tx:['badge-yellow','TX']};
-function dirBadge(dir){const x=SDS_DIR[dir]||['badge-dim',(dir||'?').toUpperCase()];return `<span class="badge ${x[0]}">${x[1]}</span>`;}
+const SDS_DIR={rx:['pill-ok','RX'],net:['pill-info','NET'],tx:['pill-warn','TX']};
+function dirBadge(dir){const x=SDS_DIR[dir]||['pill-idle',(dir||'?').toUpperCase()];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
 function lipPositionFromText(text){
   const m=String(text||'').match(/^LIP position:\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
   if(!m)return null;
@@ -4939,7 +5507,7 @@ function sdsMessageBody(e){
 function sdsRow(e){
   const to=e.is_group?`<code>${e.dest_issi}</code> <span class="sds-empty">grp</span>`:idCell(e.dest_issi);
   const body=sdsMessageBody(e);
-  return `<tr><td class="sds-time">${escHtml(e.ts||'')}</td><td>${dirBadge(e.direction)}</td><td>${idCell(e.source_issi)}</td><td>${to}</td><td class="sds-msg">${body}</td></tr>`;
+  return `<tr><td class="sds-time num">${escHtml(e.ts||'')}</td><td>${dirBadge(e.direction)}</td><td>${idCell(e.source_issi)}</td><td>${to}</td><td class="sds-msg">${body}</td></tr>`;
 }
 function renderSdsLog(){
   const tb=document.getElementById('sdslog-tbody');if(!tb)return;
@@ -5111,8 +5679,12 @@ async function loadDapnet(){
     dapSet('dap-callout-rics',dapRicListText(d.callout_allowed_rics));
     dapSet('dap-telegram-prefix',d.telegram_prefix||'DAPNET');
     dapSet('dap-telegram-rics',dapRicListText(d.telegram_allowed_rics));
+    // Hero pill — DAPNET has no live link probe; reflect the enabled feed state.
+    setIntegrationHero('dap', !!d.enabled, !!d.enabled,
+      d.enabled?t('integ_enabled'):t('integ_disabled'),
+      d.api_url||d.rwth_core_host||'');
     setDapMsg('',true);
-  }catch{setDapMsg(t('conn_error'),false);}
+  }catch{setDapMsg(t('conn_error'),false);setIntegrationHero('dap',false,false,t('conn_error'),'');}
 }
 async function saveDapnet(){
   const ricRoutes=dapRicRoutesBody('dap-ric-routes','RIC to ISSI');
@@ -5289,11 +5861,16 @@ async function loadGeoalarm(){
     dapSet('geo-last-position',rt.last_position||'—');
     dapSet('geo-last-alarm',rt.last_alarm||'—');
     dapSet('geo-last-error',rt.last_error||'—');
+    // Hero pill — reflect the enabled state; warn when enabled but a last error is present.
+    const geoErr=rt.last_error&&rt.last_error!=='—';
+    setIntegrationHero('geo', !!d.enabled, !!d.enabled&&!geoErr,
+      d.enabled?(geoErr?t('integ_error'):t('integ_enabled')):t('integ_disabled'),
+      rt.center||`${d.flowstation_lat??0}, ${d.flowstation_lon??0}`);
     state.geoalarmEvents=d.events||[];
     geoalarmPageIndex=0;
     renderGeoalarmEvents();
     setGeoMsg('',true);
-  }catch{setGeoMsg(t('conn_error'),false);}
+  }catch{setGeoMsg(t('conn_error'),false);setIntegrationHero('geo',false,false,t('conn_error'),'');}
 }
 async function saveGeoalarm(){
   const tetraWhite=geoIssiListBody('geo-tetra-white','whitelist');
@@ -5390,10 +5967,33 @@ async function loadAsteriskStatus(){
     set('ast-last-rx', rt.last_rx);
     set('ast-last-tx', rt.last_tx);
     set('ast-last-error', rt.last_error);
+    // Hero connection pill — driven by the live REGISTER state.
+    const enabled=!!(c.enabled||rt.enabled);
+    const reg=(rt.register_status||'').toLowerCase();
+    const registered=/regist|ok|online|200/.test(reg)&&!/fail|error|unreach|timeout/.test(reg);
+    setIntegrationHero('ast', enabled, registered, rt.register_status||(enabled?t('offline'):'disabled'),
+      (c.configured||rt.configured)?(rt.sip_listen||c.sip_listen||''):'');
+    const cc=document.getElementById('ast-configured-card');
+    if(cc){cc.classList.remove('is-ok','is-danger','is-idle');cc.classList.add((c.configured||rt.configured)?'is-ok':'is-idle');}
+    const rc=document.getElementById('ast-register-card');
+    if(rc){rc.classList.remove('is-ok','is-warn','is-danger','is-idle');rc.classList.add(registered?'is-ok':enabled?'is-warn':'is-idle');}
   }catch(e){
     set('ast-configured','—');set('ast-enabled','status unavailable');set('ast-register','—');
     set('ast-last-error',t('conn_error'));
+    setIntegrationHero('ast', false, false, t('conn_error'), '');
   }
+}
+// Shared helper: drive an integration tab's hero dot + connection pill from
+// (enabled, connected) state. Calm severity language: connected=ok, enabled-but-down=warn,
+// disabled=idle. No color literals — all via .hero-dot/.pill variants.
+function setIntegrationHero(prefix, enabled, connected, pillText, subText){
+  const dot=document.getElementById(prefix+'-hero-dot');
+  const pill=document.getElementById(prefix+'-hero-pill');
+  const sub=document.getElementById(prefix+'-hero-sub');
+  const lvl=!enabled?'idle':connected?'ok':'warn';
+  if(dot) dot.className='hero-dot is-'+lvl;
+  if(pill){pill.className='pill pill-'+lvl;pill.textContent=pillText||'—';}
+  if(sub&&subText!=null) sub.textContent=subText||'—';
 }
 
 let snomPasswordDirty=false;
@@ -5839,14 +6439,15 @@ async function loadSystemInfo(){
       }
     }
 
-    // CPU
+    // CPU — gauge fill width + threshold state class on the .gauge wrapper.
     const cpuEl=document.getElementById('sysCpu');
     if(cpuEl) cpuEl.textContent=(sysData.cpu_model||'—')+(sysData.cpu_cores?` (${sysData.cpu_cores} cores)`:'');
     const cpuPct=sysData.cpu_pct||0;
     const cpuBarEl=document.getElementById('sysCpuBar');
     const cpuPctEl=document.getElementById('sysCpuPct');
+    const cpuGauge=document.getElementById('sysCpuGauge');
     if(cpuBarEl) cpuBarEl.style.width=cpuPct+'%';
-    if(cpuBarEl) cpuBarEl.style.background=cpuPct>80?'var(--danger)':cpuPct>60?'var(--warn)':'var(--accent)';
+    if(cpuGauge) cpuGauge.className='gauge'+(cpuPct>80?' is-danger':cpuPct>60?' is-warn':'');
     if(cpuPctEl) cpuPctEl.textContent=cpuPct+'%';
 
     // RAM
@@ -5855,19 +6456,21 @@ async function loadSystemInfo(){
     const ramPct=ramTotal>0?Math.round(ramUsed/ramTotal*100):0;
     const ramBarEl=document.getElementById('sysRamBar');
     const ramValEl=document.getElementById('sysRamVal');
+    const ramGauge=document.getElementById('sysRamGauge');
     if(ramBarEl) ramBarEl.style.width=ramPct+'%';
-    if(ramBarEl) ramBarEl.style.background=ramPct>85?'var(--danger)':ramPct>70?'var(--warn)':'var(--accent2)';
+    if(ramGauge) ramGauge.className='gauge'+(ramPct>85?' is-danger':ramPct>70?' is-warn':' is-info');
     if(ramValEl) ramValEl.textContent=`${ramUsed} / ${ramTotal} MB (${ramPct}%)`;
 
-    // Temperature
+    // Temperature — state via stat-card class, hot label without emoji.
     const tempCard=document.getElementById('cpu-temp-card');
     const tempEl=document.getElementById('sysCpuTemp');
     const tempSub=document.getElementById('sysCpuTempSub');
     if(sysData.cpu_temp_c!=null){
-      const t=sysData.cpu_temp_c.toFixed(1);
-      if(tempCard) tempCard.style.display='';
-      if(tempEl){ tempEl.textContent=t+'°C'; tempEl.style.color=sysData.cpu_temp_c>75?'var(--danger)':sysData.cpu_temp_c>60?'var(--warn)':'var(--accent)';}
-      if(tempSub) tempSub.textContent=sysData.cpu_temp_c>75?'⚠ HOT':sysData.cpu_temp_c>60?'Warm':'OK';
+      const tv=sysData.cpu_temp_c.toFixed(1);
+      const hot=sysData.cpu_temp_c>75, warm=sysData.cpu_temp_c>60;
+      if(tempCard){ tempCard.style.display=''; tempCard.className='stat-card '+(hot?'is-danger':warm?'is-warn':'is-ok'); }
+      if(tempEl){ tempEl.textContent=tv+'°C'; }
+      if(tempSub) tempSub.textContent=hot?t('sys_temp_hot'):warm?t('sys_temp_warm'):t('sys_temp_ok');
     } else {
       if(tempCard) tempCard.style.display='none';
     }
@@ -5877,6 +6480,7 @@ async function loadSystemInfo(){
     if(soapyEl) soapyEl.textContent=sysData.soapy_info||'—';
 
     updateSystemUptime();
+    updateSysHero();
   }catch(e){console.error('loadSystemInfo',e);}
 }
 function updateSystemUptime(){
@@ -5885,6 +6489,27 @@ function updateSystemUptime(){
   const d=Math.floor(u/86400),h=Math.floor((u%86400)/3600),m=Math.floor((u%3600)/60),s=u%60;
   let str='';if(d>0)str+=d+'d ';if(h>0||d>0)str+=h+'h ';if(m>0||h>0||d>0)str+=m+'m ';str+=s+'s';
   document.getElementById('sysUptime').textContent=str;
+  const hu=document.getElementById('sysHeroUptime');if(hu)hu.textContent=str;
+}
+// Mirror the System tab's key state into its hero banner.
+function updateSysHero(){
+  const dot=document.getElementById('sysHeroDot');
+  const sub=document.getElementById('sysHeroSub');
+  const tempV=document.getElementById('sysHeroTemp');
+  const btsCard=document.getElementById('sysBtsCard');
+  const btsOnline=btsCard&&btsCard.classList.contains('is-ok');
+  const brewCard=document.getElementById('sysBrewCard');
+  const brewOnline=brewCard&&brewCard.classList.contains('is-info');
+  if(dot) dot.className='hero-dot '+(btsOnline?'is-ok':'is-danger');
+  if(sub){
+    const host=(sysData&&sysData.hostname)||document.getElementById('sysHostname').textContent||'—';
+    sub.textContent=(btsOnline?t('online'):t('offline'))+' · '+(brewOnline?t('brew_online'):t('brew_offline'))+' · '+host;
+  }
+  if(tempV){
+    const tc=document.getElementById('sysCpuTemp');
+    const card=document.getElementById('cpu-temp-card');
+    tempV.textContent=(card&&card.style.display!=='none'&&tc)?tc.textContent:'—';
+  }
 }
 
 async function loadConfigProfiles(){
@@ -5927,10 +6552,15 @@ function updateSysBtsPanel(online,brewOnline,brewVer){
   const stEl=document.getElementById('sysBtsStatus');
   const bsEl=document.getElementById('sysBrewStatus');
   const bdEl=document.getElementById('sysBrewBadge');
+  const btsCard=document.getElementById('sysBtsCard');
+  const brewCard=document.getElementById('sysBrewCard');
   if(ipEl)ipEl.textContent=online?location.hostname:'—';
-  if(stEl){stEl.textContent=online?t('online'):t('offline');stEl.style.color=online?'var(--accent)':'var(--danger)';}
-  if(bsEl){bsEl.textContent=brewOnline?t('brew_online'):t('brew_offline');bsEl.style.color=brewOnline?'var(--accent2)':'var(--danger)';}
+  if(stEl)stEl.textContent=online?t('online'):t('offline');
+  if(btsCard)btsCard.className='stat-card '+(online?'is-ok':'is-danger');
+  if(bsEl)bsEl.textContent=brewOnline?t('brew_online'):t('brew_offline');
+  if(brewCard)brewCard.className='stat-card '+(brewOnline?'is-info':'is-danger');
   if(bdEl){bdEl.textContent=brewOnline?`Brew v${brewVer||0}`:'—';}
+  updateSysHero();
 }
 
 // ── Edit Profile (inactive config) ───────────────────────────────────────
@@ -6089,6 +6719,7 @@ setInterval(()=>{
   if(el)el.textContent=os+' · '+br;
 })();
 if(sidebarCollapsed)document.getElementById('sidebar').classList.add('collapsed');
+paintIcons();
 setLang(currentLang);
 setTheme(currentTheme);
 applyUiSize();
@@ -6206,6 +6837,11 @@ function handleTxVisual(msg){
   setText('rf-rms',  isFinite(rms)  ? rms.toFixed(1)  +' dBFS' : '—');
   setText('rf-peak', isFinite(peak) ? peak.toFixed(1) +' dBFS' : '—');
   setText('rf-age',  t('rf_live')||'live');
+  // Hero summary
+  setText('rf-hero-freq', isFinite(freqMHz) && freqMHz>0 ? freqMHz.toFixed(3)+' MHz' : '—');
+  setText('rf-hero-sub',  t('rf_live')||'live');
+  const rhd=document.getElementById('rf-hero-dot');
+  if(rhd) rhd.className='hero-dot is-ok';
 
   // Visual feeds redraw on every message — that's the whole point.
   const spec = (msg.spectrum_db_tenths || []).map(v => v / 10);
@@ -6225,6 +6861,7 @@ function handleTxQuality(msg){
   // Show only the operationally-relevant TX metrics. DC offset + IQ amplitude/phase
   // imbalance are modulator-calibration diagnostics and were trimmed from the UI.
   paintQuality('rf-evm',     'rf-q-evm-wrap',  fmtPct(evm, 2),       evalEvm(evm));
+  setText('rf-hero-evm', fmtPct(evm, 2));
   paintQuality('rf-papr',    'rf-q-papr-wrap', fmtDb(papr, 1),       evalPapr(papr));
   paintQuality('rf-carrier', 'rf-q-cl-wrap',   fmtDb(cl, 1, true),   evalCarrierLeakage(cl));
   paintQuality('rf-obw',     'rf-q-obw-wrap',  fmtKhz(obw),          evalObw(obw));
@@ -6234,33 +6871,34 @@ function handleSdrHealth(msg){
   rfState.lastHwTs = Date.now();
   setText('rf-hw-age', t('rf_just_now')||'just now');
 
-  // Temperature with named state, rendered as a conic gauge. Thresholds chosen so a
-  // typical LimeSDR running at room temp (~45-55°C) reads "nominal", >65 "warm", >80 "hot".
-  const tempEl  = document.getElementById('rf-temp');
+  // Temperature with named state. Thresholds chosen so a typical LimeSDR running
+  // at room temp (~45-55°C) reads "nominal", >65 is "warm", >80 is "hot".
+  const tempEl = document.getElementById('rf-temp');
   const stateEl = document.getElementById('rf-temp-state');
-  const gauge   = document.getElementById('rf-temp-gauge');
-  const gaugeN  = document.getElementById('rf-temp-gauge-n');
+  const tempGauge = document.getElementById('rf-temp-gauge');
+  const tempBar = document.getElementById('rf-temp-bar');
   if(tempEl && stateEl){
     if(msg.temperature_c == null){
       tempEl.textContent = '—';
-      tempEl.className = 'h-mval';
       stateEl.textContent = t('rf_temp_na')||'no sensor';
-      stateEl.className = 'h-mlbl rf-hw-temp-state';
-      if(gauge){ gauge.style.setProperty('--g-pct',0); gauge.style.setProperty('--g-col','var(--border2)'); }
-      if(gaugeN) gaugeN.textContent = '—';
+      stateEl.className = 'rf-hw-temp-state';
+      if(tempGauge){ tempGauge.classList.remove('is-warn','is-danger','is-info'); tempGauge.classList.add('is-idle'); }
+      if(tempBar) tempBar.style.width = '0%';
     } else {
       const tc = msg.temperature_c;
       tempEl.textContent = tc.toFixed(1) + ' °C';
-      // gauge: map 0-100°C → 0-100%, colour by status band.
-      let cls = 'nominal', label = t('rf_temp_nominal')||'nominal', mval='', gcol='var(--ok)';
-      if(tc < 20){ cls='cold'; label = t('rf_temp_cold')||'cold'; gcol='var(--accent2)'; }
-      else if(tc > 80){ cls='hot'; label = t('rf_temp_hot')||'hot'; mval='bad'; gcol='var(--danger)'; }
-      else if(tc > 65){ cls='warm'; label = t('rf_temp_warm')||'warm'; mval='warn'; gcol='var(--warn)'; }
-      tempEl.className = 'h-mval' + (mval?(' '+mval):'');
+      let cls = 'nominal', label = t('rf_temp_nominal')||'nominal', gcls='';
+      if(tc < 20){ cls='cold'; label = t('rf_temp_cold')||'cold'; gcls='is-info'; }
+      else if(tc > 80){ cls='hot'; label = t('rf_temp_hot')||'hot'; gcls='is-danger'; }
+      else if(tc > 65){ cls='warm'; label = t('rf_temp_warm')||'warm'; gcls='is-warn'; }
       stateEl.textContent = label;
-      stateEl.className = 'h-mlbl rf-hw-temp-state ' + cls;
-      if(gauge){ gauge.style.setProperty('--g-pct',Math.max(0,Math.min(100,Math.round(tc)))); gauge.style.setProperty('--g-col',gcol); }
-      if(gaugeN) gaugeN.textContent = Math.round(tc) + '°';
+      stateEl.className = 'rf-hw-temp-state ' + cls;
+      if(tempGauge){
+        tempGauge.classList.remove('is-warn','is-danger','is-info','is-idle');
+        if(gcls) tempGauge.classList.add(gcls);
+      }
+      // Map 0-100°C onto the track (clamped).
+      if(tempBar) tempBar.style.width = Math.max(0,Math.min(100,tc)).toFixed(0) + '%';
     }
   }
   renderGainList('rf-tx-gains', msg.tx_gains || []);
@@ -6559,13 +7197,16 @@ function handleSysHealth(msg){
   const totEl = document.getElementById('sys-sensors-power-total');
   if(!card || !grid) return;
 
+  const sensLabel = document.getElementById('sys-sensors-label');
   const sensors = (msg && msg.sensors) || [];
   if(sensors.length === 0){
     // Nothing detected — leave the card hidden so we don't clutter the System tab.
     card.style.display = 'none';
+    if(sensLabel) sensLabel.style.display = 'none';
     return;
   }
   card.style.display = '';
+  if(sensLabel) sensLabel.style.display = '';
 
   if(empty) empty.style.display = 'none';
 
@@ -6590,7 +7231,7 @@ function handleSysHealth(msg){
   // Power total in card header
   if(totEl){
     if(typeof msg.total_power_w === 'number' && isFinite(msg.total_power_w) && msg.total_power_w > 0){
-      totEl.textContent = '⚡ ' + msg.total_power_w.toFixed(2) + ' W total';
+      totEl.innerHTML = '<span class="btn-icon" style="margin:0 4px 0 0;width:13px;height:13px;vertical-align:-2px">'+svgIcon('power')+'</span>' + msg.total_power_w.toFixed(2) + ' W total';
     } else {
       totEl.textContent = '';
     }
@@ -6612,11 +7253,11 @@ function sensorUnit(kind){
 function sensorColor(kind, v){
   if(kind === 'temperature'){
     if(v >= 80) return 'var(--danger)';
-    if(v >= 65) return '#f5a623';
-    if(v >= 50) return 'var(--accent)';
+    if(v >= 65) return 'var(--warn)';
+    if(v >= 50) return 'var(--ok)';
     return 'var(--accent2)';
   }
-  if(kind === 'power') return '#c8a4f5';
+  if(kind === 'power') return 'var(--accent2)';
   return 'var(--text)';
 }
 
@@ -6703,9 +7344,17 @@ function paintQuality(valueId, wrapId, valueText, evalResult){
   setText(valueId, valueText);
   const wrap = document.getElementById(wrapId);
   if(!wrap) return;
+  // Keep rf-q-* on the wrap (drives the value-text color), and mirror the
+  // threshold onto the shared .gauge as is-warn/is-danger (good = default --ok).
   wrap.classList.remove('rf-q-good','rf-q-warn','rf-q-bad');
   wrap.classList.add('rf-q-' + evalResult.status);
-  const bar = wrap.querySelector('.rf-qmetric-fill');
+  const gauge = wrap.querySelector('.gauge');
+  if(gauge){
+    gauge.classList.remove('is-warn','is-danger');
+    if(evalResult.status==='warn') gauge.classList.add('is-warn');
+    else if(evalResult.status==='bad') gauge.classList.add('is-danger');
+  }
+  const bar = wrap.querySelector('.gauge-fill');
   if(bar) bar.style.width = evalResult.pct.toFixed(0) + '%';
 }
 
@@ -7033,6 +7682,11 @@ async function pollPublic(){
     setT('pub-rf', d.rf_active ? 'Active' : 'Idle');
     setT('pub-brew', d.brew_online ? 'Online' : 'Offline');
     setT('pub-ver', d.stack_version || '—');
+    const STAT_STATES=['is-ok','is-idle','is-info','is-warn','is-danger'];
+    const rfc=document.getElementById('pub-rf-card');
+    if(rfc){ rfc.classList.remove(...STAT_STATES); rfc.classList.add(d.rf_active?'is-ok':'is-idle'); }
+    const pbc=document.getElementById('pub-brew-card');
+    if(pbc){ pbc.classList.remove(...STAT_STATES); pbc.classList.add(d.brew_online?'is-info':'is-danger'); }
   }catch{/* silent */}
 }
 boot();
