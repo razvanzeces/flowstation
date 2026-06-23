@@ -500,18 +500,6 @@ impl SdsBsSubentity {
             len_bits
         );
 
-        // Do NOT gate RF delivery on the SDS subscriber registry. A terminal that just sent
-        // us an uplink request (e.g. the WX/METAR requester) is reachable on our air
-        // interface even when it is not in the static local-subscriber table — dropping here
-        // is exactly what swallowed the reply. Deliver D-SDS-DATA over RF to the destination
-        // regardless, the same way tetraflow-sds-bot answers the requester directly.
-        if !dest_is_group && !self.config.state_read().subscribers.is_registered(dest_ssi) {
-            tracing::debug!(
-                "SDS: dest ISSI {} from Control not in local registry; delivering over RF anyway",
-                dest_ssi
-            );
-        }
-
         // SDS-TL Simple Text Message — format verificat din tetraflow-sds-bot:
         //   Byte 0: 0x82  — Protocol Identifier (SDS-TL text messaging)
         //   Byte 1: 0x04  — Message Type (Simple Text, cu TL-ACK request)
@@ -531,8 +519,53 @@ impl SdsBsSubentity {
         let wrapped_len_bits = (wrapped_payload.len() * 8) as u16;
         let sds_data = SdsUserData::Type4(wrapped_len_bits, wrapped_payload);
 
-        // Log the dashboard-originated SDS before sending it downlink.
+        // Log the dashboard-originated SDS before sending it.
         self.log_sds("tx", source_ssi, dest_ssi, dest_is_group, &sds_data);
+
+        // Route the dashboard-composed SDS the same way route_rf_deliver routes a radio-originated
+        // one: local subscribers/groups are served over our own RF, anything else goes up the Brew
+        // link when the SDS feature is enabled. Without this, a dashboard SDS addressed to an ISSI
+        // that lives behind Brew (e.g. on a bridged network) was delivered over RF "anyway", never
+        // acknowledged, and lost once the LLC retransmissions exhausted.
+        //
+        // The diversion is scoped to the dashboard operator ISSI (9999) on purpose: the WX/METAR
+        // responder re-injects its replies through this very path (see queue_wx_reply) addressed to
+        // an on-air requester that may legitimately be absent from the static registry, and those
+        // must keep going out over RF — so they are intentionally excluded here.
+        const DASHBOARD_ISSI: u32 = 9999;
+        let is_local_issi =
+            !dest_is_group && self.config.state_read().subscribers.is_registered(dest_ssi);
+        let is_local_group =
+            dest_is_group && self.config.state_read().subscribers.has_group_members(dest_ssi);
+
+        if source_ssi == DASHBOARD_ISSI
+            && !is_local_issi
+            && !is_local_group
+            && net_brew::feature_sds_enabled(&self.config)
+        {
+            tracing::info!("SDS: forwarding dashboard SDS to Brew: {} -> {}", source_ssi, dest_ssi);
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                msg: SapMsgInner::CmceSdsData(CmceSdsData {
+                    source_issi: source_ssi,
+                    dest_issi: dest_ssi,
+                    user_defined_data: sds_data,
+                }),
+            });
+            return true;
+        }
+
+        // Deliver over RF. As before, we do NOT gate on the SDS subscriber registry: a terminal
+        // that just sent us an uplink request (e.g. the WX/METAR requester) is reachable on our
+        // air interface even when it is not in the static local-subscriber table.
+        if !dest_is_group && !is_local_issi {
+            tracing::debug!(
+                "SDS: dest ISSI {} from Control not in local registry; delivering over RF anyway",
+                dest_ssi
+            );
+        }
 
         self.send_d_sds_data(
             queue,
