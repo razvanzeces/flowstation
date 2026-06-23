@@ -640,6 +640,66 @@ fn test_individual_connect_mcch_fallback_uses_linkless_delivery() {
 }
 
 #[test]
+fn test_brew_connect_request_mcch_fallback_uses_linkless_delivery() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    let calling_issi = 1000001;
+    let remote_issi = 16777184;
+
+    test.submit_message(build_individual_u_setup_msg_with_mode(calling_issi, remote_issi, true));
+    test.run_stack(Some(1));
+    let setup_msgs = test.dump_sinks();
+
+    let (brew_uuid, network_call) = setup_msgs
+        .iter()
+        .find_map(|msg| match &msg.msg {
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest { brew_uuid, call }) => Some((*brew_uuid, call.clone())),
+            _ => None,
+        })
+        .expect("expected Brew setup request for non-local individual destination");
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupAccept { brew_uuid }),
+    });
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectRequest {
+            brew_uuid,
+            call: network_call,
+        }),
+    });
+    test.run_stack(Some(1));
+    let connect_msgs = test.dump_sinks();
+
+    let caller_mcch_connect = connect_msgs.iter().find(|msg| {
+        let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
+            return false;
+        };
+        prim.main_address.ssi == calling_issi
+            && !prim.stealing_permission
+            && prim.chan_alloc.is_some()
+            && prim.link_id == 0
+            && dl_pdu_type(&prim.sdu) == Some(CmcePduTypeDl::DConnect)
+    });
+    assert!(
+        caller_mcch_connect.is_some(),
+        "expected Brew-routed D-CONNECT MCCH fallback for caller to be sent linkless"
+    );
+}
+
+#[test]
 fn test_brew_originated_simplex_connect_confirm_makes_local_ms_listener() {
     debug::setup_logging_verbose();
 
@@ -753,6 +813,83 @@ fn test_brew_originated_simplex_connect_confirm_makes_local_ms_listener() {
                 if *source_issi == local_issi
         )),
         "Brew-originated media must not grant the local called MS uplink floor"
+    );
+}
+
+#[test]
+fn test_brew_connect_confirm_mcch_fallback_uses_linkless_delivery() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    let remote_issi = 2200699;
+    let local_issi = 2200769;
+    let brew_uuid = uuid::Uuid::parse_str("a9661625-c1f2-42bb-b256-c44e14677307").unwrap();
+    test.config.state_write().subscribers.register(local_issi);
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest {
+            brew_uuid,
+            call: NetworkCircuitCall {
+                source_issi: remote_issi,
+                destination: local_issi,
+                number: String::new(),
+                priority: 1,
+                service: 0,
+                mode: 0,
+                duplex: 0,
+                method: 0,
+                communication: 0,
+                grant: TransmissionGrant::NotGranted.into_raw() as u8,
+                permission: 0,
+                timeout: 0,
+                ownership: 0,
+                queued: 0,
+            },
+        }),
+    });
+    test.run_stack(Some(1));
+    let setup_msgs = test.dump_sinks();
+    let call_id = first_d_setup_call_id(&setup_msgs, local_issi);
+
+    test.submit_message(build_u_connect_msg(local_issi, call_id, false));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectConfirm {
+            brew_uuid,
+            grant: TransmissionGrant::Granted.into_raw() as u8,
+            permission: 0,
+        }),
+    });
+    test.run_stack(Some(1));
+    let confirm_msgs = test.dump_sinks();
+
+    let called_mcch_ack = confirm_msgs.iter().find(|msg| {
+        let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
+            return false;
+        };
+        prim.main_address.ssi == local_issi
+            && !prim.stealing_permission
+            && prim.chan_alloc.is_some()
+            && prim.link_id == 0
+            && dl_pdu_type(&prim.sdu) == Some(CmcePduTypeDl::DConnectAcknowledge)
+    });
+    assert!(
+        called_mcch_ack.is_some(),
+        "expected Brew-routed D-CONNECT-ACK MCCH fallback for local callee to be sent linkless"
     );
 }
 
@@ -1212,8 +1349,8 @@ fn test_dual_carrier_supports_two_simultaneous_duplex_individual_calls() {
     );
     assert_eq!(
         test.config.state_read().timeslot_alloc.free_slot_count(),
-        2,
-        "two simultaneous duplex calls should consume four of the six available traffic slots"
+        3,
+        "two simultaneous duplex calls should consume four of the seven available traffic slots"
     );
 }
 

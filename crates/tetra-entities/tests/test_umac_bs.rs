@@ -34,6 +34,17 @@ fn block_has_mac_resource_for(block: &Option<tetra_saps::tmv::TmvUnitdataReq>, a
     pdu.addr == Some(addr) && pdu.chan_alloc_element.is_some() == expect_chan_alloc
 }
 
+fn block_mac_resource_for(block: &Option<tetra_saps::tmv::TmvUnitdataReq>, addr: TetraAddress) -> Option<MacResource> {
+    let Some(block) = block else {
+        return None;
+    };
+    let mut mac_block = block.mac_block.clone();
+    let Ok(pdu) = MacResource::from_bitbuf(&mut mac_block) else {
+        return None;
+    };
+    (pdu.addr == Some(addr)).then_some(pdu)
+}
+
 fn open_shared_voice_circuit(ts: u8) -> SapMsg {
     SapMsg {
         sap: Sap::Control,
@@ -225,6 +236,180 @@ fn test_secondary_carrier_normal_signalling_falls_back_to_primary_mcch() {
     assert!(
         !found_on_secondary,
         "secondary carrier without MCCH must not transmit normal chan_alloc signalling"
+    );
+}
+
+#[test]
+fn test_secondary_ts1_channel_allocation_encodes_secondary_carrier_without_css() {
+    debug::setup_logging_verbose();
+
+    let mut test = new_secondary_umac_test(TdmaTime { h: 0, m: 1, f: 1, t: 1 });
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Lmac]);
+
+    let dest = TetraAddress {
+        ssi: 9012001,
+        ssi_type: SsiType::Issi,
+    };
+    let tma = TmaUnitdataReq {
+        req_handle: 0,
+        pdu: BitBuffer::from_bitstr("1010101010101010"),
+        main_address: dest,
+        link_id: 1,
+        endpoint_id: 0,
+        stealing_permission: false,
+        subscriber_class: 0,
+        air_interface_encryption: None,
+        stealing_repeats_flag: None,
+        data_category: None,
+        carrier_num: Some(SECONDARY_CARRIER),
+        chan_alloc: Some(CmceChanAllocReq {
+            usage: Some(26),
+            carrier: Some(SECONDARY_CARRIER),
+            timeslots: [true, false, false, false],
+            alloc_type: ChanAllocType::Replace,
+            ul_dl_assigned: UlDlAssignment::Both,
+        }),
+        tx_reporter: None,
+    };
+
+    test.submit_message(SapMsg {
+        sap: Sap::TmaSap,
+        src: TetraEntity::Llc,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmaUnitdataReq(tma),
+    });
+    test.run_stack(Some(12));
+
+    let mut found = false;
+    for msg in test.dump_sinks() {
+        let slots = match msg.msg {
+            SapMsgInner::TmvUnitdataReq(slot) => vec![slot],
+            SapMsgInner::TmvUnitdataReqSlots(slots) => slots.slots,
+            _ => continue,
+        };
+        for slot in slots {
+            let Some(pdu) = block_mac_resource_for(&slot.blk1, dest).or_else(|| block_mac_resource_for(&slot.blk2, dest)) else {
+                continue;
+            };
+            let Some(chan_alloc) = pdu.chan_alloc_element else {
+                continue;
+            };
+            found = true;
+            assert_eq!(
+                slot.carrier_num, MAIN_CARRIER,
+                "ordinary control signalling must still ride the primary MCCH"
+            );
+            assert_eq!(slot.ts.t, 1, "chan_alloc should be transmitted on the primary MCCH");
+            assert_eq!(chan_alloc.carrier_num, SECONDARY_CARRIER);
+            assert_eq!(chan_alloc.alloc_type, ChanAllocType::Replace);
+            assert_ne!(chan_alloc.alloc_type, ChanAllocType::ReplaceWithCarrierSignalling);
+            assert_eq!(chan_alloc.ts_assigned, [true, false, false, false]);
+        }
+    }
+
+    assert!(found, "expected a MAC-RESOURCE carrying the secondary TS1 channel allocation");
+}
+
+#[test]
+fn test_main_ts1_ordinary_traffic_allocation_is_rejected() {
+    debug::setup_logging_verbose();
+
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Lmac]);
+
+    let dest = TetraAddress {
+        ssi: 9012001,
+        ssi_type: SsiType::Issi,
+    };
+    let tma = TmaUnitdataReq {
+        req_handle: 0,
+        pdu: BitBuffer::from_bitstr("1010101010101010"),
+        main_address: dest,
+        link_id: 1,
+        endpoint_id: 0,
+        stealing_permission: false,
+        subscriber_class: 0,
+        air_interface_encryption: None,
+        stealing_repeats_flag: None,
+        data_category: None,
+        carrier_num: Some(MAIN_CARRIER),
+        chan_alloc: Some(CmceChanAllocReq {
+            usage: Some(26),
+            carrier: Some(MAIN_CARRIER),
+            timeslots: [true, false, false, false],
+            alloc_type: ChanAllocType::Replace,
+            ul_dl_assigned: UlDlAssignment::Both,
+        }),
+        tx_reporter: None,
+    };
+
+    test.submit_message(SapMsg {
+        sap: Sap::TmaSap,
+        src: TetraEntity::Llc,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmaUnitdataReq(tma),
+    });
+    test.run_stack(Some(12));
+
+    let found = test.dump_sinks().into_iter().any(|msg| {
+        let slots = match msg.msg {
+            SapMsgInner::TmvUnitdataReq(slot) => vec![slot],
+            SapMsgInner::TmvUnitdataReqSlots(slots) => slots.slots,
+            _ => return false,
+        };
+        slots
+            .into_iter()
+            .any(|slot| block_has_mac_resource_for(&slot.blk1, dest, true) || block_has_mac_resource_for(&slot.blk2, dest, true))
+    });
+
+    assert!(!found, "main-carrier TS1 ordinary traffic allocation should be rejected");
+}
+
+#[test]
+fn test_random_access_on_secondary_ts1_is_ignored() {
+    debug::setup_logging_verbose();
+
+    let mut test = new_secondary_umac_test(TdmaTime { h: 0, m: 1, f: 1, t: 3 });
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Llc]);
+
+    let dest = TetraAddress {
+        ssi: 2200699,
+        ssi_type: SsiType::Issi,
+    };
+
+    let mut uplink = BitBuffer::new_autoexpand(64);
+    MacAccess {
+        fill_bits: true,
+        encrypted: false,
+        addr: Some(dest),
+        event_label: None,
+        length_ind: Some(6),
+        frag_flag: None,
+        reservation_req: None,
+    }
+    .to_bitbuf(&mut uplink);
+    uplink.write_bits(0, 12);
+    uplink.seek(0);
+
+    test.submit_message(SapMsg {
+        sap: Sap::TmvSap,
+        src: TetraEntity::Lmac,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmvUnitdataInd(TmvUnitdataInd {
+            carrier_num: SECONDARY_CARRIER,
+            pdu: uplink,
+            block_num: PhyBlockNum::Block1,
+            logical_channel: LogicalChannel::SchHu,
+            crc_pass: true,
+            scrambling_code: 864282631,
+            rssi_dbfs: f32::NEG_INFINITY,
+        }),
+    });
+    test.run_stack(Some(2));
+
+    assert!(
+        test.dump_sinks().is_empty(),
+        "random access on a secondary TS1 without MCCH must be ignored"
     );
 }
 

@@ -34,33 +34,42 @@ pub enum TimeslotAllocErr {
 #[derive(Debug, Clone)]
 pub struct TimeslotAllocator {
     carriers: Vec<u16>,
-    // One [TS2, TS3, TS4] owner row per configured carrier.
-    owners: Vec<[Option<TimeslotOwner>; 3]>,
+    // One [TS1, TS2, TS3, TS4] owner row per configured carrier.
+    // The primary carrier keeps TS1 reserved for MCCH/common control; any
+    // configured secondary carrier may allocate TS1 for assigned traffic.
+    owners: Vec<[Option<TimeslotOwner>; 4]>,
 }
 
 impl Default for TimeslotAllocator {
     fn default() -> Self {
         Self {
             carriers: vec![0],
-            owners: vec![[None, None, None]],
+            owners: vec![[None, None, None, None]],
         }
     }
 }
 
 impl TimeslotAllocator {
-    fn idx(ts: u8) -> Result<usize, TimeslotAllocErr> {
-        if (2..=4).contains(&ts) {
-            Ok((ts - 2) as usize)
-        } else {
-            Err(TimeslotAllocErr::InvalidTimeslot(ts))
-        }
-    }
-
     fn carrier_idx(&self, carrier_num: u16) -> Result<usize, TimeslotAllocErr> {
         self.carriers
             .iter()
             .position(|carrier| *carrier == carrier_num)
             .ok_or(TimeslotAllocErr::InvalidCarrier(carrier_num))
+    }
+
+    fn slot_supported_for_carrier(&self, carrier_idx: usize, ts: u8) -> bool {
+        match carrier_idx {
+            0 => (2..=4).contains(&ts),
+            _ => (1..=4).contains(&ts),
+        }
+    }
+
+    fn slot_idx(&self, carrier_idx: usize, ts: u8) -> Result<usize, TimeslotAllocErr> {
+        if self.slot_supported_for_carrier(carrier_idx, ts) {
+            Ok((ts - 1) as usize)
+        } else {
+            Err(TimeslotAllocErr::InvalidTimeslot(ts))
+        }
     }
 
     pub fn configure_carriers(&mut self, carriers: &[u16]) {
@@ -74,7 +83,7 @@ impl TimeslotAllocator {
             new_carriers.push(0);
         }
 
-        let mut new_owners = vec![[None, None, None]; new_carriers.len()];
+        let mut new_owners = vec![[None, None, None, None]; new_carriers.len()];
         for (old_i, old_carrier) in self.carriers.iter().enumerate() {
             if let Some(new_i) = new_carriers.iter().position(|carrier| carrier == old_carrier) {
                 new_owners[new_i] = self.owners[old_i];
@@ -95,12 +104,14 @@ impl TimeslotAllocator {
 
     pub fn allocate_any_slot(&mut self, owner: TimeslotOwner) -> Option<CarrierSlot> {
         for (carrier_i, slots) in self.owners.iter_mut().enumerate() {
-            for (slot_i, slot) in slots.iter_mut().enumerate() {
+            let ts_range = if carrier_i == 0 { 2..=4 } else { 1..=4 };
+            for ts in ts_range {
+                let slot = &mut slots[ts as usize - 1];
                 if slot.is_none() {
                     *slot = Some(owner);
                     return Some(CarrierSlot {
                         carrier_num: self.carriers[carrier_i],
-                        ts: slot_i as u8 + 2,
+                        ts,
                     });
                 }
             }
@@ -114,8 +125,8 @@ impl TimeslotAllocator {
     }
 
     pub fn reserve_slot(&mut self, owner: TimeslotOwner, slot: CarrierSlot) -> Result<(), TimeslotAllocErr> {
-        let idx = Self::idx(slot.ts)?;
         let carrier_idx = self.carrier_idx(slot.carrier_num)?;
+        let idx = self.slot_idx(carrier_idx, slot.ts)?;
         match self.owners[carrier_idx][idx] {
             None => {
                 self.owners[carrier_idx][idx] = Some(owner);
@@ -135,8 +146,8 @@ impl TimeslotAllocator {
     }
 
     pub fn release_slot(&mut self, owner: TimeslotOwner, slot: CarrierSlot) -> Result<(), TimeslotAllocErr> {
-        let idx = Self::idx(slot.ts)?;
         let carrier_idx = self.carrier_idx(slot.carrier_num)?;
+        let idx = self.slot_idx(carrier_idx, slot.ts)?;
         match self.owners[carrier_idx][idx] {
             None => Err(TimeslotAllocErr::NotAllocated {
                 carrier_num: slot.carrier_num,
@@ -163,8 +174,8 @@ impl TimeslotAllocator {
     }
 
     pub fn slot_owner(&self, slot: CarrierSlot) -> Option<TimeslotOwner> {
-        let idx = Self::idx(slot.ts).ok()?;
         let carrier_idx = self.carrier_idx(slot.carrier_num).ok()?;
+        let idx = self.slot_idx(carrier_idx, slot.ts).ok()?;
         self.owners[carrier_idx][idx]
     }
 
@@ -176,15 +187,19 @@ impl TimeslotAllocator {
         self.slot_owner(slot).is_none()
     }
 
-    /// Number of currently unallocated traffic timeslots (TS2..=TS4) on the primary configured carrier.
+    /// Number of currently unallocated traffic timeslots on the primary configured carrier.
     pub fn free_count(&self) -> usize {
-        self.owners[0].iter().filter(|owner| owner.is_none()).count()
+        self.owners[0][1..].iter().filter(|owner| owner.is_none()).count()
     }
 
     pub fn free_slot_count(&self) -> usize {
         self.owners
             .iter()
-            .flat_map(|slots| slots.iter())
+            .enumerate()
+            .flat_map(|(carrier_i, slots)| {
+                let slice = if carrier_i == 0 { &slots[1..] } else { &slots[..] };
+                slice.iter()
+            })
             .filter(|owner| owner.is_none())
             .count()
     }
@@ -217,7 +232,26 @@ mod tests {
             .reserve_slot(TimeslotOwner::Brew, CarrierSlot { carrier_num: 1585, ts: 2 })
             .expect("secondary carrier reserve");
 
-        assert_eq!(alloc.free_slot_count(), 4);
+        assert_eq!(alloc.free_slot_count(), 5);
+    }
+
+    #[test]
+    fn secondary_ts1_is_allocatable_but_primary_ts1_is_not() {
+        let mut alloc = TimeslotAllocator::default();
+        alloc.configure_carriers(&[1584, 1585]);
+
+        assert_eq!(
+            alloc.reserve_slot(TimeslotOwner::Cmce, CarrierSlot { carrier_num: 1584, ts: 1 }),
+            Err(TimeslotAllocErr::InvalidTimeslot(1))
+        );
+
+        alloc
+            .reserve_slot(TimeslotOwner::Cmce, CarrierSlot { carrier_num: 1585, ts: 1 })
+            .expect("secondary TS1 reserve");
+        assert_eq!(
+            alloc.slot_owner(CarrierSlot { carrier_num: 1585, ts: 1 }),
+            Some(TimeslotOwner::Cmce)
+        );
     }
 
     #[test]

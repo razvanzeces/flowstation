@@ -315,11 +315,37 @@ impl UmacBs {
         }
     }
 
-    fn cmce_to_mac_chanalloc(chan_alloc: &CmceChanAllocReq, carrier_num: u16) -> ChanAllocElement {
+    fn validate_chan_alloc(&self, chan_alloc: &CmceChanAllocReq, carrier_num: u16) -> bool {
+        if chan_alloc.alloc_type == ChanAllocType::ReplaceWithCarrierSignalling {
+            tracing::warn!(
+                "UmacBs: rejecting channel allocation with CSS semantics for ordinary traffic carrier={} ts_bitmap={:?}",
+                carrier_num,
+                chan_alloc.timeslots
+            );
+            return false;
+        }
+
+        if carrier_num == self.main_carrier() && chan_alloc.timeslots[0] {
+            tracing::warn!(
+                "UmacBs: rejecting ordinary traffic allocation on main carrier TS1 carrier={} ts_bitmap={:?}",
+                carrier_num,
+                chan_alloc.timeslots
+            );
+            return false;
+        }
+
+        true
+    }
+
+    fn cmce_to_mac_chanalloc(&self, chan_alloc: &CmceChanAllocReq, carrier_num: u16) -> Option<ChanAllocElement> {
+        if !self.validate_chan_alloc(chan_alloc, carrier_num) {
+            return None;
+        }
+
         // We grant clch permission for Replace and Additional allocations on the uplink
         let clch_permission = (chan_alloc.alloc_type == ChanAllocType::Replace || chan_alloc.alloc_type == ChanAllocType::Additional)
             && (chan_alloc.ul_dl_assigned == UlDlAssignment::Ul || chan_alloc.ul_dl_assigned == UlDlAssignment::Both);
-        ChanAllocElement {
+        Some(ChanAllocElement {
             alloc_type: chan_alloc.alloc_type,
             ts_assigned: chan_alloc.timeslots,
             ul_dl_assigned: chan_alloc.ul_dl_assigned,
@@ -329,7 +355,7 @@ impl UmacBs {
             ext: None,
             mon_pattern: 0,
             frame18_mon_pattern: Some(0),
-        }
+        })
     }
 
     /// Convenience function to send a TMA-REPORT.ind
@@ -783,11 +809,17 @@ impl UmacBs {
         // random_access_flag=true, which some radios reject during call setup.
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago.
         if msg_dltime.t == 1 && !self.scheduler_for(carrier_num).allow_mcch() {
-            tracing::info!(
-                "rx_mac_access: ignoring common-control random access on carrier={} ts1 because this carrier has no MCCH",
+            if !self.scheduler_for(carrier_num).circuit_is_active(Direction::Dl, msg_dltime.t) {
+                tracing::info!(
+                    "rx_mac_access: ignoring common-control random access on carrier={} ts1 because this carrier has no MCCH",
+                    carrier_num
+                );
+                return;
+            }
+            tracing::trace!(
+                "rx_mac_access: treating carrier={} ts1 as assigned traffic, not common control",
                 carrier_num
             );
-            return;
         }
         if !self.scheduler_for(carrier_num).circuit_is_active(Direction::Dl, msg_dltime.t) {
             self.scheduler_for_mut(carrier_num).dl_enqueue_random_access_ack(msg_dltime.t, addr);
@@ -1304,7 +1336,7 @@ impl UmacBs {
                 .chan_alloc
                 .as_ref()
                 .and_then(|ca| ca.timeslots.iter().enumerate().find(|&(_, &set)| set).map(|(i, _)| (i + 1) as u8))
-                .or_else(|| (2..=4u8).find(|&t| self.scheduler_for(preferred_carrier).circuit_is_active(Direction::Dl, t)));
+                .or_else(|| (1..=4u8).find(|&t| self.scheduler_for(preferred_carrier).can_deliver_stealing(t)));
 
             if let Some(ts) = traffic_ts {
                 // Guard: don't steal on a circuit that was just released (race between
@@ -1396,10 +1428,14 @@ impl UmacBs {
 
         // ── Normal signaling path (MCCH / SCH/F) ────────────────────────
         let (usage_marker, mac_chan_alloc) = if let Some(chan_alloc) = prim.chan_alloc {
-            (
-                chan_alloc.usage,
-                Some(Self::cmce_to_mac_chanalloc(&chan_alloc, self.config.config().cell.main_carrier)),
-            )
+            let carrier_num = self.config.config().cell.main_carrier;
+            let Some(mac_chan_alloc) = self.cmce_to_mac_chanalloc(&chan_alloc, carrier_num) else {
+                if let Some(tx_reporter) = prim.tx_reporter {
+                    tx_reporter.mark_discarded();
+                }
+                return;
+            };
+            (chan_alloc.usage, Some(mac_chan_alloc))
         } else {
             (None, None)
         };
@@ -1457,7 +1493,7 @@ impl UmacBs {
                     );
                     None
                 }
-                None => (2..=4u8).find(|&t| self.scheduler_for(requested_carrier).can_deliver_stealing(t)),
+                None => (1..=4u8).find(|&t| self.scheduler_for(requested_carrier).can_deliver_stealing(t)),
             };
 
             if let Some(ts) = traffic_ts {
@@ -1514,7 +1550,13 @@ impl UmacBs {
 
         let (usage_marker, mac_chan_alloc) = if let Some(chan_alloc) = prim.chan_alloc {
             let carrier_num = chan_alloc.carrier.unwrap_or(preferred_carrier);
-            (chan_alloc.usage, Some(Self::cmce_to_mac_chanalloc(&chan_alloc, carrier_num)))
+            let Some(mac_chan_alloc) = self.cmce_to_mac_chanalloc(&chan_alloc, carrier_num) else {
+                if let Some(tx_reporter) = prim.tx_reporter {
+                    tx_reporter.mark_discarded();
+                }
+                return;
+            };
+            (chan_alloc.usage, Some(mac_chan_alloc))
         } else {
             (None, None)
         };

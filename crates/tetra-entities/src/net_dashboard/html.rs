@@ -4527,11 +4527,11 @@ function handleMsg(msg){
         state.calls[c.call_id]={...c,started_at:Date.now()-(c.started_secs_ago||0)*1000};
         if(c.carrier_num!=null)tsEnsureCarrierInfo(c.carrier_num);
         if(c.peer_carrier_num!=null)tsEnsureCarrierInfo(c.peer_carrier_num);
-        if(c.ts&&c.ts>=2&&c.carrier_num!=null){
+        if(tsCanRenderAssignedCarrier(c.carrier_num,c.ts)){
           const sub=c.call_type==='group'?t('call_group'):(c.simplex?t('call_p2p_s'):t('call_p2p_d'));
           tsSetCallCarrier(c.carrier_num,c.ts,{...c,sub});
           const peerCarrier=c.peer_carrier_num!=null?c.peer_carrier_num:c.carrier_num;
-          if(c.peer_ts&&c.peer_ts>=2&&peerCarrier!=null)tsSetCallCarrier(peerCarrier,c.peer_ts,{...c,sub});
+          if(tsCanRenderAssignedCarrier(peerCarrier,c.peer_ts))tsSetCallCarrier(peerCarrier,c.peer_ts,{...c,sub});
         }
       });
       if(msg.log&&msg.log.length){document.getElementById('log-container').innerHTML='';msg.log.forEach(e=>appendLog(e));}
@@ -4588,11 +4588,11 @@ function handleMsg(msg){
       // The caller keyed up on this GSSI → it's their actively-selected TG.
       if(msg.call_type==='group'&&msg.gssi!=null&&state.ms[msg.caller_issi]){state.ms[msg.caller_issi].selected_group=msg.gssi;renderStations();}
       if(msg.last_heard)pushLastHeard(msg.last_heard);
-      if(msg.ts&&msg.ts>=2&&msg.carrier_num!=null){
+      if(tsCanRenderAssignedCarrier(msg.carrier_num,msg.ts)){
         const sub=msg.call_type==='group'?t('call_group'):(msg.simplex?t('call_p2p_s'):t('call_p2p_d'));
         tsSetCallCarrier(msg.carrier_num,msg.ts,{...msg,sub});
         const peerCarrier=msg.peer_carrier_num!=null?msg.peer_carrier_num:msg.carrier_num;
-        if(msg.peer_ts&&msg.peer_ts>=2&&peerCarrier!=null)tsSetCallCarrier(peerCarrier,msg.peer_ts,{...msg,sub});
+        if(tsCanRenderAssignedCarrier(peerCarrier,msg.peer_ts))tsSetCallCarrier(peerCarrier,msg.peer_ts,{...msg,sub});
         updateTsBlocksCarrier();
       }
       renderCalls();renderLastHeard();break;
@@ -4828,6 +4828,12 @@ const tsCarrierInfo={};
 
 function fmtMhz(hz,dp){return(hz!=null&&isFinite(hz))?(hz/1e6).toFixed(dp==null?4:dp)+' MHz':'-';}
 function tsCarrierKey(carrierNum,ts){return String(carrierNum)+':'+String(ts);}
+function tsCanRenderAssignedCarrier(carrierNum,ts){
+  if(carrierNum==null||!isFinite(carrierNum)||ts==null||!isFinite(ts))return false;
+  if(ts<1||ts>4)return false;
+  if(state.mainCarrierNum!=null&&carrierNum===state.mainCarrierNum)return ts>=2&&ts<=4;
+  return true;
+}
 function tsCarrierNumbers(){
   return Object.keys(tsCarrierInfo).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
 }
@@ -4985,7 +4991,7 @@ function updateTsBlocksCarrier(){
   }
 }
 function tsSetCallCarrier(carrierNum,ts,call){
-  if(ts<2||ts>4||carrierNum==null)return;
+  if(!tsCanRenderAssignedCarrier(carrierNum,ts))return;
   tsEnsureCarrierInfo(carrierNum);
   if(!document.getElementById(`ts-block-${carrierNum}-${ts}`))renderTsGridCarrier();
   const peerCarrier=call.peer_carrier_num!=null?call.peer_carrier_num:call.carrier_num;
@@ -5011,7 +5017,7 @@ function tsClearCallCarrier(callId){
   Object.keys(tsStateCarrier).forEach(key=>{if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId)delete tsStateCarrier[key];});
 }
 function tsVoiceCarrier(carrierNum,ts,speakerIssi){
-  if(ts<2||ts>4||carrierNum==null)return;
+  if(!tsCanRenderAssignedCarrier(carrierNum,ts))return;
   tsEnsureCarrierInfo(carrierNum);
   if(!document.getElementById(`ts-block-${carrierNum}-${ts}`))renderTsGridCarrier();
   const key=tsCarrierKey(carrierNum,ts);

@@ -64,6 +64,10 @@ impl CarrierDownlinkMode {
     fn allow_common_control_aach(self) -> bool {
         matches!(self, Self::PrimaryMcch)
     }
+
+    fn allow_assigned_traffic_ts1(self) -> bool {
+        matches!(self, Self::SecondaryBcchNoMcch | Self::TrafficOnly)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -211,7 +215,7 @@ impl BsChannelScheduler {
         self.downlink_mode.allow_common_control_aach()
     }
 
-    /// Enter/leave hangtime for a traffic timeslot (2..=4).
+    /// Enter/leave hangtime for an assigned traffic timeslot.
     pub fn set_hangtime(&mut self, ts: u8, active: bool) {
         if !(1..=4).contains(&ts) {
             tracing::warn!("BsChannelScheduler::set_hangtime: invalid ts {}", ts);
@@ -270,8 +274,16 @@ impl BsChannelScheduler {
             .unwrap_or(false)
     }
 
+    fn supports_assigned_traffic_ts(&self, ts: u8) -> bool {
+        match ts {
+            1 => self.downlink_mode.allow_assigned_traffic_ts1(),
+            2..=4 => true,
+            _ => false,
+        }
+    }
+
     pub fn can_deliver_stealing(&self, ts: u8) -> bool {
-        (2..=4).contains(&ts) && self.circuits.is_active(Direction::Dl, self.carrier_num, ts)
+        self.supports_assigned_traffic_ts(ts) && self.circuits.is_active(Direction::Dl, self.carrier_num, ts)
     }
 
     fn generate_hangtime_idle_schf(&self) -> BitBuffer {
@@ -578,7 +590,7 @@ impl BsChannelScheduler {
     /// `usage_marker` is set when the grant covers >1 slot — the MS uses it to identify the reservation
     /// when continuing the burst on the second slot (per ETSI §21.4.3.2). Single-slot grants pass None.
     pub fn dl_enqueue_grant(&mut self, ts: u8, addr: TetraAddress, grant: BasicSlotgrant, usage_marker: Option<u8>) {
-        if ts == 1 && !self.allow_mcch() {
+        if ts == 1 && !self.allow_mcch() && !self.circuits.is_active(Direction::Dl, self.carrier_num, ts) {
             tracing::debug!(
                 "dl_enqueue_grant: carrier={} ignoring TS1 grant for {} because MCCH is disabled in mode {:?}",
                 self.carrier_num,
@@ -599,7 +611,7 @@ impl BsChannelScheduler {
     }
 
     pub fn dl_enqueue_random_access_ack(&mut self, ts: u8, addr: TetraAddress) {
-        if ts == 1 && !self.allow_mcch() {
+        if ts == 1 && !self.allow_mcch() && !self.circuits.is_active(Direction::Dl, self.carrier_num, ts) {
             tracing::debug!(
                 "dl_enqueue_random_access_ack: carrier={} ignoring TS1 random-access ack for {} because MCCH is disabled in mode {:?}",
                 self.carrier_num,
@@ -842,6 +854,16 @@ impl BsChannelScheduler {
     }
 
     pub fn create_circuit(&mut self, dir: Direction, circuit: Circuit) {
+        if !self.supports_assigned_traffic_ts(circuit.ts) {
+            tracing::warn!(
+                "BsChannelScheduler::create_circuit: rejecting {:?} circuit on carrier={} ts {} in mode {:?}",
+                dir,
+                self.carrier_num,
+                circuit.ts,
+                self.downlink_mode
+            );
+            return;
+        }
         // New/updated circuit implies traffic mode.
         if (1..=4).contains(&circuit.ts) {
             self.hangtime[circuit.ts as usize - 1] = false;
@@ -1292,7 +1314,7 @@ impl BsChannelScheduler {
 
         // During hangtime we stop sending traffic frames and switch to signalling mode.
         // Keep traffic mode while FACCH/stealing is still queued for delivery.
-        let hang_effective = if (2..=4).contains(&ts.t) {
+        let hang_effective = if self.supports_assigned_traffic_ts(ts.t) {
             self.is_hangtime_effective(ts.t)
         } else {
             false
@@ -1501,9 +1523,6 @@ impl BsChannelScheduler {
 
             match ts.t {
                 1 => {
-                    assert!(dl_traffic_usage.is_none(), "DL ts 1 can't be traffic");
-                    assert!(ul_traffic_usage.is_none(), "UL ts 1 can't be traffic (is this allowed?"); // TODO FIXME check spec
-
                     if self.allow_common_control_aach() {
                         // TS1 (MCCH) DL is always CommonControl — that doesn't
                         // change for individual reservations.
@@ -1527,8 +1546,27 @@ impl BsChannelScheduler {
                             }
                         }
                     } else {
-                        aach.dl_usage = AccessAssignDlUsage::Unallocated;
-                        aach.ul_usage = AccessAssignUlUsage::Unallocated;
+                        let in_hangtime = self.supports_assigned_traffic_ts(ts.t) && self.hangtime[ts.t as usize - 1];
+
+                        if in_hangtime && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
+                            aach.dl_usage = AccessAssignDlUsage::AssignedControl;
+                            aach.ul_usage = AccessAssignUlUsage::AssignedOnly;
+                            aach.f2_af = Some(AccessField {
+                                access_code: 0,
+                                base_frame_len: 4,
+                            });
+                        } else {
+                            aach.dl_usage = if let Some(usage) = dl_traffic_usage {
+                                AccessAssignDlUsage::Traffic(usage)
+                            } else {
+                                AccessAssignDlUsage::Unallocated
+                            };
+                            aach.ul_usage = if let Some(usage) = ul_traffic_usage {
+                                AccessAssignUlUsage::Traffic(usage)
+                            } else {
+                                AccessAssignUlUsage::Unallocated
+                            };
+                        }
                     }
                 }
                 2..=4 => {
@@ -1998,6 +2036,35 @@ mod tests {
 
         assert_eq!(slot.carrier_num, 1002);
         assert_eq!(slot.ts.t, 2);
+        assert_eq!(slot.blk1.as_ref().expect("blk1").logical_channel, LogicalChannel::Stch);
+        assert_eq!(slot.blk2.as_ref().expect("blk2").logical_channel, LogicalChannel::TchS);
+    }
+
+    #[test]
+    fn test_secondary_assigned_ts1_emits_traffic_and_non_common_aach() {
+        let mut sched = get_testing_secondary_scheduler();
+        sched.create_circuit(Direction::Dl, test_circuit_on_carrier(Direction::Dl, 1002, 1));
+        sched.set_dl_time(TdmaTime { t: 4, f: 1, m: 1, h: 0 });
+
+        let slot = sched.finalize_secondary_ts_for_tick().expect("secondary should emit");
+        let mut bbk = slot.bbk.expect("bbk").mac_block;
+        let aach = AccessAssign::from_bitbuf(&mut bbk).expect("AACH should parse");
+
+        assert_eq!(slot.blk1.as_ref().expect("blk1").logical_channel, LogicalChannel::TchS);
+        assert_eq!(aach.dl_usage, AccessAssignDlUsage::Traffic(4));
+        assert_ne!(aach.dl_usage, AccessAssignDlUsage::CommonControl);
+        assert_ne!(aach.ul_usage, AccessAssignUlUsage::CommonOnly);
+    }
+
+    #[test]
+    fn test_secondary_assigned_ts1_can_deliver_facch_stealing() {
+        let mut sched = get_testing_secondary_scheduler();
+        sched.create_circuit(Direction::Dl, test_circuit_on_carrier(Direction::Dl, 1002, 1));
+        sched.set_dl_time(TdmaTime { t: 4, f: 1, m: 1, h: 0 });
+        sched.dl_enqueue_stealing(1, BitBuffer::new(124), None);
+
+        let slot = sched.finalize_secondary_ts_for_tick().expect("secondary should emit");
+
         assert_eq!(slot.blk1.as_ref().expect("blk1").logical_channel, LogicalChannel::Stch);
         assert_eq!(slot.blk2.as_ref().expect("blk2").logical_channel, LogicalChannel::TchS);
     }

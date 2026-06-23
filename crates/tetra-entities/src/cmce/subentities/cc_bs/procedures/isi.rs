@@ -339,34 +339,6 @@ impl CcBsSubentity {
             proprietary: None,
         };
 
-        tracing::info!("-> {:?}", d_connect);
-        let mut connect_sdu = BitBuffer::new_autoexpand(30);
-        d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
-        connect_sdu.seek(0);
-
-        let connect_msg = SapMsg {
-            sap: Sap::LcmcSap,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Mle,
-            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu: connect_sdu,
-                handle: call.calling_handle,
-                endpoint_id: call.calling_endpoint_id,
-                link_id: call.calling_link_id,
-                // Network individual-call D-CONNECT: the legacy `main` code sent CC PDUs
-                // unacknowledged (FH FIX 2).
-                layer2service: Layer2Service::Unacknowledged,
-                pdu_prio: 0,
-                layer2_qos: 0,
-                stealing_permission: false,
-                stealing_repeats_flag: false,
-                chan_alloc: Some(chan_alloc_calling),
-                main_address: call.calling_addr,
-                tx_reporter: None,
-            }),
-        };
-        queue.push_back(connect_msg);
-
         let circuit = CmceCircuit {
             ts_created: self.dltime,
             direction: Direction::Both,
@@ -381,6 +353,44 @@ impl CcBsSubentity {
             etee_encrypted: false,
         };
         Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, None, CircuitDlMediaSource::SwMI);
+
+        tracing::info!("-> {:?}", d_connect);
+        let mut connect_sdu = BitBuffer::new_autoexpand(30);
+        d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
+        connect_sdu.seek(0);
+
+        let connect_msg_stealing = SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu: connect_sdu,
+                handle: call.calling_handle,
+                endpoint_id: call.calling_endpoint_id,
+                link_id: call.calling_link_id,
+                // Network individual-call D-CONNECT: the legacy `main` code sent CC PDUs
+                // unacknowledged (FH FIX 2).
+                layer2service: Layer2Service::Unacknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: true,
+                stealing_repeats_flag: true,
+                chan_alloc: Some(chan_alloc_calling.clone()),
+                main_address: call.calling_addr,
+                tx_reporter: None,
+            }),
+        };
+        queue.push_back(connect_msg_stealing);
+
+        let mut connect_sdu = BitBuffer::new_autoexpand(30);
+        d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
+        connect_sdu.seek(0);
+        // Keep a linkless MCCH copy alongside the traffic-leg send. Reusing the setup LLC link
+        // with chan_alloc here can make UMAC treat D-CONNECT as a random-access response and
+        // leave the local handset in alerting/ringing state after answer.
+        let connect_msg_fallback =
+            Self::build_sapmsg(connect_sdu, Some(chan_alloc_calling), self.dltime, call.calling_addr, None);
+        queue.push_back(connect_msg_fallback);
 
         let activated = match self.fsm_individual_transition_to_active(call_id) {
             Ok(()) => true,
@@ -548,29 +558,6 @@ impl CcBsSubentity {
             .expect("Failed to serialize DConnectAcknowledge");
         ack_sdu.seek(0);
 
-        let ack_msg = SapMsg {
-            sap: Sap::LcmcSap,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Mle,
-            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu: ack_sdu,
-                handle: called_handle,
-                endpoint_id: called_endpoint_id,
-                link_id: called_link_id,
-                // Network individual-call D-CONNECT-ACK: the legacy `main` code sent CC PDUs
-                // unacknowledged (FH FIX 2).
-                layer2service: Layer2Service::Unacknowledged,
-                pdu_prio: 0,
-                layer2_qos: 0,
-                stealing_permission: false,
-                stealing_repeats_flag: false,
-                chan_alloc: Some(chan_alloc_called),
-                main_address: call.called_addr,
-                tx_reporter: None,
-            }),
-        };
-        queue.push_back(ack_msg);
-
         let (circuit_mode, comm_type, speech_service, etee_encrypted) = if let Some(cached) = self.cached_setups.get(&call_id) {
             (
                 cached.pdu.basic_service_information.circuit_mode_type,
@@ -596,6 +583,39 @@ impl CcBsSubentity {
             etee_encrypted,
         };
         Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, None, CircuitDlMediaSource::SwMI);
+
+        let ack_msg_stealing = SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu: ack_sdu,
+                handle: called_handle,
+                endpoint_id: called_endpoint_id,
+                link_id: called_link_id,
+                // Network individual-call D-CONNECT-ACK: the legacy `main` code sent CC PDUs
+                // unacknowledged (FH FIX 2).
+                layer2service: Layer2Service::Unacknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: true,
+                stealing_repeats_flag: true,
+                chan_alloc: Some(chan_alloc_called.clone()),
+                main_address: call.called_addr,
+                tx_reporter: None,
+            }),
+        };
+        queue.push_back(ack_msg_stealing);
+
+        let mut ack_sdu = BitBuffer::new_autoexpand(28);
+        d_connect_ack
+            .to_bitbuf(&mut ack_sdu)
+            .expect("Failed to serialize DConnectAcknowledge");
+        ack_sdu.seek(0);
+        // Same as the D-CONNECT path above: preserve an MCCH fallback, but keep it linkless so
+        // chan_alloc is not mistaken for a random-access response on the old setup LLC link.
+        let ack_msg_fallback = Self::build_sapmsg(ack_sdu, Some(chan_alloc_called), self.dltime, call.called_addr, None);
+        queue.push_back(ack_msg_fallback);
 
         let activated = match self.fsm_individual_transition_to_active(call_id) {
             Ok(()) => true,
