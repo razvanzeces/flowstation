@@ -749,6 +749,19 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     return;
                 }
 
+                // Reject frames whose declared bit-length exceeds the actual payload:
+                // length_bits and data are independent wire fields, and the downstream
+                // D-SDS-DATA serializer indexes the payload by length_bits — an
+                // over-claimed length would otherwise panic the base station (OOB).
+                if (frame.length_bits as usize).div_ceil(8) > frame.data.len() {
+                    tracing::warn!(
+                        "BrewWorker: ignoring SDS_TRANSFER with length_bits={} exceeding payload of {} bytes",
+                        frame.length_bits,
+                        frame.data.len()
+                    );
+                    return;
+                }
+
                 // Match with pending SHORT_TRANSFER by UUID
                 if let Some(pending) = self.pending_sds.remove(&frame.identifier) {
                     tracing::info!(

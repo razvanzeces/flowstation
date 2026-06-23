@@ -4401,7 +4401,7 @@ let ws=null,state={ms:{},calls:{},emergencies:{},lastHeard:[],sdsLog:[],dapnetLo
 let callsigns={};
 let _csInflight=false;
 // Render an ISSI with its RadioID callsign (and country flag, when known) appended.
-function idCell(issi){const c=callsigns[issi];if(!c||!c.cs)return `<code>${issi}</code>`;const fl=c.fl?c.fl+' ':'';return `<code>${issi}</code> <span class="callsign">${fl}${c.cs}</span>`;}
+function idCell(issi){const c=callsigns[issi];if(!c||!c.cs)return `<code>${issi}</code>`;const fl=c.fl?c.fl+' ':'';return `<code>${issi}</code> <span class="callsign">${fl}${escHtml(c.cs)}</span>`;}
 // Resolve callsigns for every ISSI currently on screen we have not looked up yet. On-demand: the
 // server fetches unknowns from RadioID in the background and caches them locally; pending IDs are
 // omitted from the response and retried on the next tick. Found/absent results are cached here.

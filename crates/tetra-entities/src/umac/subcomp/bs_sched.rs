@@ -1047,11 +1047,23 @@ impl BsChannelScheduler {
     fn dl_build_traffic_block(&mut self, ts: TdmaTime) -> (BitBuffer, Option<BitBuffer>) {
         // Get speech data or silence
         let tch_buf = if let Some(block) = self.circuits.take_block(ts.t) {
-            let mut buf = BitBuffer::from_vec(block);
-            // Raw ACELP speech (274 bits for TCH/S).
-            // Clamp to TCH_S_CAP as Vec may be larger (e.g. 280 bits).
-            buf.set_raw_end(buf.get_raw_start() + TCH_S_CAP);
-            buf
+            // Raw ACELP speech (274 bits for TCH/S). The Vec may be LARGER (e.g. 280
+            // bits) and is clamped down to TCH_S_CAP. But a SHORTER block (e.g. a
+            // truncated/garbage frame off the network) must not be clamped UP — that
+            // would push set_raw_end past capacity and panic. Fall back to silence.
+            if block.len() * 8 >= TCH_S_CAP {
+                let mut buf = BitBuffer::from_vec(block);
+                buf.set_raw_end(buf.get_raw_start() + TCH_S_CAP);
+                buf
+            } else {
+                tracing::warn!(
+                    "DL traffic ts={}: queued voice block only {} bytes (<{} bits), sending silence",
+                    ts.t,
+                    block.len(),
+                    TCH_S_CAP
+                );
+                BitBuffer::new(TCH_S_CAP)
+            }
         } else {
             // No voice data queued — send silence frame (all zeros).
             // This is normal during hangtime or between voice bursts.
