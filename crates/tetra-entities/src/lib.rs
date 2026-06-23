@@ -23,6 +23,7 @@ pub mod net_geoalarm;
 pub mod net_snom;
 pub mod net_telegram;
 pub mod net_telemetry;
+pub mod net_meshcom;
 
 pub mod backlight;
 pub mod health;

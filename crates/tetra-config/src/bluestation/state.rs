@@ -248,6 +248,33 @@ pub struct GeoalarmRuntimeOverride {
     pub telegram_prefix: String,
 }
 
+/// Runtime override for MeshCom external UDP settings, edited from the dashboard.
+///
+/// Mirrors `[meshcom]`. When present, it takes precedence over the config file so UDP routing
+/// edits apply immediately; the dashboard also writes the values back to TOML for persistence.
+#[derive(Debug, Clone, Default)]
+pub struct MeshcomRuntimeOverride {
+    pub enabled: bool,
+    pub bind_addr: String,
+    pub bind_port: u16,
+    pub tx_host: String,
+    pub tx_port: u16,
+    pub allow_broadcast: bool,
+    pub max_messages: usize,
+    pub max_nodes: usize,
+    pub forward_sds: bool,
+    pub forward_sip: bool,
+    pub forward_telegram: bool,
+    pub sds_source_issi: u32,
+    pub sds_dest_issi: u32,
+    pub sds_dest_is_group: bool,
+    pub sds_allowed_sources: std::collections::BTreeSet<String>,
+    pub sip_title_prefix: String,
+    pub sip_allowed_sources: std::collections::BTreeSet<String>,
+    pub telegram_prefix: String,
+    pub telegram_allowed_sources: std::collections::BTreeSet<String>,
+}
+
 /// Runtime override for Snom XML NOTIFY settings, edited from the dashboard.
 ///
 /// Mirrors `[snom_notify]`. When present, it takes precedence over the config file so
@@ -399,6 +426,80 @@ impl Default for GeoalarmRuntimeStatus {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MeshcomNodeStatus {
+    pub src: String,
+    pub last_seen: String,
+    pub last_type: String,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub alt: Option<f64>,
+    pub batt: Option<f64>,
+    pub rssi: Option<i64>,
+    pub snr: Option<i64>,
+    pub firmware: Option<String>,
+    pub fw_sub: Option<String>,
+    pub hw_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MeshcomMessageStatus {
+    pub ts: String,
+    pub direction: String,
+    pub msg_type: String,
+    pub src_type: Option<String>,
+    pub src: Option<String>,
+    pub dst: Option<String>,
+    pub msg: Option<String>,
+    pub msg_id: Option<String>,
+    pub paths: Vec<String>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub alt: Option<f64>,
+    pub batt: Option<f64>,
+    pub rssi: Option<i64>,
+    pub snr: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MeshcomRuntimeStatus {
+    pub configured: bool,
+    pub enabled: bool,
+    pub bind: String,
+    pub tx: String,
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub last_rx: Option<String>,
+    pub last_tx: Option<String>,
+    pub last_error: Option<String>,
+    pub forward_sds: bool,
+    pub forward_sip: bool,
+    pub forward_telegram: bool,
+    pub nodes: Vec<MeshcomNodeStatus>,
+    pub messages: Vec<MeshcomMessageStatus>,
+}
+
+impl Default for MeshcomRuntimeStatus {
+    fn default() -> Self {
+        Self {
+            configured: false,
+            enabled: false,
+            bind: String::new(),
+            tx: String::new(),
+            rx_packets: 0,
+            tx_packets: 0,
+            last_rx: None,
+            last_tx: None,
+            last_error: None,
+            forward_sds: false,
+            forward_sip: false,
+            forward_telegram: false,
+            nodes: Vec::new(),
+            messages: Vec::new(),
+        }
+    }
+}
+
 /// Mutable, stack-editable state (mutex-protected).
 #[derive(Debug, Clone)]
 pub struct StackState {
@@ -427,6 +528,8 @@ pub struct StackState {
     pub dapnet_override: Option<DapnetRuntimeOverride>,
     /// Runtime override for GeoAlarm settings (dashboard editing). See GeoalarmRuntimeOverride.
     pub geoalarm_override: Option<GeoalarmRuntimeOverride>,
+    /// Runtime override for MeshCom settings (dashboard editing). See MeshcomRuntimeOverride.
+    pub meshcom_override: Option<MeshcomRuntimeOverride>,
     /// Runtime override for Snom XML NOTIFY settings. See SnomNotifyRuntimeOverride.
     pub snom_notify_override: Option<SnomNotifyRuntimeOverride>,
     /// Next TPG2200 ActionURL incident number. Initialised lazily from `[tpg2200_action]`.
@@ -437,6 +540,8 @@ pub struct StackState {
     pub dapnet_status: DapnetRuntimeStatus,
     /// Runtime GeoAlarm status for `/api/geoalarm`.
     pub geoalarm_status: GeoalarmRuntimeStatus,
+    /// Runtime MeshCom UDP bridge status for `/api/meshcom` and the Health tab.
+    pub meshcom_status: MeshcomRuntimeStatus,
     /// Live map "identity currently reachable on a traffic channel" → (DL timeslot, usage_marker),
     /// republished every tick by CMCE call control from the live call tables (so it is never
     /// stale). Keyed by GSSI for active group calls and by each participant ISSI for connected
@@ -554,11 +659,13 @@ impl Default for StackState {
             telegram_override: None,
             dapnet_override: None,
             geoalarm_override: None,
+            meshcom_override: None,
             snom_notify_override: None,
             tpg2200_action_next_incident: None,
             asterisk_status: AsteriskRuntimeStatus::default(),
             dapnet_status: DapnetRuntimeStatus::default(),
             geoalarm_status: GeoalarmRuntimeStatus::default(),
+            meshcom_status: MeshcomRuntimeStatus::default(),
             active_call_ts: std::collections::HashMap::new(),
             ee_monitoring_windows: std::collections::HashMap::new(),
         }

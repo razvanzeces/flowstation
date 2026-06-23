@@ -19,6 +19,7 @@ use tetra_entities::net_brew::new_websocket_transport;
 use tetra_entities::net_dapnet::spawn_dapnet_worker;
 use tetra_entities::net_dashboard::DashboardServer;
 use tetra_entities::net_geoalarm::{GeoAlarmSink, spawn_geoalarm_worker};
+use tetra_entities::net_meshcom::spawn_meshcom_worker;
 use tetra_entities::net_snom::{snom_notify_channel, spawn_snom_notify_worker};
 use tetra_entities::net_telegram::{TelegramAlertSink, TelegramAlerter, telegram_alert_channel};
 use tetra_entities::net_telemetry::worker::TelemetryWorker;
@@ -590,6 +591,12 @@ fn main() {
     };
 
     // DAPNET worker — off-path; idles when disabled and reads settings live.
+    spawn_meshcom_worker(
+        cfg.clone(),
+        dapnet_cmd_tx.clone(),
+        dapnet_telegram_sink.clone(),
+        snom_notify_sink.clone(),
+    );
     spawn_dapnet_worker(cfg.clone(), dapnet_cmd_tx, dapnet_telegram_sink, dapnet_telemetry_sink);
 
     // Set up Ctrl+C handler for graceful shutdown.

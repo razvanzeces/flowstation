@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -1915,6 +1915,16 @@ fn handle_connection(
     } else if req_line.contains("POST /api/geoalarm") {
         let (inner, body_str) = read_post_body(stream);
         serve_geoalarm_post(inner, &shared_config, &config_path, &body_str);
+    } else if req_line.contains("POST /api/meshcom/send") {
+        let (inner, body_str) = read_post_body(stream);
+        serve_meshcom_send(inner, &shared_config, &body_str);
+    } else if req_line.contains("GET /api/meshcom") {
+        let mut s = stream;
+        drain_http_headers(&mut s);
+        serve_meshcom_get(s, &shared_config);
+    } else if req_line.contains("POST /api/meshcom") {
+        let (inner, body_str) = read_post_body(stream);
+        serve_meshcom_post(inner, &shared_config, &config_path, &body_str);
     } else if req_line.contains("GET /api/config") {
         let mut buf = BufReader::new(stream);
         loop {
@@ -4397,6 +4407,368 @@ fn serve_dapnet_post(stream: TcpStream, shared_config: &Option<tetra_config::blu
         ov.forward_telegram
     );
     http_response(stream, 200, "OK");
+}
+
+/// GET /api/meshcom — return effective MeshCom settings and runtime status as JSON.
+fn serve_meshcom_get(
+    stream: TcpStream,
+    shared_config: &Option<tetra_config::bluestation::SharedConfig>,
+) {
+    let (meshcom, runtime) = match shared_config {
+        Some(cfg) => (cfg.effective_meshcom(), cfg.state_read().meshcom_status.clone()),
+        None => (
+            tetra_config::bluestation::CfgMeshcom::default(),
+            tetra_config::bluestation::MeshcomRuntimeStatus::default(),
+        ),
+    };
+    let nodes = runtime
+        .nodes
+        .iter()
+        .map(|node| {
+            serde_json::json!({
+                "src": node.src.clone(),
+                "last_seen": node.last_seen.clone(),
+                "last_type": node.last_type.clone(),
+                "lat": node.lat,
+                "lon": node.lon,
+                "alt": node.alt,
+                "batt": node.batt,
+                "rssi": node.rssi,
+                "snr": node.snr,
+                "firmware": node.firmware.clone(),
+                "fw_sub": node.fw_sub.clone(),
+                "hw_id": node.hw_id.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let messages = runtime
+        .messages
+        .iter()
+        .map(|msg| {
+            serde_json::json!({
+                "ts": msg.ts.clone(),
+                "direction": msg.direction.clone(),
+                "msg_type": msg.msg_type.clone(),
+                "src_type": msg.src_type.clone(),
+                "src": msg.src.clone(),
+                "dst": msg.dst.clone(),
+                "msg": msg.msg.clone(),
+                "msg_id": msg.msg_id.clone(),
+                "paths": msg.paths.clone(),
+                "lat": msg.lat,
+                "lon": msg.lon,
+                "alt": msg.alt,
+                "batt": msg.batt,
+                "rssi": msg.rssi,
+                "snr": msg.snr,
+            })
+        })
+        .collect::<Vec<_>>();
+    let runtime_body = serde_json::json!({
+        "configured": runtime.configured,
+        "enabled": runtime.enabled,
+        "bind": runtime.bind,
+        "tx": runtime.tx,
+        "rx_packets": runtime.rx_packets,
+        "tx_packets": runtime.tx_packets,
+        "last_rx": runtime.last_rx,
+        "last_tx": runtime.last_tx,
+        "last_error": runtime.last_error,
+        "forward_sds": runtime.forward_sds,
+        "forward_sip": runtime.forward_sip,
+        "forward_telegram": runtime.forward_telegram,
+        "node_count": nodes.len(),
+    });
+    let body = serde_json::json!({
+        "enabled": meshcom.enabled,
+        "bind_addr": meshcom.bind_addr.clone(),
+        "bind_port": meshcom.bind_port,
+        "tx_host": meshcom.tx_host.clone(),
+        "tx_port": meshcom.tx_port,
+        "allow_broadcast": meshcom.allow_broadcast,
+        "max_messages": meshcom.max_messages,
+        "max_nodes": meshcom.max_nodes,
+        "forward_sds": meshcom.forward_sds,
+        "forward_sip": meshcom.forward_sip,
+        "forward_telegram": meshcom.forward_telegram,
+        "sds_source_issi": meshcom.sds_source_issi,
+        "sds_dest_issi": meshcom.sds_dest_issi,
+        "sds_dest_is_group": meshcom.sds_dest_is_group,
+        "sds_allowed_sources": meshcom_source_list_as_json(&meshcom.sds_allowed_sources),
+        "sip_title_prefix": meshcom.sip_title_prefix.clone(),
+        "sip_allowed_sources": meshcom_source_list_as_json(&meshcom.sip_allowed_sources),
+        "telegram_prefix": meshcom.telegram_prefix.clone(),
+        "telegram_allowed_sources": meshcom_source_list_as_json(&meshcom.telegram_allowed_sources),
+        "runtime": runtime_body,
+        "nodes": nodes,
+        "messages": messages,
+    });
+    http_json_response(stream, 200, &body.to_string());
+}
+
+/// POST /api/meshcom — update MeshCom UDP settings. Applies immediately through StackState
+/// override and rewrites `[meshcom]` in config.toml.
+fn serve_meshcom_post(
+    stream: TcpStream,
+    shared_config: &Option<tetra_config::bluestation::SharedConfig>,
+    config_path: &str,
+    body: &str,
+) {
+    use tetra_config::bluestation::{
+        CfgMeshcomDto, MeshcomRuntimeOverride, apply_meshcom_patch,
+    };
+
+    let json: serde_json::Value = match serde_json::from_str(body.trim()) {
+        Ok(v) => v,
+        Err(e) => {
+            http_response(stream, 400, &format!("Invalid JSON: {e}"));
+            return;
+        }
+    };
+    let Some(cfg) = shared_config else {
+        http_response(stream, 503, "Config not available");
+        return;
+    };
+
+    let cur = cfg.effective_meshcom();
+    let sds_allowed_sources = match meshcom_source_list_from_json(
+        &json,
+        "sds_allowed_sources",
+        &cur.sds_allowed_sources,
+    ) {
+        Ok(v) => v,
+        Err(err) => {
+            http_response(stream, 400, &err);
+            return;
+        }
+    };
+    let sip_allowed_sources = match meshcom_source_list_from_json(
+        &json,
+        "sip_allowed_sources",
+        &cur.sip_allowed_sources,
+    ) {
+        Ok(v) => v,
+        Err(err) => {
+            http_response(stream, 400, &err);
+            return;
+        }
+    };
+    let telegram_allowed_sources = match meshcom_source_list_from_json(
+        &json,
+        "telegram_allowed_sources",
+        &cur.telegram_allowed_sources,
+    ) {
+        Ok(v) => v,
+        Err(err) => {
+            http_response(stream, 400, &err);
+            return;
+        }
+    };
+    let dto = CfgMeshcomDto {
+        enabled: dapnet_as_bool(&json, "enabled", cur.enabled),
+        bind_addr: dapnet_as_string(&json, "bind_addr", &cur.bind_addr),
+        bind_port: dapnet_as_u16(&json, "bind_port", cur.bind_port),
+        tx_host: dapnet_as_string(&json, "tx_host", &cur.tx_host),
+        tx_port: dapnet_as_u16(&json, "tx_port", cur.tx_port),
+        allow_broadcast: dapnet_as_bool(&json, "allow_broadcast", cur.allow_broadcast),
+        max_messages: dapnet_as_usize(&json, "max_messages", cur.max_messages),
+        max_nodes: dapnet_as_usize(&json, "max_nodes", cur.max_nodes),
+        forward_sds: dapnet_as_bool(&json, "forward_sds", cur.forward_sds),
+        forward_sip: dapnet_as_bool(&json, "forward_sip", cur.forward_sip),
+        forward_telegram: dapnet_as_bool(&json, "forward_telegram", cur.forward_telegram),
+        sds_source_issi: dapnet_as_u32(&json, "sds_source_issi", cur.sds_source_issi),
+        sds_dest_issi: dapnet_as_u32(&json, "sds_dest_issi", cur.sds_dest_issi),
+        sds_dest_is_group: dapnet_as_bool(&json, "sds_dest_is_group", cur.sds_dest_is_group),
+        sds_allowed_sources,
+        sip_title_prefix: dapnet_as_string(&json, "sip_title_prefix", &cur.sip_title_prefix),
+        sip_allowed_sources,
+        telegram_prefix: dapnet_as_string(&json, "telegram_prefix", &cur.telegram_prefix),
+        telegram_allowed_sources,
+        extra: HashMap::new(),
+    };
+    let normalized = match apply_meshcom_patch(dto) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            http_response(stream, 400, &err);
+            return;
+        }
+    };
+    let text_fields = [
+        normalized.bind_addr.as_str(),
+        normalized.tx_host.as_str(),
+        normalized.sip_title_prefix.as_str(),
+        normalized.telegram_prefix.as_str(),
+    ];
+    if !text_fields
+        .iter()
+        .all(|v| dapnet_text_acceptable(v))
+        || !normalized
+            .sds_allowed_sources
+            .iter()
+            .chain(normalized.sip_allowed_sources.iter())
+            .chain(normalized.telegram_allowed_sources.iter())
+            .all(|v| dapnet_text_acceptable(v))
+    {
+        http_response(stream, 400, "Invalid MeshCom setting: control characters are not allowed");
+        return;
+    }
+
+    let ov = MeshcomRuntimeOverride {
+        enabled: normalized.enabled,
+        bind_addr: normalized.bind_addr,
+        bind_port: normalized.bind_port,
+        tx_host: normalized.tx_host,
+        tx_port: normalized.tx_port,
+        allow_broadcast: normalized.allow_broadcast,
+        max_messages: normalized.max_messages,
+        max_nodes: normalized.max_nodes,
+        forward_sds: normalized.forward_sds,
+        forward_sip: normalized.forward_sip,
+        forward_telegram: normalized.forward_telegram,
+        sds_source_issi: normalized.sds_source_issi,
+        sds_dest_issi: normalized.sds_dest_issi,
+        sds_dest_is_group: normalized.sds_dest_is_group,
+        sds_allowed_sources: normalized.sds_allowed_sources,
+        sip_title_prefix: normalized.sip_title_prefix,
+        sip_allowed_sources: normalized.sip_allowed_sources,
+        telegram_prefix: normalized.telegram_prefix,
+        telegram_allowed_sources: normalized.telegram_allowed_sources,
+    };
+
+    {
+        let mut state = cfg.state_write();
+        state.meshcom_override = Some(ov.clone());
+    }
+
+    if let Err(e) = crate::net_dashboard::meshcom::write_meshcom_to_toml(config_path, &ov) {
+        tracing::warn!("Dashboard: MeshCom applied at runtime but failed to persist to TOML: {}", e);
+        http_response(stream, 200, "Applied at runtime; failed to write config file (check permissions)");
+        return;
+    }
+
+    tracing::info!(
+        "Dashboard: MeshCom updated (enabled={} bind={}:{} tx={}:{})",
+        ov.enabled,
+        ov.bind_addr,
+        ov.bind_port,
+        ov.tx_host,
+        ov.tx_port
+    );
+    http_response(stream, 200, "OK");
+}
+
+/// POST /api/meshcom/send — send one MeshCom text message through the configured UDP target.
+fn serve_meshcom_send(
+    stream: TcpStream,
+    shared_config: &Option<tetra_config::bluestation::SharedConfig>,
+    body: &str,
+) {
+    let json: serde_json::Value = match serde_json::from_str(body.trim()) {
+        Ok(v) => v,
+        Err(e) => {
+            http_json_response(
+                stream,
+                400,
+                &serde_json::json!({"ok": false, "error": format!("Invalid JSON: {e}")}).to_string(),
+            );
+            return;
+        }
+    };
+    let Some(cfg) = shared_config else {
+        http_json_response(stream, 503, &serde_json::json!({"ok": false, "error": "Config not available"}).to_string());
+        return;
+    };
+    let meshcom = cfg.effective_meshcom();
+    if !meshcom.enabled {
+        http_json_response(stream, 400, &serde_json::json!({"ok": false, "error": "MeshCom is disabled"}).to_string());
+        return;
+    }
+    let dst = json
+        .get("dst")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    let msg = json
+        .get("msg")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if dst.is_empty() || msg.is_empty() {
+        http_json_response(stream, 400, &serde_json::json!({"ok": false, "error": "dst and msg are required"}).to_string());
+        return;
+    }
+    if !dapnet_text_acceptable(dst) || !dapnet_text_acceptable(msg) {
+        http_json_response(stream, 400, &serde_json::json!({"ok": false, "error": "control characters are not allowed"}).to_string());
+        return;
+    }
+
+    let wire = serde_json::json!({
+        "type": "msg",
+        "dst": dst,
+        "msg": msg.chars().take(512).collect::<String>(),
+    })
+    .to_string();
+    let target = format!("{}:{}", meshcom.tx_host, meshcom.tx_port);
+    let result = UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| {
+            socket.set_broadcast(meshcom.allow_broadcast)?;
+            socket.send_to(wire.as_bytes(), &target)
+        });
+    match result {
+        Ok(bytes) => {
+            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            {
+                let mut state = cfg.state_write();
+                state.meshcom_status.configured = true;
+                state.meshcom_status.enabled = meshcom.enabled;
+                state.meshcom_status.bind = format!("{}:{}", meshcom.bind_addr, meshcom.bind_port);
+                state.meshcom_status.tx = target.clone();
+                state.meshcom_status.tx_packets = state.meshcom_status.tx_packets.saturating_add(1);
+                state.meshcom_status.last_tx = Some(ts.clone());
+                state.meshcom_status.last_error = None;
+                state.meshcom_status.forward_sds = meshcom.forward_sds;
+                state.meshcom_status.forward_sip = meshcom.forward_sip;
+                state.meshcom_status.forward_telegram = meshcom.forward_telegram;
+                state.meshcom_status.messages.insert(
+                    0,
+                    tetra_config::bluestation::MeshcomMessageStatus {
+                        ts,
+                        direction: "tx".to_string(),
+                        msg_type: "msg".to_string(),
+                        src_type: Some("flowstation".to_string()),
+                        src: Some("FlowStation".to_string()),
+                        dst: Some(dst.to_string()),
+                        msg: Some(msg.chars().take(512).collect::<String>()),
+                        msg_id: None,
+                        paths: vec!["udp".to_string()],
+                        lat: None,
+                        lon: None,
+                        alt: None,
+                        batt: None,
+                        rssi: None,
+                        snr: None,
+                    },
+                );
+                while state.meshcom_status.messages.len() > meshcom.max_messages {
+                    state.meshcom_status.messages.pop();
+                }
+            }
+            tracing::info!("MeshCom: sent {} bytes to {} dst={}", bytes, target, dst);
+            http_json_response(stream, 200, &serde_json::json!({"ok": true, "bytes": bytes}).to_string());
+        }
+        Err(err) => {
+            {
+                let mut state = cfg.state_write();
+                state.meshcom_status.last_error = Some(format!("UDP send failed: {err}"));
+            }
+            tracing::warn!("MeshCom: UDP send to {} failed: {}", target, err);
+            http_json_response(
+                stream,
+                500,
+                &serde_json::json!({"ok": false, "error": format!("UDP send failed: {err}")}).to_string(),
+            );
+        }
+    }
 }
 
 /// GET /api/geoalarm — return effective GeoAlarm settings and runtime status as JSON.
