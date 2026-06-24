@@ -202,6 +202,7 @@ struct PendingSds {
 /// Runs in a separate thread. Communicates with [`super::entity::BrewEntity`] via
 /// crossbeam channels ([`BrewEvent`] and [`BrewCommand`]).
 pub struct BrewWorker<T: NetworkTransport> {
+    log_label: String,
     config: SharedConfig,
     brew_config: CfgBrew,
     /// Network transport (WebSocket, QUIC, TCP, …)
@@ -218,6 +219,7 @@ pub struct BrewWorker<T: NetworkTransport> {
 
 impl<T: NetworkTransport> BrewWorker<T> {
     pub fn new(
+        log_label: String,
         config: SharedConfig,
         brew_config: CfgBrew,
         event_sender: Sender<BrewEvent>,
@@ -225,6 +227,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
         transport: T,
     ) -> Self {
         Self {
+            log_label,
             config,
             brew_config,
             transport,
@@ -235,22 +238,27 @@ impl<T: NetworkTransport> BrewWorker<T> {
         }
     }
 
+    fn log_label(&self) -> &str {
+        &self.log_label
+    }
+
     /// Main worker entry point — runs until disconnect or fatal error
     pub fn run(&mut self) {
-        tracing::info!("BrewWorker: starting");
+        tracing::info!("[{}] BrewWorker: starting", self.log_label());
 
         loop {
             // Attempt connection via transport
             match self.transport.connect() {
                 Ok(()) => {
-                    tracing::info!("BrewWorker: transport connected");
+                    tracing::info!("[{}] BrewWorker: transport connected", self.log_label());
                     let _ = self.event_sender.send(BrewEvent::Connected {
                         server_version: self.transport.server_brew_version(),
                     });
                 }
                 Err(e) => {
                     tracing::error!(
-                        "BrewWorker: connection error: {}, reconnecting in {:?}",
+                        "[{}] BrewWorker: connection error: {}, reconnecting in {:?}",
+                        self.log_label(),
                         e,
                         self.brew_config.reconnect_delay
                     );
@@ -263,12 +271,13 @@ impl<T: NetworkTransport> BrewWorker<T> {
             // Run the message loop until error or clean shutdown
             match self.message_loop() {
                 Ok(()) => {
-                    tracing::info!("BrewWorker: connection closed normally");
+                    tracing::info!("[{}] BrewWorker: connection closed normally", self.log_label());
                     break;
                 }
                 Err(e) => {
                     tracing::error!(
-                        "BrewWorker: connection error: {}, reconnecting in {:?}",
+                        "[{}] BrewWorker: connection error: {}, reconnecting in {:?}",
+                        self.log_label(),
                         e,
                         self.brew_config.reconnect_delay
                     );
@@ -287,17 +296,22 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 group_list.sort_unstable();
                 let deaff_msg = build_subscriber_deaffiliate(*issi, &group_list);
                 if let Err(e) = self.transport.send_reliable(&deaff_msg) {
-                    tracing::error!("BrewWorker: failed to send deaffiliation: {}", e);
+                    tracing::error!("[{}] BrewWorker: failed to send deaffiliation: {}", self.log_label(), e);
                 } else {
-                    tracing::info!("BrewWorker: deaffiliated issi={} groups={:?}", issi, group_list);
+                    tracing::info!(
+                        "[{}] BrewWorker: deaffiliated issi={} groups={:?}",
+                        self.log_label(),
+                        issi,
+                        group_list
+                    );
                 }
             }
 
             let dereg_msg = build_subscriber_deregister(*issi);
             if let Err(e) = self.transport.send_reliable(&dereg_msg) {
-                tracing::error!("BrewWorker: failed to send deregistration: {}", e);
+                tracing::error!("[{}] BrewWorker: failed to send deregistration: {}", self.log_label(), e);
             } else {
-                tracing::info!("BrewWorker: deregistered ISSI {}", issi);
+                tracing::info!("[{}] BrewWorker: deregistered ISSI {}", self.log_label(), issi);
             }
         }
         self.transport.disconnect();
@@ -312,7 +326,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
             self.pending_sds.retain(|uuid, pending| {
                 let age = now.duration_since(pending.received_at);
                 if age > Duration::from_secs(30) {
-                    tracing::warn!("BrewWorker: expiring stale pending SDS uuid={}", uuid);
+                    tracing::warn!("[{}] BrewWorker: expiring stale pending SDS uuid={}", self.log_label(), uuid);
                     false
                 } else {
                     true
@@ -337,7 +351,10 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     Err(crossbeam_channel::TryRecvError::Empty) => break,
                     Err(crossbeam_channel::TryRecvError::Disconnected) => {
                         // Entity was dropped — do graceful teardown
-                        tracing::info!("BrewWorker: command channel closed, performing graceful teardown");
+                        tracing::info!(
+                            "[{}] BrewWorker: command channel closed, performing graceful teardown",
+                            self.log_label()
+                        );
                         self.graceful_teardown();
                         return Ok(());
                     }
@@ -352,10 +369,11 @@ impl<T: NetworkTransport> BrewWorker<T> {
                             build_subscriber_register(issi, &[])
                         };
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send registration: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send registration: {}", self.log_label(), e);
                         } else {
                             tracing::debug!(
-                                "BrewWorker: sent {} issi={}",
+                                "[{}] BrewWorker: sent {} issi={}",
+                                self.log_label(),
                                 if already_registered { "REREGISTER" } else { "REGISTER" },
                                 issi
                             );
@@ -365,9 +383,9 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         self.subscriber_groups.remove(&issi);
                         let msg = build_subscriber_deregister(issi);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send deregistration: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send deregistration: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("BrewWorker: sent DEREGISTER issi={}", issi);
+                            tracing::debug!("[{}] BrewWorker: sent DEREGISTER issi={}", self.log_label(), issi);
                         }
                     }
                     BrewCommand::AffiliateGroups { issi, groups } => {
@@ -377,9 +395,14 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         }
                         let msg = build_subscriber_affiliate(issi, &groups);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send affiliation: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send affiliation: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("BrewWorker: sent AFFILIATE issi={} groups={:?}", issi, groups);
+                            tracing::debug!(
+                                "[{}] BrewWorker: sent AFFILIATE issi={} groups={:?}",
+                                self.log_label(),
+                                issi,
+                                groups
+                            );
                         }
                     }
                     BrewCommand::DeaffiliateGroups { issi, groups } => {
@@ -390,9 +413,14 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         }
                         let msg = build_subscriber_deaffiliate(issi, &groups);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send deaffiliation: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send deaffiliation: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("BrewWorker: sent DEAFFILIATE issi={} groups={:?}", issi, groups);
+                            tracing::debug!(
+                                "[{}] BrewWorker: sent DEAFFILIATE issi={} groups={:?}",
+                                self.log_label(),
+                                issi,
+                                groups
+                            );
                         }
                     }
                     BrewCommand::SendGroupTx {
@@ -404,23 +432,29 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     } => {
                         let msg = build_group_tx(&uuid, source_issi, dest_gssi, priority, service, None);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send GROUP_TX: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send GROUP_TX: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("BrewWorker: sent GROUP_TX uuid={} src={} dst={}", uuid, source_issi, dest_gssi);
+                            tracing::debug!(
+                                "[{}] BrewWorker: sent GROUP_TX uuid={} src={} dst={}",
+                                self.log_label(),
+                                uuid,
+                                source_issi,
+                                dest_gssi
+                            );
                         }
                     }
                     BrewCommand::SendVoiceFrame { uuid, length_bits, data } => {
                         let msg = build_voice_frame(&uuid, length_bits, &data);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send voice frame: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send voice frame: {}", self.log_label(), e);
                         }
                     }
                     BrewCommand::SendGroupIdle { uuid, cause } => {
                         let msg = build_group_idle(&uuid, cause);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send GROUP_IDLE: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send GROUP_IDLE: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("BrewWorker: sent GROUP_IDLE uuid={} cause={}", uuid, cause);
+                            tracing::debug!("[{}] BrewWorker: sent GROUP_IDLE uuid={} cause={}", self.log_label(), uuid, cause);
                         }
                     }
                     BrewCommand::SendSds {
@@ -431,124 +465,169 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         length_bits,
                     } => {
                         if !self.brew_config.feature_sds_enabled {
-                            tracing::warn!("BrewWorker: ignoring SendSds command because SDS over Brew is disabled in config");
+                            tracing::warn!(
+                                "[{}] BrewWorker: ignoring SendSds command because SDS over Brew is disabled in config",
+                                self.log_label()
+                            );
                             continue;
                         }
 
                         // Send SHORT_TRANSFER first (header with source/dest)
                         let short_msg = build_short_transfer(&uuid, source, destination);
                         if let Err(e) = self.transport.send_reliable(&short_msg) {
-                            tracing::error!("BrewWorker: failed to send SHORT_TRANSFER: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send SHORT_TRANSFER: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("BrewWorker: sent SHORT_TRANSFER uuid={} src={} dst={}", uuid, source, destination);
+                            tracing::debug!(
+                                "[{}] BrewWorker: sent SHORT_TRANSFER uuid={} src={} dst={}",
+                                self.log_label(),
+                                uuid,
+                                source,
+                                destination
+                            );
                             // Then send SDS_TRANSFER with the payload
                             let sds_msg = build_sds_frame(&uuid, length_bits, &data);
                             if let Err(e) = self.transport.send_reliable(&sds_msg) {
-                                tracing::error!("BrewWorker: failed to send SDS_TRANSFER: {}", e);
+                                tracing::error!("[{}] BrewWorker: failed to send SDS_TRANSFER: {}", self.log_label(), e);
                             } else {
-                                tracing::debug!("BrewWorker: sent SDS_TRANSFER uuid={} {} bytes", uuid, data.len());
+                                tracing::debug!(
+                                    "[{}] BrewWorker: sent SDS_TRANSFER uuid={} {} bytes",
+                                    self.log_label(),
+                                    uuid,
+                                    data.len()
+                                );
                             }
                         }
                     }
                     BrewCommand::SendSdsReport { uuid, status } => {
                         if !self.brew_config.feature_sds_enabled {
-                            tracing::warn!("BrewWorker: ignoring SendSdsReport command because SDS over Brew is disabled in config");
+                            tracing::warn!(
+                                "[{}] BrewWorker: ignoring SendSdsReport command because SDS over Brew is disabled in config",
+                                self.log_label()
+                            );
                             continue;
                         }
 
                         let msg = build_sds_report(&uuid, status);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::warn!("BrewWorker: failed to send SDS_REPORT: {}", e);
+                            tracing::warn!("[{}] BrewWorker: failed to send SDS_REPORT: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("BrewWorker: sent SDS_REPORT uuid={} status={}", uuid, status);
+                            tracing::debug!("[{}] BrewWorker: sent SDS_REPORT uuid={} status={}", self.log_label(), uuid, status);
                         }
                     }
                     BrewCommand::SendSetupRequest { uuid, call } => {
                         let data = build_setup_request(&uuid, &call);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send SETUP_REQUEST: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send SETUP_REQUEST: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent SETUP_REQUEST uuid={}", uuid);
+                            tracing::debug!("[{}] BrewWorker: sent SETUP_REQUEST uuid={}", self.log_label(), uuid);
                         }
                     }
                     BrewCommand::SendSetupAccept { uuid } => {
                         let data = build_setup_accept(&uuid);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send SETUP_ACCEPT: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send SETUP_ACCEPT: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent SETUP_ACCEPT uuid={}", uuid);
+                            tracing::debug!("[{}] BrewWorker: sent SETUP_ACCEPT uuid={}", self.log_label(), uuid);
                         }
                     }
                     BrewCommand::SendSetupReject { uuid, cause } => {
                         let data = build_setup_reject(&uuid, cause);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send SETUP_REJECT: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send SETUP_REJECT: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent SETUP_REJECT uuid={} cause={}", uuid, cause);
+                            tracing::debug!("[{}] BrewWorker: sent SETUP_REJECT uuid={} cause={}", self.log_label(), uuid, cause);
                         }
                     }
                     BrewCommand::SendCallAlert { uuid } => {
                         let data = build_call_alert(&uuid);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send CALL_ALERT: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send CALL_ALERT: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent CALL_ALERT uuid={}", uuid);
+                            tracing::debug!("[{}] BrewWorker: sent CALL_ALERT uuid={}", self.log_label(), uuid);
                         }
                     }
                     BrewCommand::SendConnectRequest { uuid, call } => {
                         let data = build_connect_request(&uuid, &call);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send CONNECT_REQUEST: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send CONNECT_REQUEST: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent CONNECT_REQUEST uuid={}", uuid);
+                            tracing::debug!("[{}] BrewWorker: sent CONNECT_REQUEST uuid={}", self.log_label(), uuid);
                         }
                     }
                     BrewCommand::SendConnectConfirm { uuid, grant, permission } => {
                         let data = build_connect_confirm(&uuid, grant, permission);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send CONNECT_CONFIRM: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send CONNECT_CONFIRM: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent CONNECT_CONFIRM uuid={} grant={} perm={}", uuid, grant, permission);
+                            tracing::debug!(
+                                "[{}] BrewWorker: sent CONNECT_CONFIRM uuid={} grant={} perm={}",
+                                self.log_label(),
+                                uuid,
+                                grant,
+                                permission
+                            );
                         }
                     }
                     BrewCommand::SendSimplexGranted { uuid, grant, permission } => {
                         let data = build_simplex_granted(&uuid, grant, permission);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send SIMPLEX_GRANTED: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send SIMPLEX_GRANTED: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent SIMPLEX_GRANTED uuid={} grant={} perm={}", uuid, grant, permission);
+                            tracing::debug!(
+                                "[{}] BrewWorker: sent SIMPLEX_GRANTED uuid={} grant={} perm={}",
+                                self.log_label(),
+                                uuid,
+                                grant,
+                                permission
+                            );
                         }
                     }
                     BrewCommand::SendSimplexIdle { uuid, grant, permission } => {
                         let data = build_simplex_idle(&uuid, grant, permission);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send SIMPLEX_IDLE: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send SIMPLEX_IDLE: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent SIMPLEX_IDLE uuid={} grant={} perm={}", uuid, grant, permission);
+                            tracing::debug!(
+                                "[{}] BrewWorker: sent SIMPLEX_IDLE uuid={} grant={} perm={}",
+                                self.log_label(),
+                                uuid,
+                                grant,
+                                permission
+                            );
                         }
                     }
                     BrewCommand::SendCallRelease { uuid, cause } => {
                         let data = build_call_release(&uuid, cause);
                         if let Err(e) = self.transport.send_reliable(&data) {
-                            tracing::error!("BrewWorker: failed to send CALL_RELEASE: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send CALL_RELEASE: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent CALL_RELEASE uuid={} cause={}", uuid, cause);
+                            tracing::debug!("[{}] BrewWorker: sent CALL_RELEASE uuid={} cause={}", self.log_label(), uuid, cause);
                         }
                     }
                     BrewCommand::SendDtmf { uuid, length_bits, data } => {
                         let msg = build_dtmf_frame(&uuid, length_bits, &data);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send DTMF: {}", e);
+                            tracing::error!("[{}] BrewWorker: failed to send DTMF: {}", self.log_label(), e);
                         } else {
-                            tracing::debug!("Brew: sent DTMF uuid={} bits={}", uuid, length_bits);
+                            tracing::debug!("[{}] BrewWorker: sent DTMF uuid={} bits={}", self.log_label(), uuid, length_bits);
                         }
                     }
                     BrewCommand::SendRssiUpdate { issi, rssi_dbfs } => {
                         let msg = build_service_rssi(issi, rssi_dbfs);
                         if let Err(e) = self.transport.send_reliable(&msg) {
-                            tracing::error!("BrewWorker: failed to send RSSI update for ISSI {}: {}", issi, e);
+                            tracing::error!(
+                                "[{}] BrewWorker: failed to send RSSI update for ISSI {}: {}",
+                                self.log_label(),
+                                issi,
+                                e
+                            );
                         } else {
-                            tracing::debug!("BrewWorker: sent RSSI issi={} rssi={:.1}dBFS", issi, rssi_dbfs);
+                            tracing::debug!(
+                                "[{}] BrewWorker: sent RSSI issi={} rssi={:.1}dBFS",
+                                self.log_label(),
+                                issi,
+                                rssi_dbfs
+                            );
                         }
                     }
                     BrewCommand::Disconnect => {
@@ -567,7 +646,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 BrewMessage::CallControl(cc) => self.handle_call_control(cc),
                 BrewMessage::Frame(frame) => self.handle_frame(frame),
                 BrewMessage::Subscriber(sub) => {
-                    tracing::debug!("BrewWorker: subscriber event type={}", sub.msg_type);
+                    tracing::debug!("[{}] BrewWorker: subscriber event type={}", self.log_label(), sub.msg_type);
                     // TODO FIXME we could check whether this call is indeed a brew ssi here
                     let _ = self.event_sender.send(BrewEvent::SubscriberEvent {
                         msg_type: sub.msg_type,
@@ -576,7 +655,12 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     });
                 }
                 BrewMessage::Error(err) => {
-                    tracing::warn!("BrewWorker: server error type={}: {} bytes", err.error_type, err.data.len());
+                    tracing::warn!(
+                        "[{}] BrewWorker: server error type={}: {} bytes",
+                        self.log_label(),
+                        err.error_type,
+                        err.data.len()
+                    );
                     // TODO FIXME we could check whether this call is indeed a brew ssi here
                     let _ = self.event_sender.send(BrewEvent::ServerError {
                         error_type: err.error_type,
@@ -584,11 +668,21 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     });
                 }
                 BrewMessage::Service(svc) => {
-                    tracing::debug!("BrewWorker: service type={}: {}", svc.service_type, svc.json_data);
+                    tracing::debug!(
+                        "[{}] BrewWorker: service type={}: {}",
+                        self.log_label(),
+                        svc.service_type,
+                        svc.json_data
+                    );
                 }
             },
             Err(e) => {
-                tracing::warn!("BrewWorker: failed to parse message ({} bytes): {}", data.len(), e);
+                tracing::warn!(
+                    "[{}] BrewWorker: failed to parse message ({} bytes): {}",
+                    self.log_label(),
+                    data.len(),
+                    e
+                );
             }
         }
     }
@@ -599,7 +693,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
             CALL_STATE_GROUP_TX => {
                 if let BrewCallPayload::GroupTransmission(gt) = cc.payload {
                     tracing::info!(
-                        "BrewWorker: GROUP_TX uuid={} src={} dst={} prio={} service={} mnemonic={}",
+                        "[{}] BrewWorker: GROUP_TX uuid={} src={} dst={} prio={} service={} mnemonic={}",
+                        self.log_label(),
                         cc.identifier,
                         gt.source,
                         gt.destination,
@@ -614,7 +709,11 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     // Inbound admission (FH-FEAT-032 R3): a Brew-originated group call must NOT be
                     // gated by the outbound-only `whitelisted_ssis`; only `local_ssi_ranges` reject it.
                     if !net_brew::is_brew_inbound_allowed(&self.config, gt.destination) {
-                        tracing::warn!("BrewWorker: dropping GROUP_TX to inactive/local-only GSSI {}", gt.destination);
+                        tracing::warn!(
+                            "[{}] BrewWorker: dropping GROUP_TX to inactive/local-only GSSI {}",
+                            self.log_label(),
+                            gt.destination
+                        );
                         return;
                     };
                     let _ = self.event_sender.send(BrewEvent::GroupCallStart {
@@ -628,7 +727,12 @@ impl<T: NetworkTransport> BrewWorker<T> {
             }
             CALL_STATE_GROUP_IDLE => {
                 let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
-                tracing::info!("BrewWorker: GROUP_IDLE uuid={} cause={}", cc.identifier, cause);
+                tracing::info!(
+                    "[{}] BrewWorker: GROUP_IDLE uuid={} cause={}",
+                    self.log_label(),
+                    cc.identifier,
+                    cause
+                );
                 // TODO FIXME we could check whether this call is indeed a brew call here
                 let _ = self.event_sender.send(BrewEvent::GroupCallEnd {
                     uuid: cc.identifier,
@@ -639,7 +743,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
             CALL_STATE_SETUP_REQUEST => {
                 if let BrewCallPayload::CircularCall(call) = cc.payload {
                     tracing::info!(
-                        "BrewWorker: SETUP_REQUEST uuid={} src={} dst={} number='{}' duplex={}",
+                        "[{}] BrewWorker: SETUP_REQUEST uuid={} src={} dst={} number='{}' duplex={}",
+                        self.log_label(),
                         cc.identifier,
                         call.source,
                         call.destination,
@@ -650,25 +755,31 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 }
             }
             CALL_STATE_SETUP_ACCEPT => {
-                tracing::info!("BrewWorker: SETUP_ACCEPT uuid={}", cc.identifier);
+                tracing::info!("[{}] BrewWorker: SETUP_ACCEPT uuid={}", self.log_label(), cc.identifier);
                 let _ = self.event_sender.send(BrewEvent::CircuitSetupAccept { uuid: cc.identifier });
             }
             CALL_STATE_SETUP_REJECT => {
                 let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
-                tracing::info!("BrewWorker: SETUP_REJECT uuid={} cause={}", cc.identifier, cause);
+                tracing::info!(
+                    "[{}] BrewWorker: SETUP_REJECT uuid={} cause={}",
+                    self.log_label(),
+                    cc.identifier,
+                    cause
+                );
                 let _ = self.event_sender.send(BrewEvent::CircuitSetupReject {
                     uuid: cc.identifier,
                     cause,
                 });
             }
             CALL_STATE_CALL_ALERT => {
-                tracing::info!("BrewWorker: CALL_ALERT uuid={}", cc.identifier);
+                tracing::info!("[{}] BrewWorker: CALL_ALERT uuid={}", self.log_label(), cc.identifier);
                 let _ = self.event_sender.send(BrewEvent::CircuitCallAlert { uuid: cc.identifier });
             }
             CALL_STATE_CONNECT_REQUEST => {
                 if let BrewCallPayload::CircularCall(call) = cc.payload {
                     tracing::info!(
-                        "BrewWorker: CONNECT_REQUEST uuid={} src={} dst={} duplex={}",
+                        "[{}] BrewWorker: CONNECT_REQUEST uuid={} src={} dst={} duplex={}",
+                        self.log_label(),
                         cc.identifier,
                         call.source,
                         call.destination,
@@ -686,7 +797,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     (0, 0)
                 };
                 tracing::info!(
-                    "BrewWorker: CONNECT_CONFIRM uuid={} grant={} perm={}",
+                    "[{}] BrewWorker: CONNECT_CONFIRM uuid={} grant={} perm={}",
+                    self.log_label(),
                     cc.identifier,
                     grant,
                     permission
@@ -704,7 +816,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     (0, 0)
                 };
                 tracing::info!(
-                    "BrewWorker: SIMPLEX_GRANTED uuid={} grant={} perm={}",
+                    "[{}] BrewWorker: SIMPLEX_GRANTED uuid={} grant={} perm={}",
+                    self.log_label(),
                     cc.identifier,
                     grant,
                     permission
@@ -722,7 +835,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     (0, 0)
                 };
                 tracing::info!(
-                    "BrewWorker: SIMPLEX_IDLE uuid={} grant={} perm={}",
+                    "[{}] BrewWorker: SIMPLEX_IDLE uuid={} grant={} perm={}",
+                    self.log_label(),
                     cc.identifier,
                     grant,
                     permission
@@ -735,7 +849,12 @@ impl<T: NetworkTransport> BrewWorker<T> {
             }
             CALL_STATE_CALL_RELEASE => {
                 let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
-                tracing::info!("BrewWorker: CALL_RELEASE uuid={} cause={}", cc.identifier, cause);
+                tracing::info!(
+                    "[{}] BrewWorker: CALL_RELEASE uuid={} cause={}",
+                    self.log_label(),
+                    cc.identifier,
+                    cause
+                );
                 // Send both events — entity will handle whichever is relevant
                 let _ = self.event_sender.send(BrewEvent::GroupCallEnd {
                     uuid: cc.identifier,
@@ -749,7 +868,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
             CALL_STATE_SHORT_TRANSFER => {
                 if let BrewCallPayload::ShortTransfer { source, destination } = cc.payload {
                     tracing::info!(
-                        "BrewWorker: SHORT_TRANSFER uuid={} src={} dst={}",
+                        "[{}] BrewWorker: SHORT_TRANSFER uuid={} src={} dst={}",
+                        self.log_label(),
                         cc.identifier,
                         source,
                         destination
@@ -766,7 +886,12 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 }
             }
             state => {
-                tracing::debug!("BrewWorker: unhandled call state {} uuid={}", state, cc.identifier);
+                tracing::debug!(
+                    "[{}] BrewWorker: unhandled call state {} uuid={}",
+                    self.log_label(),
+                    state,
+                    cc.identifier
+                );
             }
         }
     }
@@ -785,14 +910,18 @@ impl<T: NetworkTransport> BrewWorker<T> {
             }
             FRAME_TYPE_SDS_TRANSFER => {
                 if !self.brew_config.feature_sds_enabled {
-                    tracing::warn!("BrewWorker: ignoring incoming SDS_TRANSFER because SDS over Brew is disabled in config");
+                    tracing::warn!(
+                        "[{}] BrewWorker: ignoring incoming SDS_TRANSFER because SDS over Brew is disabled in config",
+                        self.log_label()
+                    );
                     return;
                 }
 
                 if frame.length_bits > 2047 {
                     // TODO FIXME we could split into multiple SDS messages here
                     tracing::warn!(
-                        "BrewWorker: ignoring SDS_TRANSFER with excessive length_bits={} ({} bytes)",
+                        "[{}] BrewWorker: ignoring SDS_TRANSFER with excessive length_bits={} ({} bytes)",
+                        self.log_label(),
                         frame.length_bits,
                         frame.data.len()
                     );
@@ -805,7 +934,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 // over-claimed length would otherwise panic the base station (OOB).
                 if (frame.length_bits as usize).div_ceil(8) > frame.data.len() {
                     tracing::warn!(
-                        "BrewWorker: ignoring SDS_TRANSFER with length_bits={} exceeding payload of {} bytes",
+                        "[{}] BrewWorker: ignoring SDS_TRANSFER with length_bits={} exceeding payload of {} bytes",
+                        self.log_label(),
                         frame.length_bits,
                         frame.data.len()
                     );
@@ -815,7 +945,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 // Match with pending SHORT_TRANSFER by UUID
                 if let Some(pending) = self.pending_sds.remove(&frame.identifier) {
                     tracing::info!(
-                        "BrewWorker: SDS_TRANSFER uuid={} src={} dst={} {} bytes",
+                        "[{}] BrewWorker: SDS_TRANSFER uuid={} src={} dst={} {} bytes",
+                        self.log_label(),
                         frame.identifier,
                         pending.source,
                         pending.destination,
@@ -830,7 +961,8 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     });
                 } else {
                     tracing::warn!(
-                        "BrewWorker: SDS_TRANSFER uuid={} without matching SHORT_TRANSFER, {} bytes",
+                        "[{}] BrewWorker: SDS_TRANSFER uuid={} without matching SHORT_TRANSFER, {} bytes",
+                        self.log_label(),
                         frame.identifier,
                         frame.data.len()
                     );
@@ -838,14 +970,24 @@ impl<T: NetworkTransport> BrewWorker<T> {
             }
             FRAME_TYPE_SDS_REPORT => {
                 let status = if frame.data.is_empty() { 0 } else { frame.data[0] };
-                tracing::debug!("BrewWorker: SDS_REPORT uuid={} status={}", frame.identifier, status);
+                tracing::debug!(
+                    "[{}] BrewWorker: SDS_REPORT uuid={} status={}",
+                    self.log_label(),
+                    frame.identifier,
+                    status
+                );
                 let _ = self.event_sender.send(BrewEvent::SdsReport {
                     uuid: frame.identifier,
                     status,
                 });
             }
             ft => {
-                tracing::debug!("BrewWorker: unhandled frame type {} uuid={}", ft, frame.identifier);
+                tracing::debug!(
+                    "[{}] BrewWorker: unhandled frame type {} uuid={}",
+                    self.log_label(),
+                    ft,
+                    frame.identifier
+                );
             }
         }
     }
