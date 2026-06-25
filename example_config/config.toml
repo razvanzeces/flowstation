@@ -428,7 +428,9 @@ voice_service = true
 # core_stall_secs = 10              # core is Critical after no TDMA tick for this long (2..=600)
 # restart_after_critical_secs = 30  # how long stalled before a restart is requested (1..=3600)
 # restart_cooldown_secs = 600       # minimum spacing between restart requests (10..=86400)
-# radios_silent_secs = 900          # Radios Degraded if attached but silent this long; 0 = off
+# radios_silent_secs = 900          # FLOOR for the "radios silent" Degraded signal; 0 = off.
+                                    # Effective window = max(this, 1.5 x periodic_registration_secs/T351),
+                                    # so radios are never flagged inside their T351 re-registration window.
 # dl_queue_degraded = 64            # downlink backlog → Congestion Degraded
 # dl_queue_critical = 192           # downlink backlog → Congestion Critical
 # sds_queue_degraded = 32           # deferred-SDS backlog → Congestion Degraded

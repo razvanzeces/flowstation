@@ -123,14 +123,18 @@ impl DSdsData {
             SdsUserData::Type2(value) => buffer.write_bits(*value as u64, 32),
             SdsUserData::Type3(value) => buffer.write_bits(*value, 64),
             SdsUserData::Type4(len_bits, data) => {
+                // Defensive: never index past the payload, even if len_bits over-claims
+                // the length. The Brew ingress path (worker.rs) already rejects such
+                // frames; this guards any other caller from an out-of-bounds panic.
+                let used_bits = (*len_bits as usize).min(data.len() * 8);
                 buffer.write_bits(*len_bits as u64, 11);
-                let full_bytes = (*len_bits as usize) / 8;
-                let remaining_bits = len_bits % 8;
+                let full_bytes = used_bits / 8;
+                let remaining_bits = used_bits % 8;
                 for i in 0..full_bytes {
                     buffer.write_bits(data[i] as u64, 8);
                 }
                 if remaining_bits > 0 {
-                    buffer.write_bits((data[full_bytes] >> (8 - remaining_bits)) as u64, remaining_bits as usize);
+                    buffer.write_bits((data[full_bytes] >> (8 - remaining_bits)) as u64, remaining_bits);
                 }
             }
         }
@@ -179,6 +183,25 @@ mod tests {
         pdu.to_bitbuf(&mut buf).expect("serialize failed");
         buf.seek(0);
         DSdsData::from_bitbuf(&mut buf).expect("parse failed")
+    }
+
+    /// Regression: a Type4 SDS whose declared `length_bits` exceeds the actual payload
+    /// must NOT panic the serializer. The Brew ingress path can hand us a length/data
+    /// pair that disagrees; the encoder previously indexed `data[i]` out of bounds and
+    /// crashed the base station. The clamp caps reads at the available payload.
+    #[test]
+    fn type4_overclaimed_length_does_not_panic() {
+        let pdu = DSdsData {
+            calling_party_type_identifier: PartyTypeIdentifier::Ssi,
+            calling_party_address_ssi: Some(1000001),
+            calling_party_extension: None,
+            user_defined_data: SdsUserData::Type4(2047, vec![0xAB]), // claims 2047 bits, 1 byte payload
+            external_subscriber_number: None,
+            dm_ms_address: None,
+        };
+        let mut buf = BitBuffer::new_autoexpand(512);
+        // The point of this test is simply that this returns instead of panicking.
+        let _ = pdu.to_bitbuf(&mut buf);
     }
 
     #[test]

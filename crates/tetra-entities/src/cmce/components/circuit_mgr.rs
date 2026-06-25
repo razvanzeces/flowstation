@@ -151,8 +151,8 @@ impl CircuitMgr {
     pub fn get_next_call_id(&mut self) -> CallId {
         let call_id = self.next_call_identifier;
         self.next_call_identifier += 1;
-        if self.next_call_identifier > 0x3FF {
-            self.next_call_identifier = 1;
+        if self.next_call_identifier > 0x3FFF {
+            self.next_call_identifier = 1; // Wrap around (14-bit field), skip reserved zero value
         }
         call_id
     }

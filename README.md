@@ -573,6 +573,7 @@ Available at `http://<bts-ip>:8080` when `[dashboard]` is configured.
 
 - **Mihajlo YU4MSH** ([misadeks](https://github.com/misadeks)) for contributions to full-duplex (P2P) calls and the Home Mode Display feature + all the continued support.
 - **Torben DJ2TH** ([Torben-DJ2TH](https://github.com/Torben-DJ2TH)) for the external integrations: DAPNET paging, Asterisk SIP/PSTN telephony, Snom desk-phone notifications, and GeoAlarm geofencing.
+- **Joaquin EA5GVK** ([ea5gvk](https://github.com/ea5gvk)) for fixing dashboard-composed SDS routing — SDS to non-local destinations now go over the Brew link instead of being lost on RF.
 - **Harald Welte** and the **osmocom** team for foundational osmocom-tetra work
 - **Tatu Peltola** for rust-soapysdr timestamping and the native Rust Viterbi encoder/decoder used in LMAC
 - **MidnightBlueLabs** for [tetra-bluestation](https://github.com/MidnightBlueLabs/tetra-bluestation), the base this project builds on

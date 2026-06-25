@@ -209,6 +209,7 @@ fn build_bs_stack(
                     thresholds: tetra_entities::health::HealthThresholds {
                         core_stall_critical_ms: hcfg.core_stall_secs.saturating_mul(1000),
                         radios_silent_degraded_secs: hcfg.radios_silent_secs,
+                        periodic_registration_secs: cfg.config().cell.periodic_registration_secs as u64,
                         dl_queue_degraded: hcfg.dl_queue_degraded as usize,
                         dl_queue_critical: hcfg.dl_queue_critical as usize,
                         sds_queue_degraded: hcfg.sds_queue_degraded as usize,

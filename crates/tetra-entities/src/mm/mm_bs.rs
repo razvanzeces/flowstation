@@ -1073,6 +1073,23 @@ impl MmBs {
             }
         };
 
+        // Access control: apply the same [security] issi_whitelist gate as registration
+        // (rx_u_location_update_demand). Without this, an unknown ISSI can self-register
+        // via the group-attach path below, bypassing the whitelist and growing the client
+        // registry without bound.
+        let issi_allowed = {
+            let state = self.config.state_read();
+            match &state.issi_whitelist_override {
+                Some(list) => list.is_empty() || list.contains(&issi),
+                None => self.config.config().security.is_issi_allowed(issi),
+            }
+        };
+        if !issi_allowed {
+            tracing::warn!("MM: ISSI {} not in whitelist, rejecting group attach/detach", issi);
+            self.send_d_attach_detach_ack_reject(queue, issi, prim.handle);
+            return;
+        }
+
         // Check if we can satisfy this request, print unsupported stuff
         if !Self::feature_check_u_attach_detach_group_identity(&pdu) {
             // group_identity_uplink missing — terminal is sending a group report response

@@ -1593,7 +1593,7 @@ fn handle_connection(
                     .unwrap_or(0);
             }
         }
-        let mut body = vec![0u8; content_length];
+        let mut body = vec![0u8; content_length.min(512 * 1024)];
         let _ = buf.read_exact(&mut body);
         let profile = String::from_utf8_lossy(&body).trim().to_string();
         match activate_config_profile(&config_path, &profile) {
@@ -1766,7 +1766,7 @@ fn handle_connection(
                     .unwrap_or(0);
             }
         }
-        let mut body = vec![0u8; content_length];
+        let mut body = vec![0u8; content_length.min(512 * 1024)];
         let _ = buf.read_exact(&mut body);
         let body_str = String::from_utf8_lossy(&body);
         // Write backup of current config before overwriting
@@ -1829,7 +1829,7 @@ fn handle_connection(
                     .unwrap_or(0);
             }
         }
-        let mut body = vec![0u8; content_length];
+        let mut body = vec![0u8; content_length.min(512 * 1024)];
         let _ = buf.read_exact(&mut body);
         let body_str = String::from_utf8_lossy(&body);
         serve_whitelist_post(buf.into_inner(), &shared_config, &config_path, body_str.as_ref(), &cmd_tx);
@@ -1863,7 +1863,7 @@ fn handle_connection(
                     .unwrap_or(0);
             }
         }
-        let mut body = vec![0u8; content_length];
+        let mut body = vec![0u8; content_length.min(512 * 1024)];
         let _ = buf.read_exact(&mut body);
         let body_str = String::from_utf8_lossy(&body);
         serve_wx_post(buf.into_inner(), &shared_config, &config_path, body_str.as_ref());
@@ -3376,10 +3376,8 @@ fn read_http_body(stream: &mut TcpStream) -> Vec<u8> {
             break;
         }
     }
-    if content_length == 0 {
-        return Vec::new();
-    }
-    let mut body = vec![0u8; content_length];
+    if content_length == 0 { return Vec::new(); }
+    let mut body = vec![0u8; content_length.min(512 * 1024)];
     let _ = stream.read_exact(&mut body);
     body
 }

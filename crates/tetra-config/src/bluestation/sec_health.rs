@@ -27,7 +27,10 @@ pub struct CfgHealth {
     pub restart_after_critical_secs: u64,
     /// Minimum spacing between restart requests (anti-reboot-loop), seconds. Clamped 10..=86400.
     pub restart_cooldown_secs: u64,
-    /// Radios domain is Degraded if some are attached but silent this long, seconds. 0 = disabled.
+    /// Floor for the "radios attached but silent" Degraded signal, seconds. 0 = disabled.
+    /// The EFFECTIVE window is `max(this, 1.5 * periodic_registration_secs)` (the T351
+    /// re-registration interval), so a radio that is simply quiet between its periodic
+    /// registrations is never flagged — e.g. with T351 = 24 h it is not "silent" until ~36 h.
     /// Clamped 0..=86400.
     pub radios_silent_secs: u64,
     /// Downlink queue depth at/above which Congestion is Degraded / Critical.

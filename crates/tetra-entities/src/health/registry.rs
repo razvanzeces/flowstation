@@ -17,8 +17,14 @@ use super::types::{DomainHealth, HealthDomain, HealthLevel, HealthSnapshot};
 pub struct HealthThresholds {
     /// Service is Critical if no core tick for this long (Degraded at half this).
     pub core_stall_critical_ms: u64,
-    /// Radios is Degraded if some are attached but none has been heard for this long.
+    /// Floor for the "attached but silent" Degraded signal. The EFFECTIVE threshold is
+    /// `max(this, 1.5 * periodic_registration_secs)` so a quiet radio is never flagged inside
+    /// its T351 re-registration window. Set to 0 to disable the silent-radio signal entirely.
     pub radios_silent_degraded_secs: u64,
+    /// Configured periodic-registration interval (ETSI T351 equivalent), in seconds; 0 = the
+    /// terminals do no periodic registration. The radios-silent threshold is derived from this
+    /// so a long T351 (e.g. 24 h) cannot produce a false "silent" Degraded between registrations.
+    pub periodic_registration_secs: u64,
     /// Downlink queue depth at/above which Congestion is Degraded / Critical.
     pub dl_queue_degraded: usize,
     pub dl_queue_critical: usize,
@@ -31,12 +37,26 @@ impl Default for HealthThresholds {
     fn default() -> Self {
         Self {
             core_stall_critical_ms: 10_000,
-            radios_silent_degraded_secs: 900, // ~ one default T351 interval with margin
+            radios_silent_degraded_secs: 900, // floor; effective threshold respects T351 (below)
+            periodic_registration_secs: 3600, // matches cell.periodic_registration_secs default
             dl_queue_degraded: 64,
             dl_queue_critical: 192,
             sds_queue_degraded: 32,
             sds_queue_critical: 128,
         }
+    }
+}
+
+/// Effective "attached but silent" threshold in seconds. A radio re-registers every T351
+/// (`periodic_registration_secs`) and is legitimately quiet in between, so the configured floor
+/// is raised to at least 1.5 × T351 — a radio is only "overdue" once it has clearly missed its
+/// scheduled registration (with grace for a single transient miss). T351 == 0 (no periodic
+/// registration) keeps the plain floor.
+fn effective_radios_silent_secs(floor_secs: u64, periodic_registration_secs: u64) -> u64 {
+    if periodic_registration_secs > 0 {
+        floor_secs.max(periodic_registration_secs + periodic_registration_secs / 2)
+    } else {
+        floor_secs
     }
 }
 
@@ -170,14 +190,18 @@ impl HealthRegistry {
         // Radios. Informational, with a Degraded signal for "attached but silent".
         let radios = self.registered_radios.load(Ordering::Relaxed);
         let last_act = self.last_radio_activity_ms.load(Ordering::Relaxed);
-        let silent_ms = if last_act == 0 {
-            self.now_ms()
-        } else {
-            self.now_ms().saturating_sub(last_act)
-        };
-        let silent_check = t.radios_silent_degraded_secs > 0; // 0 disables the silent-radio signal
-        let (rad, rad_detail) = if radios > 0 && silent_check && silent_ms >= t.radios_silent_degraded_secs * 1000 {
-            (HealthLevel::Degraded, format!("{} attached, silent {}s", radios, silent_ms / 1000))
+        let silent_ms = if last_act == 0 { self.now_ms() } else { self.now_ms().saturating_sub(last_act) };
+        // Respect the periodic-registration window (ETSI T351): between two periodic
+        // registrations a radio is legitimately quiet, so only flag Degraded once the cell has
+        // been silent for clearly longer than that window (1.5 × T351, floored by the config).
+        let floor = t.radios_silent_degraded_secs;
+        let silent_check = floor > 0; // 0 disables the silent-radio signal
+        let effective_secs = effective_radios_silent_secs(floor, t.periodic_registration_secs);
+        let (rad, rad_detail) = if radios > 0 && silent_check && silent_ms >= effective_secs * 1000 {
+            (HealthLevel::Degraded, format!(
+                "{} attached, silent {}s (exceeds {}s T351 window)",
+                radios, silent_ms / 1000, effective_secs
+            ))
         } else {
             (HealthLevel::Ok, format!("{} attached", radios))
         };
@@ -251,6 +275,7 @@ mod tests {
         let reg = HealthRegistry::new();
         let mut t = HealthThresholds::default();
         t.radios_silent_degraded_secs = 1; // 1s window for a fast, deterministic test
+        t.periodic_registration_secs = 0; // no T351 derivation here — exercise the raw floor
         reg.note_tick();
         reg.note_radio_activity();
 
@@ -273,5 +298,19 @@ mod tests {
         t.radios_silent_degraded_secs = 0;
         std::thread::sleep(std::time::Duration::from_millis(20));
         assert_eq!(reg.snapshot(&t).domains[2].level, HealthLevel::Ok);
+    }
+
+    #[test]
+    fn radios_silent_threshold_respects_t351() {
+        // The effective threshold must never fall inside the T351 re-registration window, so a
+        // radio that is simply quiet between periodic registrations is not flagged. (This is the
+        // FH fix for false "Radios DEGRADED" when, e.g., T351 = 24 h but a radio has been quiet
+        // for only ~1700 s.)
+        assert_eq!(effective_radios_silent_secs(900, 86_400), 129_600); // 1.5 × 24 h, not 900
+        assert_eq!(effective_radios_silent_secs(900, 3_600), 5_400); // 1.5 × 1 h (> 900 floor)
+        assert_eq!(effective_radios_silent_secs(900, 0), 900); // no periodic registration → floor
+        assert_eq!(effective_radios_silent_secs(7_200, 3_600), 7_200); // explicit floor wins when larger
+        // 1700 s of silence with a 24 h T351 is far below the effective window → not overdue.
+        assert!(1_700 < effective_radios_silent_secs(900, 86_400));
     }
 }

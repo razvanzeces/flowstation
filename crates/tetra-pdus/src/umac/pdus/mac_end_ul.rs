@@ -33,8 +33,8 @@ impl MacEndUl {
         } else if length_ind_cap_req < 0b101111 {
             // Length indication
             (Some(length_ind_cap_req as u8), None)
-        } else if length_ind_cap_req < 0x110000 {
-            // reserved value, return error
+        } else if length_ind_cap_req < 0b110000 {
+            // reserved value (47), return error
             return expect_failed!(length_ind_cap_req, "length_ind_cap_req reserved value");
         } else {
             // 0x110000 or higher, cap req
@@ -87,5 +87,51 @@ impl fmt::Display for MacEndUl {
             write!(f, "  reservation_req: {}", reservation_req)?;
         }
         write!(f, "}}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip(pdu: &MacEndUl) -> MacEndUl {
+        let mut buf = BitBuffer::new_autoexpand(16);
+        pdu.to_bitbuf(&mut buf).expect("serialize failed");
+        buf.seek(0);
+        MacEndUl::from_bitbuf(&mut buf).expect("parse failed")
+    }
+
+    /// Regression: the decode ladder compared against `0x110000` (hex = 1_114_112)
+    /// instead of `0b110000` (48). Since the field is only 6 bits (max 63), every
+    /// value was `< 0x110000`, so the cap-request branch was dead code and every
+    /// reservation requirement decoded as "reserved value". Verify all 16 round-trip.
+    #[test]
+    fn reservation_req_round_trips() {
+        for raw in 0u64..16 {
+            let res_req = ReservationRequirement::try_from(raw).unwrap();
+            let pdu = MacEndUl {
+                fill_bits: false,
+                length_ind: None,
+                reservation_req: Some(res_req),
+            };
+            let parsed = round_trip(&pdu);
+            assert_eq!(parsed.reservation_req, Some(res_req), "raw={raw}");
+            assert_eq!(parsed.length_ind, None, "raw={raw}");
+        }
+    }
+
+    /// A length-indication MAC-END-UL must still decode as a length indication.
+    #[test]
+    fn length_ind_round_trips() {
+        for li in 1u8..0b101110 {
+            let pdu = MacEndUl {
+                fill_bits: true,
+                length_ind: Some(li),
+                reservation_req: None,
+            };
+            let parsed = round_trip(&pdu);
+            assert_eq!(parsed.length_ind, Some(li), "li={li}");
+            assert_eq!(parsed.reservation_req, None, "li={li}");
+        }
     }
 }

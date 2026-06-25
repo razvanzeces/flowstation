@@ -8,7 +8,11 @@ pub fn compute_fcs(bitbuf: &BitBuffer, start: usize, end: usize) -> u32 {
 
     let mut crc: u32 = 0xFFFFFFFF;
     let len = end - start;
-    if len < 32 {
+    // Guard against a 32-bit shift overflow when the protected region is empty
+    // (e.g. an FCS-flagged PDU with no payload): `crc <<= 32` panics in debug and is
+    // a silent no-op in release. Skipping the pre-shift makes such a PDU simply fail
+    // the FCS comparison and be rejected, which is the desired outcome.
+    if len > 0 && len < 32 {
         crc <<= 32 - len;
     }
 
@@ -46,6 +50,10 @@ mod tests {
     use tetra_pdus::llc::pdus::bl_data::BlData;
 
     use super::*;
+
+
+
+
 
     #[test]
     fn fcs_test() {

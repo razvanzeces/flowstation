@@ -697,7 +697,19 @@ impl CcBsSubentity {
         dest_gssi: u32,
         priority: u8,
     ) {
-        assert!(brew::is_brew_gssi_routable(&self.config, dest_gssi));
+        // Never assert on peer-supplied data. Admit inbound network calls with the
+        // inbound predicate which — unlike is_brew_gssi_routable — must NOT apply the
+        // outbound whitelist (see brew_routable::is_brew_inbound_allowed). A GSSI that
+        // is not admissible is dropped gracefully instead of crashing the base station.
+        if !brew::is_brew_inbound_allowed(&self.config, dest_gssi) {
+            tracing::info!(
+                "CMCE: ignoring network call start uuid={} gssi={} (inbound not allowed)",
+                brew_uuid,
+                dest_gssi
+            );
+            self.notify_network_call_end(queue, brew_uuid);
+            return;
+        }
 
         if !self.has_listener(dest_gssi) {
             tracing::info!(
