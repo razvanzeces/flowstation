@@ -101,9 +101,11 @@ impl ComponentTest {
                     self.register_entity(lmac);
                 }
                 TetraEntity::Umac => {
-                    let mut umac = UmacBs::new(self.config.clone(), None);
-                    // Prepare channel scheduler for next tick_start
-                    umac.channel_scheduler.set_dl_time(self.start_dl_time.add_timeslots(-1));
+                    let umac = UmacBs::new(self.config.clone(), None);
+                    // Do not hand-prime the scheduler clock: the first tick_start auto-initialises the
+                    // primary AND every secondary-carrier scheduler to the real time (umac_bs tick_start
+                    // init gate). Hand-priming only the primary left secondaries un-synced and also
+                    // bypassed that production path. Letting it run mirrors live BS startup exactly.
                     self.router.register_entity(Box::new(umac));
                 }
                 TetraEntity::Llc => {

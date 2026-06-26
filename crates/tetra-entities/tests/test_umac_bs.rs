@@ -28,10 +28,18 @@ fn block_has_mac_resource_for(block: &Option<tetra_saps::tmv::TmvUnitdataReq>, a
         return false;
     };
     let mut mac_block = block.mac_block.clone();
+    // TS1/MCCH also carries Broadcast (mac_pdu_type 2) and MAC-FRAG (1) blocks. MacResource::from_bitbuf
+    // asserts the 2-bit type is 0 (MAC-RESOURCE) and would panic on the others, so peek the type first.
+    let mut peek = mac_block.clone();
+    if peek.read_field(2, "mac_pdu_type").map(|t| t != 0).unwrap_or(true) {
+        return false;
+    }
     let Ok(pdu) = MacResource::from_bitbuf(&mut mac_block) else {
         return false;
     };
-    pdu.addr == Some(addr) && pdu.chan_alloc_element.is_some() == expect_chan_alloc
+    // The MAC-RESOURCE air format has no ISSI/USSI/GSSI subtype field -- an individual address
+    // round-trips as a bare SsiType::Ssi. Compare the SSI value only, not the ssi_type.
+    pdu.addr.map(|a| a.ssi) == Some(addr.ssi) && pdu.chan_alloc_element.is_some() == expect_chan_alloc
 }
 
 fn block_mac_resource_for(block: &Option<tetra_saps::tmv::TmvUnitdataReq>, addr: TetraAddress) -> Option<MacResource> {
@@ -39,10 +47,16 @@ fn block_mac_resource_for(block: &Option<tetra_saps::tmv::TmvUnitdataReq>, addr:
         return None;
     };
     let mut mac_block = block.mac_block.clone();
+    // Skip non-MAC-RESOURCE blocks (Broadcast/MAC-FRAG) that share TS1/MCCH; from_bitbuf would panic.
+    let mut peek = mac_block.clone();
+    if peek.read_field(2, "mac_pdu_type").map(|t| t != 0).unwrap_or(true) {
+        return None;
+    }
     let Ok(pdu) = MacResource::from_bitbuf(&mut mac_block) else {
         return None;
     };
-    (pdu.addr == Some(addr)).then_some(pdu)
+    // Match on SSI value only; the MAC-RESOURCE air format does not carry the ISSI/USSI/GSSI subtype.
+    (pdu.addr.map(|a| a.ssi) == Some(addr.ssi)).then_some(pdu)
 }
 
 fn open_shared_voice_circuit(ts: u8) -> SapMsg {
@@ -736,31 +750,38 @@ fn test_facch_stealing_does_not_set_random_access_flag_without_pending_ra() {
 
     let mut found = false;
     for msg in sink_msgs {
-        let SapMsgInner::TmvUnitdataReq(slot) = msg.msg else {
-            continue;
+        let slots = match msg.msg {
+            SapMsgInner::TmvUnitdataReq(slot) => vec![slot],
+            SapMsgInner::TmvUnitdataReqSlots(slots) => slots.slots,
+            _ => continue,
         };
-        if slot.ts.t != ts {
-            continue;
-        }
-        let Some(blk1) = slot.blk1 else {
-            continue;
-        };
-        if blk1.logical_channel != LogicalChannel::Stch {
-            continue;
-        }
+        for slot in slots {
+            if slot.ts.t != ts {
+                continue;
+            }
+            let Some(blk1) = slot.blk1 else {
+                continue;
+            };
+            if blk1.logical_channel != LogicalChannel::Stch {
+                continue;
+            }
 
-        let mut mac_block = blk1.mac_block.clone();
-        let pdu = MacResource::from_bitbuf(&mut mac_block).expect("STCH blk1 should start with MAC-RESOURCE");
-        assert!(
-            !pdu.random_access_flag,
-            "FACCH stealing without pending RA must not set random_access_flag"
-        );
-        assert_eq!(
-            pdu.usage_marker, None,
-            "FACCH stealing must not encode a usage marker in the MAC-RESOURCE header"
-        );
-        found = true;
-        break;
+            let mut mac_block = blk1.mac_block.clone();
+            let pdu = MacResource::from_bitbuf(&mut mac_block).expect("STCH blk1 should start with MAC-RESOURCE");
+            assert!(
+                !pdu.random_access_flag,
+                "FACCH stealing without pending RA must not set random_access_flag"
+            );
+            assert_eq!(
+                pdu.usage_marker, None,
+                "FACCH stealing must not encode a usage marker in the MAC-RESOURCE header"
+            );
+            found = true;
+            break;
+        }
+        if found {
+            break;
+        }
     }
 
     assert!(found, "expected an STCH downlink block on ts {}", ts);
@@ -850,31 +871,38 @@ fn test_traffic_mac_access_does_not_mark_next_facch_as_random_access() {
 
     let mut found = false;
     for msg in sink_msgs {
-        let SapMsgInner::TmvUnitdataReq(slot) = msg.msg else {
-            continue;
+        let slots = match msg.msg {
+            SapMsgInner::TmvUnitdataReq(slot) => vec![slot],
+            SapMsgInner::TmvUnitdataReqSlots(slots) => slots.slots,
+            _ => continue,
         };
-        if slot.ts.t != ts {
-            continue;
-        }
-        let Some(blk1) = slot.blk1 else {
-            continue;
-        };
-        if blk1.logical_channel != LogicalChannel::Stch {
-            continue;
-        }
+        for slot in slots {
+            if slot.ts.t != ts {
+                continue;
+            }
+            let Some(blk1) = slot.blk1 else {
+                continue;
+            };
+            if blk1.logical_channel != LogicalChannel::Stch {
+                continue;
+            }
 
-        let mut mac_block = blk1.mac_block.clone();
-        let pdu = MacResource::from_bitbuf(&mut mac_block).expect("STCH blk1 should start with MAC-RESOURCE");
-        assert!(
-            !pdu.random_access_flag,
-            "traffic-slot MAC-ACCESS must not make the next FACCH look like a random-access response"
-        );
-        assert_eq!(
-            pdu.usage_marker, None,
-            "traffic-slot FACCH stealing must not encode a usage marker in the MAC-RESOURCE header"
-        );
-        found = true;
-        break;
+            let mut mac_block = blk1.mac_block.clone();
+            let pdu = MacResource::from_bitbuf(&mut mac_block).expect("STCH blk1 should start with MAC-RESOURCE");
+            assert!(
+                !pdu.random_access_flag,
+                "traffic-slot MAC-ACCESS must not make the next FACCH look like a random-access response"
+            );
+            assert_eq!(
+                pdu.usage_marker, None,
+                "traffic-slot FACCH stealing must not encode a usage marker in the MAC-RESOURCE header"
+            );
+            found = true;
+            break;
+        }
+        if found {
+            break;
+        }
     }
 
     assert!(found, "expected an STCH downlink block on ts {}", ts);

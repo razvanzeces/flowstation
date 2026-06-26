@@ -422,7 +422,11 @@ mod tests {
             etee_encrypted: false,
         });
 
-        let later = TdmaTime { h: 0, m: 8, f: 1, t: 1 };
+        // 7 minutes after creation, past the 6-minute simplex expiry. The hardcoded {m: 8} was
+        // only ~7 multiframes (~7 s) after {m: 1} and never crossed CIRCUIT_EXPIRY_TIMESLOTS, so the
+        // sweep closed nothing -- restore a genuine 7-minute gap (matches main's add_timeslots form).
+        let later = (TdmaTime { h: 0, m: 1, f: 1, t: 1 }).add_timeslots(7 * 60 * 18 * 4);
+        assert_eq!(later.t, 1, "expiry sweep only runs on t==1");
         let tasks = mgr.tick_start(later);
 
         let closes: Vec<_> = tasks
