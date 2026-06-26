@@ -1153,15 +1153,15 @@ impl CcBsSubentity {
     /// transmitting (a group call in hangtime / a P2P call still in set-up — least disruptive to
     /// release); then the lowest call_id, purely for deterministic behaviour. `exclude` holds
     /// call_ids already released this round so the loop always makes progress.
-    fn select_preemption_victim(&self, incoming_priority: u8, _exclude: &[u16]) -> Option<PreemptVictim> {
+    fn select_preemption_victim(&self, incoming_priority: u8, exclude: &[u16]) -> Option<PreemptVictim> {
         let mut candidates: Vec<(u8, u16, PreemptVictim, usize)> = Vec::new();
         for (id, call) in self.active_calls.iter() {
-            if call.priority < incoming_priority {
+            if call.priority < incoming_priority && !exclude.contains(id) {
                 candidates.push((call.priority, *id, PreemptVictim::Group(*id), 1));
             }
         }
         for (id, call) in self.individual_calls.iter() {
-            if call.priority < incoming_priority {
+            if call.priority < incoming_priority && !exclude.contains(id) {
                 let slots = if call.calling_carrier_num == call.called_carrier_num && call.calling_ts == call.called_ts {
                     1
                 } else {
