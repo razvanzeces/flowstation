@@ -181,17 +181,17 @@ impl<D: RxTxDev> PhyBs<D> {
         }
     }
 
-    fn build_dl_burst(&mut self, prim: tetra_saps::tp::TpUnitdataReqSlot) -> [u8; TIMESLOT_TYPE4_BITS] {
+    fn build_dl_burst(&mut self, prim: tetra_saps::tp::TpUnitdataReqSlot) -> Option<[u8; TIMESLOT_TYPE4_BITS]> {
         let mut dl_burst = [0u8; TIMESLOT_TYPE4_BITS];
         if let Some(dl_input_file) = &mut self.dl_input_file {
             dl_input_file.read_block(&mut dl_burst).expect("Failed to read dl_input_file data");
-            return dl_burst;
+            return Some(dl_burst);
         }
 
         let mut bbk = [0u8; 30];
         prim.bbk.expect("TP slot missing BBK").to_bitarr(&mut bbk);
 
-        match prim.burst_type {
+        Some(match prim.burst_type {
             BurstType::SDB => {
                 assert!(prim.train_type == TrainingSequence::SyncTrainSeq);
                 assert!(prim.blk1.is_some() && prim.blk2.is_some());
@@ -218,13 +218,19 @@ impl<D: RxTxDev> PhyBs<D> {
                         prim.blk1.expect("NDB missing blk1").to_bitarr(&mut blk1);
                         prim.blk2.expect("NDB missing blk2").to_bitarr(&mut blk2);
                     }
-                    other => panic!("Unsupported training sequence for NDB burst: {:?}", other),
+                    other => {
+                        tracing::warn!("PHY: unsupported training sequence {:?} for NDB burst, dropping", other);
+                        return None;
+                    }
                 }
 
                 slotter::build_ndb(prim.train_type, &blk1, &bbk, &blk2)
             }
-            other => panic!("Unsupported burst type: {:?}", other),
-        }
+            other => {
+                tracing::warn!("PHY: unsupported burst type {:?}, dropping", other);
+                return None;
+            }
+        })
     }
 
     fn rx_tpsap_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
@@ -242,8 +248,11 @@ impl<D: RxTxDev> PhyBs<D> {
         let mut dl_bursts = Vec::with_capacity(prims.len());
         let mut carrier_nums = Vec::with_capacity(prims.len());
         for prim in prims {
-            carrier_nums.push(prim.carrier_num);
-            dl_bursts.push(self.build_dl_burst(prim));
+            let carrier_num = prim.carrier_num;
+            if let Some(burst) = self.build_dl_burst(prim) {
+                carrier_nums.push(carrier_num);
+                dl_bursts.push(burst);
+            }
         }
 
         let tx_time = self.dltime.add_timeslots(MACSCHED_TX_AHEAD as i32);

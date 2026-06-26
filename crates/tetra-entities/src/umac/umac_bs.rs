@@ -139,17 +139,28 @@ impl UmacBs {
         {
             return &mut self.secondary_channel_schedulers[index];
         }
-        panic!("unknown carrier {}, no scheduler configured", carrier_num);
+        // Should be unreachable with valid config (carrier_num always originates from a
+        // configured carrier). Degrade to the primary scheduler instead of crashing UMAC live.
+        tracing::error!("UMAC: unknown carrier {}, no scheduler configured -- falling back to primary", carrier_num);
+        &mut self.channel_scheduler
     }
 
     fn scheduler_for(&self, carrier_num: u16) -> &BsChannelScheduler {
         if carrier_num == self.main_carrier() {
             return &self.channel_scheduler;
         }
-        self.secondary_channel_schedulers
+        match self
+            .secondary_channel_schedulers
             .iter()
             .find(|sched| sched.carrier_num() == carrier_num)
-            .unwrap_or_else(|| panic!("unknown carrier {}, no scheduler configured", carrier_num))
+        {
+            Some(sched) => sched,
+            None => {
+                // Should be unreachable with valid config; degrade to primary rather than panic.
+                tracing::error!("UMAC: unknown carrier {}, no scheduler configured -- falling back to primary", carrier_num);
+                &self.channel_scheduler
+            }
+        }
     }
 
     /// Precomputes SYNC, SYSINFO messages (and subfield variants) for faster TX msg building
