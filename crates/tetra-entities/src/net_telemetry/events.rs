@@ -104,6 +104,10 @@ pub enum TelemetryEvent {
     TxVisual {
         sample_rate: f32,
         center_freq_hz: f64,
+        /// Configured BS downlink carriers as (carrier number, absolute frequency Hz).
+        /// The RF page uses these to place carrier-aware markers over the aggregate
+        /// pre-PA spectrum/waterfall.
+        carriers: Vec<(u16, f64)>,
         /// RMS amplitude in dBFS (0 = full scale). Shown smoothed in the UI.
         rms_dbfs: f32,
         /// Peak amplitude in dBFS. Shown smoothed in the UI.

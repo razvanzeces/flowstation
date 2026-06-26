@@ -2811,14 +2811,14 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="rf-panel">
           <div class="rf-panel-title">
             <span data-i18n="rf_spectrum">TX DSP Spectrum (pre-PA)</span>
-            <span class="rf-hint" data-i18n="rf_hint_spectrum">live · 512-bin FFT</span>
+            <span class="rf-hint" id="rf-spectrum-hint" data-i18n="rf_hint_spectrum">live · 512-bin FFT</span>
           </div>
           <canvas id="rf-spectrum" class="rf-canvas" width="900" height="260"></canvas>
         </div>
         <div class="rf-panel">
           <div class="rf-panel-title">
             <span data-i18n="rf_constellation">TX DSP Constellation</span>
-            <span class="rf-hint" data-i18n="rf_hint_constellation">π/4-DQPSK</span>
+            <span class="rf-hint" id="rf-constellation-hint" data-i18n="rf_hint_constellation">π/4-DQPSK</span>
           </div>
           <canvas id="rf-constellation" class="rf-canvas small" width="420" height="260"></canvas>
         </div>
@@ -2828,7 +2828,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <div class="rf-panel" style="margin-top:12px">
         <div class="rf-panel-title">
           <span data-i18n="rf_waterfall">TX Spectrum Waterfall</span>
-          <span class="rf-hint" data-i18n="rf_hint_waterfall">rolling · viridis</span>
+          <span class="rf-hint" id="rf-waterfall-hint" data-i18n="rf_hint_waterfall">rolling · viridis</span>
         </div>
         <canvas id="rf-waterfall" class="rf-canvas tall"></canvas>
       </div>
@@ -2838,7 +2838,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <div class="rf-quality-card">
         <div class="rf-panel-title">
           <span data-i18n="rf_quality">Signal Quality</span>
-          <span class="rf-hint" data-i18n="rf_hint_quality">measured pre-PA · derived from same DSP snapshot</span>
+          <span class="rf-hint" id="rf-quality-hint" data-i18n="rf_hint_quality">measured pre-PA · derived from same DSP snapshot</span>
         </div>
         <div class="rf-quality-grid">
           <div class="rf-qmetric" id="rf-q-evm-wrap">
@@ -7217,6 +7217,7 @@ const rfState = {
   lastHwTs: 0,
   sampleRate: 0,
   centerFreq: 0,
+  carriers: [],
   // Waterfall ring buffer — rows × FFT bins. Newest row at index 0; we shift on push.
   // Each row stores normalized [0..1] magnitudes so we can recolour on theme change.
   waterfall: [],
@@ -7286,10 +7287,98 @@ function rfPushAvg(key, v){
   return s / arr.length;
 }
 
+function rfNormalizeCarriers(raw){
+  const carriers = [];
+  if(Array.isArray(raw)){
+    for(const item of raw){
+      let num = 0, freq = 0;
+      if(Array.isArray(item)){
+        num = Number(item[0] || 0);
+        freq = Number(item[1] || 0);
+      }else if(item && typeof item === 'object'){
+        num = Number(item.carrier_num || item.num || item[0] || 0);
+        freq = Number(item.freq_hz || item.frequency_hz || item.freq || item[1] || 0);
+      }
+      if(isFinite(freq) && freq > 0){
+        carriers.push({ num: isFinite(num) ? num : 0, freq });
+      }
+    }
+  }
+  carriers.sort((a,b)=>a.freq-b.freq);
+  return carriers;
+}
+
+function rfCarrierName(carrier){
+  return carrier && carrier.num ? 'C'+carrier.num : 'carrier';
+}
+
+function rfCarrierOffsetKHz(carrier){
+  if(!carrier || !rfState.centerFreq) return NaN;
+  return (carrier.freq - rfState.centerFreq) / 1000;
+}
+
+function rfCarrierSummary(){
+  const carriers = rfState.carriers || [];
+  if(!carriers.length) return '';
+  const parts = carriers.map(c => {
+    const off = rfCarrierOffsetKHz(c);
+    const offText = isFinite(off) ? (off >= 0 ? '+' : '') + off.toFixed(Math.abs(off) < 100 ? 1 : 0) + ' kHz' : '';
+    return (rfCarrierName(c) + ' ' + offText).trim();
+  });
+  return (carriers.length > 1 ? 'aggregate · ' : '') + parts.join(' · ');
+}
+
+function updateRfCarrierHints(){
+  const summary = rfCarrierSummary();
+  const multi = (rfState.carriers || []).length > 1;
+  setText('rf-spectrum-hint', (t('rf_live')||'live') + ' · 512-bin FFT' + (summary ? ' · ' + summary : ''));
+  setText('rf-waterfall-hint', 'rolling · viridis' + (summary ? ' · ' + summary : ''));
+  setText('rf-constellation-hint', multi ? 'aggregate IQ · not per-carrier' : 'π/4-DQPSK');
+  setText('rf-quality-hint', multi ? 'aggregate pre-PA · EVM/OBW are not per-carrier' : 'measured pre-PA · derived from same DSP snapshot');
+}
+
+function drawRfCarrierMarkers(ctx, w, h, sampleRate, centerFreq, carriers, opts){
+  if(!sampleRate || !centerFreq || !Array.isArray(carriers) || !carriers.length) return;
+  opts = opts || {};
+  const col = rfThemeColors();
+  const left = opts.leftPad ?? 40;
+  const right = opts.rightPad ?? 0;
+  const top = opts.top ?? 0;
+  const bottom = opts.bottom ?? 14;
+  const view = opts.view ?? 1.0;
+  const spanHz = sampleRate * view;
+  if(!isFinite(spanHz) || spanHz <= 0) return;
+  const halfSpan = spanHz / 2;
+  const plotW = Math.max(w - left - right, 1);
+  const plotH = Math.max(h - top - bottom, 1);
+  ctx.save();
+  ctx.strokeStyle = col.accent2;
+  ctx.fillStyle = col.accent2;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.font = '10px ui-monospace, Cascadia Code, Consolas, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for(const carrier of carriers){
+    const offsetHz = carrier.freq - centerFreq;
+    if(!isFinite(offsetHz) || offsetHz < -halfSpan || offsetHz > halfSpan) continue;
+    const x = left + (offsetHz + halfSpan) / spanHz * plotW;
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, top + plotH);
+    ctx.stroke();
+    const offKHz = offsetHz / 1000;
+    const label = rfCarrierName(carrier) + ' ' + (offKHz >= 0 ? '+' : '') + offKHz.toFixed(Math.abs(offKHz) < 100 ? 1 : 0) + 'k';
+    ctx.fillText(label, Math.min(Math.max(x, left + 24), w - right - 24), top + 2);
+  }
+  ctx.restore();
+}
+
 function handleTxVisual(msg){
   rfState.lastTs = Date.now();
   rfState.sampleRate = msg.sample_rate || 0;
   rfState.centerFreq = msg.center_freq_hz || 0;
+  rfState.carriers = rfNormalizeCarriers(msg.carriers || []);
 
   // RMS/Peak in the top strip — these come in at the fast cadence so we
   // smooth them before painting (otherwise the dB number jumps a couple of
@@ -7305,13 +7394,15 @@ function handleTxVisual(msg){
   setText('rf-age',  t('rf_live')||'live');
   // Hero summary
   setText('rf-hero-freq', isFinite(freqMHz) && freqMHz>0 ? freqMHz.toFixed(3)+' MHz' : '—');
-  setText('rf-hero-sub',  t('rf_live')||'live');
+  const carrierSummary = rfCarrierSummary();
+  setText('rf-hero-sub',  (t('rf_live')||'live') + (carrierSummary ? ' · ' + carrierSummary : ''));
+  updateRfCarrierHints();
   const rhd=document.getElementById('rf-hero-dot');
   if(rhd) rhd.className='hero-dot is-ok';
 
   // Visual feeds redraw on every message — that's the whole point.
   const spec = (msg.spectrum_db_tenths || []).map(v => v / 10);
-  drawRfSpectrum(spec, rfState.sampleRate);
+  drawRfSpectrum(spec, rfState.sampleRate, rfState.centerFreq, rfState.carriers);
   drawRfConstellation(msg.constellation_iq || []);
   pushWaterfall(spec);
   drawRfWaterfall();
@@ -7323,14 +7414,15 @@ function handleTxQuality(msg){
   const papr = rfPushAvg('papr_db',                   msg.papr_db);
   const cl   = rfPushAvg('carrier_leakage_db',        msg.carrier_leakage_db);
   const obw  = rfPushAvg('occupied_bandwidth_hz',     msg.occupied_bandwidth_hz);
+  const multi = (rfState.carriers || []).length > 1;
 
   // Show only the operationally-relevant TX metrics. DC offset + IQ amplitude/phase
   // imbalance are modulator-calibration diagnostics and were trimmed from the UI.
-  paintQuality('rf-evm',     'rf-q-evm-wrap',  fmtPct(evm, 2),       evalEvm(evm));
-  setText('rf-hero-evm', fmtPct(evm, 2));
+  paintQuality('rf-evm',     'rf-q-evm-wrap',  fmtPct(evm, 2) + (multi ? ' agg' : ''), evalEvm(evm));
+  setText('rf-hero-evm', fmtPct(evm, 2) + (multi ? ' agg' : ''));
   paintQuality('rf-papr',    'rf-q-papr-wrap', fmtDb(papr, 1),       evalPapr(papr));
   paintQuality('rf-carrier', 'rf-q-cl-wrap',   fmtDb(cl, 1, true),   evalCarrierLeakage(cl));
-  paintQuality('rf-obw',     'rf-q-obw-wrap',  fmtKhz(obw),          evalObw(obw));
+  paintQuality('rf-obw',     'rf-q-obw-wrap',  fmtKhz(obw) + (multi ? ' agg' : ''), evalObw(obw));
 }
 
 function handleSdrHealth(msg){
@@ -7824,7 +7916,7 @@ function paintQuality(valueId, wrapId, valueText, evalResult){
   if(bar) bar.style.width = evalResult.pct.toFixed(0) + '%';
 }
 
-function drawRfSpectrum(spec, sampleRate){
+function drawRfSpectrum(spec, sampleRate, centerFreq, carriers){
   const r = rfResizeCanvas('rf-spectrum');
   if(!r || !spec.length) return;
   const {ctx, w, h} = r;
@@ -7879,6 +7971,8 @@ function drawRfSpectrum(spec, sampleRate){
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
+
+  drawRfCarrierMarkers(ctx, w, h, sampleRate, centerFreq, carriers, { leftPad: 40, bottom: 14, view: 1.0 });
 }
 
 function drawRfConstellation(iqInt16){
@@ -8043,6 +8137,12 @@ function drawRfWaterfall(){
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(buf, srcX, 0, srcW, rows, leftPad, 0, w - leftPad, h);
+
+  drawRfCarrierMarkers(ctx, w, h, rfState.sampleRate, rfState.centerFreq, rfState.carriers, {
+    leftPad,
+    bottom: 0,
+    view: VIEW,
+  });
 
   // Time axis on the left. History now fills the full height, so map labels across h.
   ctx.font = '9px ui-monospace, Cascadia Code, Consolas, monospace';

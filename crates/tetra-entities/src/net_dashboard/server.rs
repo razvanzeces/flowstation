@@ -956,6 +956,7 @@ impl DashboardServer {
                 TelemetryEvent::TxVisual {
                     sample_rate,
                     center_freq_hz,
+                    carriers,
                     rms_dbfs,
                     peak_dbfs,
                     spectrum_db_tenths,
@@ -966,6 +967,7 @@ impl DashboardServer {
                     s.last_tx_visual = Some(crate::net_dashboard::state::TxVisualSnapshot {
                         sample_rate: *sample_rate,
                         center_freq_hz: *center_freq_hz,
+                        carriers: carriers.clone(),
                         rms_dbfs: *rms_dbfs,
                         peak_dbfs: *peak_dbfs,
                         spectrum_db_tenths: spectrum_db_tenths.clone(),
@@ -1163,6 +1165,7 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
         TelemetryEvent::TxVisual {
             sample_rate,
             center_freq_hz,
+            carriers,
             rms_dbfs,
             peak_dbfs,
             spectrum_db_tenths,
@@ -1171,6 +1174,7 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             "type": "tx_visual",
             "sample_rate": sample_rate,
             "center_freq_hz": center_freq_hz,
+            "carriers": carriers,
             "rms_dbfs": rms_dbfs,
             "peak_dbfs": peak_dbfs,
             "spectrum_db_tenths": spectrum_db_tenths,

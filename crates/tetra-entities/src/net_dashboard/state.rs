@@ -134,6 +134,7 @@ pub struct DashboardStateInner {
 pub struct TxVisualSnapshot {
     pub sample_rate: f32,
     pub center_freq_hz: f64,
+    pub carriers: Vec<(u16, f64)>,
     pub rms_dbfs: f32,
     pub peak_dbfs: f32,
     pub spectrum_db_tenths: Vec<i16>,

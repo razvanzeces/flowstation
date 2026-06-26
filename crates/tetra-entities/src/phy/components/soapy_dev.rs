@@ -403,8 +403,21 @@ impl TxDsp {
             modulators.push(ModulatorChannel::new(fft_planner, fcfb_params, *dl_freq, modulator::Mode::Dl));
         }
 
-        let monitor = telemetry
-            .map(|sink| TxSignalMonitor::new(fft_planner, sink, sdr_sample_rate as RealSample, sdr.tx_center_frequency().unwrap()));
+        let carriers = phy_config
+            .bs_carrier_numbers
+            .iter()
+            .copied()
+            .zip(phy_config.bs_dl_frequencies.iter().copied())
+            .collect::<Vec<_>>();
+        let monitor = telemetry.map(|sink| {
+            TxSignalMonitor::new(
+                fft_planner,
+                sink,
+                sdr_sample_rate as RealSample,
+                sdr.tx_center_frequency().unwrap(),
+                carriers,
+            )
+        });
 
         Self {
             fcfb,
@@ -633,6 +646,7 @@ struct TxSignalMonitor {
     sink: TelemetrySink,
     sample_rate: RealSample,
     center_frequency: f64,
+    carriers: Vec<(u16, f64)>,
     fft: std::sync::Arc<dyn rustfft::Fft<RealSample>>,
     fft_buffer: Vec<ComplexSample>,
     window: Vec<RealSample>,
@@ -659,7 +673,13 @@ impl TxSignalMonitor {
     const CONSTELLATION_POINTS: usize = 192;
     const CONSTELLATION_ENCODE_SCALE: RealSample = 32767.0 / 1.5;
 
-    fn new(fft_planner: &mut FftPlanner, sink: TelemetrySink, sample_rate: RealSample, center_frequency: f64) -> Self {
+    fn new(
+        fft_planner: &mut FftPlanner,
+        sink: TelemetrySink,
+        sample_rate: RealSample,
+        center_frequency: f64,
+        carriers: Vec<(u16, f64)>,
+    ) -> Self {
         let fft = fft_planner.plan_fft_forward(Self::FFT_LEN);
         let window = (0..Self::FFT_LEN)
             .map(|i| {
@@ -671,6 +691,7 @@ impl TxSignalMonitor {
             sink,
             sample_rate,
             center_frequency,
+            carriers,
             fft,
             fft_buffer: vec![ComplexSample::ZERO; Self::FFT_LEN],
             window,
@@ -765,6 +786,7 @@ impl TxSignalMonitor {
             self.sink.send(TelemetryEvent::TxVisual {
                 sample_rate: self.sample_rate,
                 center_freq_hz: self.center_frequency,
+                carriers: self.carriers.clone(),
                 rms_dbfs,
                 peak_dbfs,
                 spectrum_db_tenths,
