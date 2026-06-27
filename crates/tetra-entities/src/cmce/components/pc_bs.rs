@@ -22,6 +22,8 @@ pub enum ControlRoute {
     CcSubscriberUpdate,
     /// rc/TNSDS-side SDS input from the local network bridge.
     SdsRc,
+    /// MM-requested SS-DGNA D-FACILITY emission, handled by the SS sub-entity.
+    SsDgnaAssign,
     Unsupported,
 }
 
@@ -73,6 +75,7 @@ impl PcBs {
             SapMsgInner::CmceCallControl(_) => ControlRoute::CcRa,
             SapMsgInner::MmSubscriberUpdate(_) => ControlRoute::CcSubscriberUpdate,
             SapMsgInner::CmceSdsData(_) => ControlRoute::SdsRc,
+            SapMsgInner::CmceSsDgnaAssign { .. } => ControlRoute::SsDgnaAssign,
             _ => ControlRoute::Unsupported,
         }
     }

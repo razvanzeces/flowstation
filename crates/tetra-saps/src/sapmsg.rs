@@ -91,6 +91,17 @@ pub enum SapMsgInner {
         attach: bool,
     },
 
+    /// MM -> CMCE: emit an SS-DGNA D-FACILITY for one terminal — an ASSIGN when `attach`, a
+    /// DEASSIGN otherwise (TS 100 392-12-22 V1.5.1 cl.6.2.2/6.2.3, carried over the CMCE
+    /// U/D-FACILITY mechanism, EN 300 392-9 V1.7.1 cl.7.3). MM keeps owning the group registry and
+    /// affiliation state; this only asks CMCE to put the Group assignment IE on the air. v1 carries
+    /// no mnemonic — the radio displays its own provisioned name for the GSSI, or the number.
+    CmceSsDgnaAssign {
+        issi: u32,
+        gssi: u32,
+        attach: bool,
+    },
+
     /// Sent by UMAC to MM when a UL burst is received from a known MS.
     /// MM stores the RSSI value per MS for logging and future handover decisions.
     MsRssiUpdate {
@@ -142,6 +153,9 @@ impl Display for SapMsgInner {
             SapMsgInner::MmSubscriberUpdate(_) => write!(f, "MmSubscriberUpdate"),
             SapMsgInner::MmDgnaRequest { issi, gssi, attach } => {
                 write!(f, "MmDgnaRequest(issi={}, gssi={}, attach={})", issi, gssi, attach)
+            }
+            SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach } => {
+                write!(f, "CmceSsDgnaAssign(issi={}, gssi={}, attach={})", issi, gssi, attach)
             }
             SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => write!(f, "MsRssiUpdate(issi={}, rssi={:.1}dBFS)", issi, rssi_dbfs),
             SapMsgInner::BrewReconnected => write!(f, "BrewReconnected"),

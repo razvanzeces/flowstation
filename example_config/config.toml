@@ -173,6 +173,19 @@ voice_service = true
 # latency, so enable this only on cells that still run those legacy sets.
 # release_group_on_same_speaker_retake = false
 
+# DGNA (Dynamic Group Number Assignment) air-interface mechanism.
+# ON (default): an operator regroup goes out as an SS-DGNA ASSIGN/DEASSIGN carried in a CMCE
+# D-FACILITY (ETSI TS 100 392-12-22 V1.5.1; transport EN 300 392-9 V1.7.1). That SS PDU both
+# *defines* the group (mnemonic/parameters) AND attaches it in one step, which is what makes a
+# dynamic talkgroup appear and be selectable on a real terminal.
+# OFF: falls back to the legacy MM-only D-ATTACH/DETACH GROUP IDENTITY (EN 300 392-2 V2.4.1
+# cl.16.8), which only toggles the L2 attachment of a group the radio already knows — a bare GSSI
+# the radio was never told about has nothing to name or select. Kept as a rollback switch.
+# NB: even a correct SS-DGNA shows nothing unless DGNA notification is provisioned in the terminal
+# codeplug — that is a codeplug gap, not a stack bug.
+# Absent = true. Set false only to roll back to the legacy path.
+# dgna_use_ss_facility = true
+
 # Maximum active call duration in seconds — ETSI EN 300 392-2 §14.9.1 T310 equivalent (FlowStation).
 # After this time the BS sends D-RELEASE regardless of call activity.
 # 0 = no limit (infinite — call runs until U-DISCONNECT or hangtime).

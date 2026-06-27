@@ -261,6 +261,14 @@ impl TetraEntityTrait for CmceBs {
                 ControlRoute::SdsRc => {
                     self.sds.rx_sds_from_brew(queue, message);
                 }
+                ControlRoute::SsDgnaAssign => {
+                    let SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach } = message.msg else {
+                        unreachable!();
+                    };
+                    // MM owns the group registry/affiliation; it has already committed the change and
+                    // asks CMCE only to put the SS-DGNA ASSIGN/DEASSIGN on the air as a D-FACILITY.
+                    self.ss.send_d_facility_dgna(queue, issi, gssi, attach);
+                }
                 ControlRoute::Unsupported => {
                     panic!("Unexpected control message: {:?}", message.msg);
                 }

@@ -95,6 +95,7 @@ pub fn default_cell_info(freq_info: FreqInfo) -> CfgCellInfo {
         periodic_registration_secs: 3600,
         sds_command_control: None,
         release_group_on_same_speaker_retake: false,
+        dgna_use_ss_facility: true,
     }
 }
 
