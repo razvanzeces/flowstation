@@ -215,6 +215,10 @@ pub struct CfgCellInfo {
 pub struct CellInfoDto {
     pub main_carrier: u16,
     pub secondary_carrier: Option<u16>,
+    /// Operational dual-carrier switch (dashboard "Dual-Carrier ON/OFF"). When false, the
+    /// configured `secondary_carrier` number is kept but NOT used, so the stack runs single-carrier.
+    /// Absent = true for backward compatibility (a configured secondary_carrier is on by default).
+    pub dual_carrier_enabled: Option<bool>,
     pub freq_band: u8,
     pub freq_offset: i16,
     pub duplex_spacing: u8,
@@ -288,7 +292,14 @@ pub struct CellInfoDto {
 pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
     CfgCellInfo {
         main_carrier: ci.main_carrier,
-        secondary_carrier: ci.secondary_carrier,
+        // Effective secondary carrier: gated by the operational dual-carrier switch so the rest of
+        // the stack (allocator, UMAC schedulers, PHY) sees None when dual carrier is turned off,
+        // while the configured number is preserved in the TOML for when it is turned back on.
+        secondary_carrier: if ci.dual_carrier_enabled.unwrap_or(true) {
+            ci.secondary_carrier
+        } else {
+            None
+        },
         freq_band: ci.freq_band,
         freq_offset_hz: ci.freq_offset,
         duplex_spacing_id: ci.duplex_spacing,

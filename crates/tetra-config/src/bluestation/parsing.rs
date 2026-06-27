@@ -638,6 +638,22 @@ main_carrier_number = 1586
     }
 
     #[test]
+    fn dual_carrier_enabled_flag_gates_effective_secondary_carrier() {
+        // Absent flag is backward compatible: a configured secondary carrier is on by default.
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1585")).expect("parse");
+        assert_eq!(cfg.cell.secondary_carrier, Some(1585), "absent flag => enabled");
+
+        // Explicitly enabled.
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1585\ndual_carrier_enabled = true")).expect("parse");
+        assert_eq!(cfg.cell.secondary_carrier, Some(1585));
+
+        // Disabled: the number stays in the file but the stack sees None (single carrier). This is
+        // what the dashboard "Dual-Carrier OFF" toggle writes, and the whole stack reads this field.
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1585\ndual_carrier_enabled = false")).expect("parse");
+        assert_eq!(cfg.cell.secondary_carrier, None, "disabled switch hides the carrier from the stack");
+    }
+
+    #[test]
     fn telegram_alerts_section_parses() {
         let toml = minimal_toml("")
             + r#"
