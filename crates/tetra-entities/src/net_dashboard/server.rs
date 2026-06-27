@@ -2592,12 +2592,17 @@ fn serve_dual_carrier_post(
     // When enabling, resolve which carrier to use: explicit from the request, else the one already
     // configured. Disabling keeps the configured number untouched (so it is remembered).
     let secondary = if enabled {
-        let n = req
-            .get("secondary_carrier")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u16)
-            .or(current.secondary_carrier);
-        match n {
+        // Validate the RAW value before the u16 cast: a carrier number is a 12-bit field (0..4095)
+        // and the FreqInfo encoder only accepts < 4000, so reject out-of-range here rather than let
+        // `as u16` silently truncate a huge value into a valid-looking carrier (e.g. 67057 -> 1521).
+        let requested = match req.get("secondary_carrier").and_then(|v| v.as_u64()) {
+            Some(n) if n >= 4000 => {
+                return http_response(stream, 400, "secondary_carrier must be in 0..3999");
+            }
+            Some(n) => Some(n as u16),
+            None => None,
+        };
+        match requested.or(current.secondary_carrier) {
             Some(n) => Some(n),
             None => {
                 return http_response(

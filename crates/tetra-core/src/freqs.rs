@@ -166,13 +166,17 @@ impl FreqInfo {
         duplex_index: u8,
         custom_duplex_spacing: Option<u32>,
     ) -> Result<Self, String> {
-        assert!(band <= 8, "Invalid frequency band {}", band);
-        assert!(carrier < 4000, "Invalid carrier number {}", carrier);
-        assert!(
-            freq_offset_val == 0 || freq_offset_val == 6250 || freq_offset_val == -6250 || freq_offset_val == 12500,
-            "Invalid frequency offset {}",
-            freq_offset_val
-        );
+        // Return recoverable errors (not panics): callers like config validation and the dashboard
+        // dual-carrier toggle surface bad input as an error rather than unwinding the thread.
+        if band > 8 {
+            return Err(format!("Invalid frequency band {}", band));
+        }
+        if carrier >= 4000 {
+            return Err(format!("Invalid carrier number {}", carrier));
+        }
+        if !(freq_offset_val == 0 || freq_offset_val == 6250 || freq_offset_val == -6250 || freq_offset_val == 12500) {
+            return Err(format!("Invalid frequency offset {}", freq_offset_val));
+        }
         let duplex_spacing_val = if let Some(cds) = custom_duplex_spacing {
             cds
         } else {
@@ -242,5 +246,18 @@ mod tests {
         assert_eq!(freq, dlfreq);
         assert_eq!(dlfreq - duplex_spacing, ulfreq);
         assert!(!f1.reverse_operation);
+    }
+
+    #[test]
+    fn from_components_returns_err_not_panic_on_bad_input() {
+        // Out-of-range carrier (>= 4000) is a recoverable error, NOT a panic. The dashboard
+        // dual-carrier toggle relies on this to reject a bad carrier with 400 instead of crashing.
+        assert!(FreqInfo::from_components(4, 4000, 0, false, 0, None).is_err());
+        assert!(FreqInfo::from_components(4, 65535, 0, false, 0, None).is_err());
+        // Out-of-range band and bad frequency offset are likewise errors.
+        assert!(FreqInfo::from_components(9, 1001, 0, false, 0, None).is_err());
+        assert!(FreqInfo::from_components(4, 1001, 1234, false, 0, None).is_err());
+        // The last in-range carrier still succeeds.
+        assert!(FreqInfo::from_components(4, 3999, 0, false, 0, None).is_ok());
     }
 }

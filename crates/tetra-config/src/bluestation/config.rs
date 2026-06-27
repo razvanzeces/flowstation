@@ -189,9 +189,16 @@ impl StackConfig {
                 return Err("PhyIo UlFrequency does not match computed FreqInfo");
             };
 
-            if carriers.len() > 1
-                && let Some(sample_rate_hz) = soapy_cfg.fs
-            {
+            if carriers.len() > 1 {
+                // A secondary carrier is in use: the SDR center + sample rate MUST be proven to cover
+                // both carriers. A missing sample rate fails closed — we cannot prove the passband
+                // fits, and silently skipping the check let an out-of-passband secondary carrier
+                // through (defeating the dashboard toggle's pre-restart validation).
+                let Some(sample_rate_hz) = soapy_cfg.fs else {
+                    return Err(
+                        "dual carrier requires phy_io.soapysdr.sample_rate to be set so the secondary carrier can be proven to fit the SDR passband",
+                    );
+                };
                 let dl_freqs: Vec<u32> = carriers.iter().map(|(_, dl, _)| *dl).collect();
                 let ul_freqs: Vec<u32> = carriers.iter().map(|(_, _, ul)| *ul).collect();
                 let (tx_center_hz, _) = soapy_cfg.effective_tx_center_freq_corrected();
