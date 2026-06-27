@@ -654,6 +654,17 @@ main_carrier_number = 1586
     }
 
     #[test]
+    fn dgna_use_ss_facility_flag_defaults_on() {
+        // Absent flag => SS-DGNA D-FACILITY path (TS 100 392-12-22) is the default.
+        let cfg = from_toml_str(&minimal_toml("")).expect("parse");
+        assert!(cfg.cell.dgna_use_ss_facility, "absent flag => SS-DGNA path on");
+
+        // Explicitly rolled back to the legacy MM D-ATTACH path.
+        let cfg = from_toml_str(&minimal_toml("dgna_use_ss_facility = false")).expect("parse");
+        assert!(!cfg.cell.dgna_use_ss_facility, "false => legacy MM D-ATTACH path");
+    }
+
+    #[test]
     fn telegram_alerts_section_parses() {
         let toml = minimal_toml("")
             + r#"

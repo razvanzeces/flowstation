@@ -3,6 +3,10 @@ mod common;
 use tetra_config::bluestation::StackMode;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, debug};
+use tetra_pdus::cmce::enums::cmce_pdu_type_dl::CmcePduTypeDl;
+use tetra_pdus::cmce::pdus::d_facility::DFacility;
+use tetra_pdus::cmce::ss_dgna::enums::results::GroupIdentityAttachmentMode;
+use tetra_pdus::cmce::ss_dgna::ss_dgna_pdu::SsDgnaPdu;
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
 use tetra_pdus::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
 use tetra_pdus::mm::pdus::d_attach_detach_group_identity::DAttachDetachGroupIdentity;
@@ -55,6 +59,35 @@ fn register_terminal(test: &mut ComponentTest, issi: u32) {
         msg: SapMsgInner::LmmMleUnitdataInd(prim),
     });
     test.run_stack(Some(2));
+}
+
+/// Pull the first MM->CMCE `CmceSsDgnaAssign` SAP request out of a batch of captured messages.
+/// This is the air-interface emission MM now makes by default for a DGNA: it hands the SS-DGNA
+/// ASSIGN/DEASSIGN to CMCE rather than sending an MM D-ATTACH itself.
+fn find_ss_dgna_request(msgs: &[SapMsg]) -> Option<(u32, u32, bool)> {
+    msgs.iter().find_map(|m| match m.msg {
+        SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach } if m.dest == TetraEntity::Cmce => Some((issi, gssi, attach)),
+        _ => None,
+    })
+}
+
+/// Pull the first D-FACILITY (and its addressed ISSI) out of a batch of captured MLE messages.
+/// Matched on the 5-bit CMCE downlink PDU-type discriminator before parsing, so a non-FACILITY
+/// downlink PDU is skipped rather than mis-parsed.
+fn find_d_facility(msgs: &[SapMsg]) -> Option<(u32, DFacility)> {
+    let want = CmcePduTypeDl::DFacility;
+    for m in msgs {
+        if let SapMsgInner::LcmcMleUnitdataReq(ref req) = m.msg {
+            if CmcePduTypeDl::try_from(req.sdu.peek_bits(5)?).ok() != Some(want) {
+                continue;
+            }
+            let mut sdu = BitBuffer::from_bitstr(&req.sdu.to_bitstr());
+            if let Ok(pdu) = DFacility::from_bitbuf(&mut sdu) {
+                return Some((req.main_address.ssi, pdu));
+            }
+        }
+    }
+    None
 }
 
 /// Pull the first D-ATTACH/DETACH GROUP IDENTITY out of a batch of captured MLE messages, if any.
@@ -174,17 +207,20 @@ fn test_reactive_recovery_rate_limits_repeat_bursts() {
     );
 }
 
-/// End-to-end DGNA assign: a dashboard control command makes MM push an unsolicited
-/// D-ATTACH/DETACH GROUP IDENTITY (attach, ack requested) to the targeted terminal AND record the
-/// affiliation in the shared subscriber registry so local group calls/SDS route to it.
+/// DGNA assign (SS-DGNA default): a dashboard control command makes MM affiliate the GSSI in the
+/// shared subscriber registry (so local group calls/SDS route to it) AND hand the air-interface
+/// emission to CMCE as a `CmceSsDgnaAssign` request. MM no longer sends the legacy D-ATTACH itself
+/// — the actual D-FACILITY on the wire is asserted in test_cmce_bs (the full MM+CMCE path).
 #[test]
-fn test_dgna_assign_emits_attach_group_identity_and_affiliates() {
+fn test_dgna_assign_affiliates_and_requests_ss_dgna() {
     debug::setup_logging_verbose();
     const TEST_ISSI: u32 = 2260571;
     const TEST_GSSI: u32 = 100;
 
     let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
-    test.populate_entities(vec![], vec![TetraEntity::Mle]);
+    // Sink CMCE too: MM hands the air emission to CMCE over the Control SAP, so the
+    // CmceSsDgnaAssign request is captured there (no real CMCE in this MM-focused test).
+    test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Cmce]);
 
     // Register our own MM wired to a control endpoint so we can drive DGNA through the dispatcher.
     let (dispatcher, endpoint) = make_control_link();
@@ -204,22 +240,14 @@ fn test_dgna_assign_emits_attach_group_identity_and_affiliates() {
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    let (addr_ssi, pdu) = find_attach_detach(&msgs).unwrap_or_else(|| {
-        panic!(
-            "expected a D-ATTACH/DETACH GROUP IDENTITY after DGNA assign, got {} msgs",
-            msgs.len()
-        )
-    });
+    let (issi, gssi, attach) = find_ss_dgna_request(&msgs)
+        .unwrap_or_else(|| panic!("expected a CmceSsDgnaAssign request after DGNA assign, got {} msgs", msgs.len()));
+    assert_eq!((issi, gssi, attach), (TEST_ISSI, TEST_GSSI, true));
 
-    assert_eq!(addr_ssi, TEST_ISSI, "DGNA PDU must be addressed to the target ISSI");
-    assert!(pdu.group_identity_acknowledgement_request, "DGNA must request an ACK");
-    assert!(!pdu.group_identity_attach_detach_mode, "DGNA must amend, not reset, the group list");
-    let gids = pdu.group_identity_downlink.expect("downlink groups present");
-    assert_eq!(gids.len(), 1);
-    assert_eq!(gids[0].gssi, Some(TEST_GSSI));
+    // On the SS-DGNA default MM must NOT also send a legacy MM D-ATTACH (that would double-attach).
     assert!(
-        gids[0].group_identity_attachment.is_some(),
-        "an assign carries a group identity attachment"
+        find_attach_detach(&msgs).is_none(),
+        "SS-DGNA default must not also emit the legacy D-ATTACH/DETACH GROUP IDENTITY"
     );
 
     // BS-side affiliation must be reflected for local call/SDS routing.
@@ -233,15 +261,17 @@ fn test_dgna_assign_emits_attach_group_identity_and_affiliates() {
     );
 }
 
-/// DGNA deassign of a previously-assigned group emits a detach and removes the affiliation.
+/// DGNA deassign of a previously-assigned group requests a DEASSIGN from CMCE and removes the
+/// affiliation.
 #[test]
-fn test_dgna_deassign_emits_detach_and_deaffiliates() {
+fn test_dgna_deassign_requests_ss_dgna_and_deaffiliates() {
     debug::setup_logging_verbose();
     const TEST_ISSI: u32 = 2260572;
     const TEST_GSSI: u32 = 101;
 
     let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
-    test.populate_entities(vec![], vec![TetraEntity::Mle]);
+    // Sink CMCE too so the MM->CMCE CmceSsDgnaAssign request is captured (see assign test).
+    test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Cmce]);
     let (dispatcher, endpoint) = make_control_link();
     let mm = MmBs::new(test.get_shared_config(), None, Some(endpoint));
     test.register_entity(mm);
@@ -271,21 +301,9 @@ fn test_dgna_deassign_emits_detach_and_deaffiliates() {
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    let (addr_ssi, pdu) = find_attach_detach(&msgs).unwrap_or_else(|| {
-        panic!(
-            "expected a D-ATTACH/DETACH GROUP IDENTITY after DGNA deassign, got {} msgs",
-            msgs.len()
-        )
-    });
-    assert_eq!(addr_ssi, TEST_ISSI);
-    let gids = pdu.group_identity_downlink.expect("downlink groups present");
-    assert_eq!(gids.len(), 1);
-    assert_eq!(gids[0].gssi, Some(TEST_GSSI));
-    assert!(gids[0].group_identity_attachment.is_none(), "a deassign carries no attachment");
-    assert!(
-        gids[0].group_identity_detachment_uplink.is_some(),
-        "a deassign carries a detachment"
-    );
+    let (issi, gssi, attach) = find_ss_dgna_request(&msgs)
+        .unwrap_or_else(|| panic!("expected a CmceSsDgnaAssign request after DGNA deassign, got {} msgs", msgs.len()));
+    assert_eq!((issi, gssi, attach), (TEST_ISSI, TEST_GSSI, false));
 
     assert!(
         !test
@@ -298,12 +316,75 @@ fn test_dgna_deassign_emits_detach_and_deaffiliates() {
     );
 }
 
+/// Rollback path: with `dgna_use_ss_facility = false` the legacy MM-only D-ATTACH/DETACH GROUP
+/// IDENTITY (EN 300 392-2 V2.4.1 cl.16.8) must still be emitted, and CMCE must NOT be asked for an
+/// SS-DGNA D-FACILITY. Guards the rollout switch.
+#[test]
+fn test_dgna_legacy_flag_emits_mm_attach() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260573;
+    const TEST_GSSI: u32 = 102;
+
+    // Build a config with the SS-DGNA path turned off.
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.dgna_use_ss_facility = false;
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime::default()));
+    test.populate_entities(vec![], vec![TetraEntity::Mle]);
+
+    let (dispatcher, endpoint) = make_control_link();
+    let mm = MmBs::new(test.get_shared_config(), None, Some(endpoint));
+    test.register_entity(mm);
+
+    register_terminal(&mut test, TEST_ISSI);
+    let _ = test.dump_sinks();
+
+    dispatcher.send(ControlCommand::Dgna {
+        issi: TEST_ISSI,
+        gssi: TEST_GSSI,
+        attach: true,
+    });
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+
+    let (addr_ssi, pdu) = find_attach_detach(&msgs).unwrap_or_else(|| {
+        panic!(
+            "legacy DGNA flag must emit a D-ATTACH/DETACH GROUP IDENTITY, got {} msgs",
+            msgs.len()
+        )
+    });
+    assert_eq!(addr_ssi, TEST_ISSI, "DGNA PDU must be addressed to the target ISSI");
+    assert!(pdu.group_identity_acknowledgement_request, "DGNA must request an ACK");
+    assert!(!pdu.group_identity_attach_detach_mode, "DGNA must amend, not reset, the group list");
+    let gids = pdu.group_identity_downlink.expect("downlink groups present");
+    assert_eq!(gids.len(), 1);
+    assert_eq!(gids[0].gssi, Some(TEST_GSSI));
+    assert!(
+        gids[0].group_identity_attachment.is_some(),
+        "an assign carries a group identity attachment"
+    );
+
+    // The legacy path must NOT also hand an SS-DGNA request to CMCE.
+    assert!(
+        find_ss_dgna_request(&msgs).is_none(),
+        "legacy DGNA path must not also request an SS-DGNA D-FACILITY"
+    );
+
+    assert!(
+        test.config
+            .state_read()
+            .subscribers
+            .attached_groups_of(TEST_ISSI)
+            .contains(&TEST_GSSI),
+        "legacy DGNA assign must still affiliate the GSSI in the subscriber registry"
+    );
+}
+
 /// Regression for the dashboard path (FlowStation log 00:19:24 "CMCE: ignoring unsupported control
 /// command Dgna"): the dashboard's control channel terminates at CMCE, not MM. A DGNA command
-/// delivered to CMCE must be forwarded to MM, which then pushes the D-ATTACH/DETACH GROUP IDENTITY
-/// over the air — exactly the path a real dashboard click takes.
+/// delivered to CMCE must be forwarded to MM, which (SS-DGNA default) hands the emission back to
+/// CMCE as a D-FACILITY{ASSIGN} on the air — exactly the path a real dashboard click takes.
 #[test]
-fn test_dgna_from_cmce_control_reaches_mm_and_emits_pdu() {
+fn test_dgna_from_cmce_control_reaches_mm_and_emits_d_facility() {
     debug::setup_logging_verbose();
     const TEST_ISSI: u32 = 2260575;
     const TEST_GSSI: u32 = 20;
@@ -329,19 +410,28 @@ fn test_dgna_from_cmce_control_reaches_mm_and_emits_pdu() {
         gssi: TEST_GSSI,
         attach: true,
     });
-    test.run_stack(Some(4)); // CMCE drains control -> forwards MmDgnaRequest -> MM emits the PDU
+    // CMCE drains control -> forwards MmDgnaRequest -> MM affiliates + requests CmceSsDgnaAssign ->
+    // CMCE emits the D-FACILITY. Allow a few ticks for the multi-hop.
+    test.run_stack(Some(6));
     let msgs = test.dump_sinks();
 
-    let (addr_ssi, pdu) = find_attach_detach(&msgs).unwrap_or_else(|| {
+    let (addr_ssi, facility) = find_d_facility(&msgs).unwrap_or_else(|| {
         panic!(
-            "DGNA via CMCE must reach MM and emit a D-ATTACH/DETACH GROUP IDENTITY, got {} msgs",
+            "DGNA via CMCE must reach MM and emit a D-FACILITY (SS-DGNA), got {} msgs",
             msgs.len()
         )
     });
     assert_eq!(addr_ssi, TEST_ISSI);
-    let gids = pdu.group_identity_downlink.expect("downlink groups present");
-    assert_eq!(gids[0].gssi, Some(TEST_GSSI));
-    assert!(gids[0].group_identity_attachment.is_some());
+    let body = facility.facility.expect("D-FACILITY must carry an SS-DGNA body");
+    let SsDgnaPdu::Assign(assign) = body.ss_pdu else {
+        panic!("expected an ASSIGN, got {}", body.ss_pdu);
+    };
+    assert_eq!(assign.groups.len(), 1);
+    assert_eq!(assign.groups[0].group_ssi, TEST_GSSI);
+    assert_eq!(
+        assign.groups[0].attachment_mode,
+        GroupIdentityAttachmentMode::AttachedPermanently
+    );
 
     assert!(
         test.config
@@ -375,6 +465,10 @@ fn test_dgna_to_unregistered_issi_is_refused() {
     assert!(
         find_attach_detach(&msgs).is_none(),
         "DGNA to an unregistered ISSI must not emit a group identity PDU"
+    );
+    assert!(
+        find_ss_dgna_request(&msgs).is_none(),
+        "DGNA to an unregistered ISSI must not request an SS-DGNA D-FACILITY"
     );
 }
 

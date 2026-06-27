@@ -209,6 +209,15 @@ pub struct CfgCellInfo {
     /// the rest of the group hears as dead air. Default: false (modern radios reuse the circuit
     /// fine and benefit from the lower retake latency). Opt in only for fleets with legacy sets.
     pub release_group_on_same_speaker_retake: bool,
+
+    /// DGNA air-interface emission. When true (default), an operator regroup goes out as an
+    /// SS-DGNA ASSIGN/DEASSIGN carried in a CMCE D-FACILITY (TS 100 392-12-22 V1.5.1, transport
+    /// EN 300 392-9 V1.7.1) — the SS PDU both *defines* the group (mnemonic/parameters) and
+    /// attaches it, which is what makes a dynamic talkgroup appear and be selectable on a real
+    /// terminal. When false the stack falls back to the legacy MM-only D-ATTACH/DETACH GROUP
+    /// IDENTITY (EN 300 392-2 V2.4.1 cl.16.8) which only toggles the L2 attachment of a group the
+    /// radio already knows. Kept as a rollback switch for the SS-DGNA rollout.
+    pub dgna_use_ss_facility: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -284,6 +293,10 @@ pub struct CellInfoDto {
     /// Tear down a group call on a same-speaker hangtime retake (legacy-Motorola silent-over
     /// workaround). Default: false.
     pub release_group_on_same_speaker_retake: Option<bool>,
+
+    /// Emit operator DGNA as an SS-DGNA D-FACILITY. Absent = true (the SS-DGNA path is the
+    /// default); set false to roll back to the legacy MM D-ATTACH/DETACH GROUP IDENTITY path.
+    pub dgna_use_ss_facility: Option<bool>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -369,6 +382,7 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
                 .collect(),
         }),
         release_group_on_same_speaker_retake: ci.release_group_on_same_speaker_retake.unwrap_or(false),
+        dgna_use_ss_facility: ci.dgna_use_ss_facility.unwrap_or(true),
     }
 }
 

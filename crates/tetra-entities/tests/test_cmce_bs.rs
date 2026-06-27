@@ -1868,7 +1868,9 @@ fn test_u_facility_answered_with_function_not_supported() {
 
     // Build and submit a U-FACILITY uplink PDU.
     let mut sdu = BitBuffer::new_autoexpand(16);
-    UFacility {}.to_bitbuf(&mut sdu).expect("Failed to serialize UFacility");
+    UFacility { facility: None }
+        .to_bitbuf(&mut sdu)
+        .expect("Failed to serialize UFacility");
     sdu.seek(0);
     test.submit_message(lcmc_ind(calling_issi, sdu));
     test.run_stack(Some(1));
@@ -1888,4 +1890,251 @@ fn test_u_facility_answered_with_function_not_supported() {
         pdu.function_not_supported_pointer, 0,
         "pointer 0 = the whole PDU type is not supported"
     );
+}
+
+// ── SS-DGNA over CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; EN 300 392-9 V1.7.1) ────────────────
+//
+// These exercise the full operator-DGNA path: a dashboard `ControlCommand::Dgna` reaches MM, which
+// (SS-DGNA default) affiliates the GSSI and hands the air emission to CMCE, which puts an SS-DGNA
+// ASSIGN/DEASSIGN on the wire inside a D-FACILITY. Plus the uplink U-FACILITY ASSIGN ACK handling.
+mod ss_dgna_tests {
+    use super::*;
+    use tetra_config::bluestation::StackMode;
+    use tetra_core::BitBuffer;
+    use tetra_entities::cmce::cmce_bs::CmceBs;
+    use tetra_entities::mm::mm_bs::MmBs;
+    use tetra_entities::net_control::{ControlCommand, make_control_link};
+    use tetra_pdus::cmce::pdus::d_facility::DFacility;
+    use tetra_pdus::cmce::pdus::u_facility::{UFacility, UFacilitySsBody};
+    use tetra_pdus::cmce::ss_dgna::enums::results::{GroupIdentityAttachmentMode, ResultOfAssignment, ResultOfAttachment};
+    use tetra_pdus::cmce::ss_dgna::fields::group_assignment_ack::GroupAssignmentAck;
+    use tetra_pdus::cmce::ss_dgna::pdus::assign_ack::AssignAck;
+    use tetra_pdus::cmce::ss_dgna::ss_dgna_pdu::SsDgnaPdu;
+    use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
+    use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
+    use tetra_saps::lmm::LmmMleUnitdataInd;
+
+    const DGNA_ISSI: u32 = 2260601;
+    const DGNA_GSSI: u32 = 4242;
+
+    /// Register a terminal in MM by feeding a minimal U-LOCATION-UPDATE-DEMAND, so it is "known"
+    /// and eligible for DGNA. (Self-contained copy of the MM-test helper; the two test binaries
+    /// don't share helpers.)
+    fn register_terminal_mm(test: &mut ComponentTest, issi: u32) {
+        let demand = ULocationUpdateDemand {
+            location_update_type: LocationUpdateType::RoamingLocationUpdating,
+            request_to_append_la: false,
+            cipher_control: false,
+            ciphering_parameters: None,
+            class_of_ms: None,
+            energy_saving_mode: None,
+            la_information: None,
+            ssi: Some(issi as u64),
+            address_extension: None,
+            group_identity_location_demand: None,
+            group_report_response: None,
+            authentication_uplink: None,
+            extended_capabilities: None,
+            proprietary: None,
+        };
+        let mut sdu = BitBuffer::new_autoexpand(32);
+        demand.to_bitbuf(&mut sdu).expect("serialize U-LOCATION-UPDATE-DEMAND");
+        sdu.seek(0);
+        test.submit_message(SapMsg {
+            sap: Sap::LmmSap,
+            src: TetraEntity::Mle,
+            dest: TetraEntity::Mm,
+            msg: SapMsgInner::LmmMleUnitdataInd(LmmMleUnitdataInd {
+                sdu,
+                handle: 0,
+                received_address: TetraAddress::new(issi, SsiType::Issi),
+            }),
+        });
+        test.run_stack(Some(2));
+    }
+
+    /// Pull the first D-FACILITY (and its addressed ISSI) out of a batch of captured MLE messages.
+    fn find_d_facility(msgs: &[SapMsg]) -> Option<(u32, DFacility)> {
+        for m in msgs {
+            if let SapMsgInner::LcmcMleUnitdataReq(ref req) = m.msg {
+                if dl_pdu_type(&req.sdu) != Some(CmcePduTypeDl::DFacility) {
+                    continue;
+                }
+                let mut sdu = BitBuffer::from_bitstr(&req.sdu.to_bitstr());
+                if let Ok(pdu) = DFacility::from_bitbuf(&mut sdu) {
+                    return Some((req.main_address.ssi, pdu));
+                }
+            }
+        }
+        None
+    }
+
+    /// Build a MM(+control)/CMCE stack with the Mle sink, register the terminal, drive a DGNA, and
+    /// return everything captured at the sinks.
+    fn run_dgna(attach: bool) -> (ComponentTest, Vec<SapMsg>) {
+        let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+        test.populate_entities(vec![], vec![TetraEntity::Mle]);
+
+        // CMCE wired exactly like the binary wires the dashboard control link.
+        let (dispatcher, endpoint) = make_control_link();
+        let cmce = CmceBs::new(test.get_shared_config(), None, Some(endpoint));
+        test.register_entity(cmce);
+        // MM owns the group registry; it receives the forwarded MmDgnaRequest over the SAP.
+        let mm = MmBs::new(test.get_shared_config(), None, None);
+        test.register_entity(mm);
+
+        register_terminal_mm(&mut test, DGNA_ISSI);
+        let _ = test.dump_sinks();
+
+        if !attach {
+            // Assign first so there is something to deassign.
+            dispatcher.send(ControlCommand::Dgna {
+                issi: DGNA_ISSI,
+                gssi: DGNA_GSSI,
+                attach: true,
+            });
+            test.run_stack(Some(6));
+            let _ = test.dump_sinks();
+        }
+
+        dispatcher.send(ControlCommand::Dgna {
+            issi: DGNA_ISSI,
+            gssi: DGNA_GSSI,
+            attach,
+        });
+        // CMCE drains control -> MmDgnaRequest -> MM affiliates + CmceSsDgnaAssign -> CMCE D-FACILITY.
+        test.run_stack(Some(6));
+        let msgs = test.dump_sinks();
+        (test, msgs)
+    }
+
+    /// Operator DGNA assign on the SS-DGNA default emits exactly one D-FACILITY{ASSIGN} addressed to
+    /// the target ISSI, with the GSSI and attachment mode 000, and the registry affiliates.
+    #[test]
+    fn test_dgna_assign_emits_d_facility() {
+        debug::setup_logging_verbose();
+        let (test, msgs) = run_dgna(true);
+
+        let (addr_ssi, facility) =
+            find_d_facility(&msgs).unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA assign, got {} msgs", msgs.len()));
+        assert_eq!(addr_ssi, DGNA_ISSI, "D-FACILITY must be addressed to the target ISSI");
+
+        let body = facility.facility.expect("D-FACILITY must carry an SS-DGNA body");
+        let SsDgnaPdu::Assign(assign) = body.ss_pdu else {
+            panic!("expected an ASSIGN, got {}", body.ss_pdu);
+        };
+        assert_eq!(assign.groups.len(), 1, "exactly one group assigned");
+        assert_eq!(assign.groups[0].group_ssi, DGNA_GSSI);
+        assert_eq!(
+            assign.groups[0].attachment_mode,
+            GroupIdentityAttachmentMode::AttachedPermanently,
+            "attachment mode 000 (attached permanently)"
+        );
+        assert!(assign.ack_requested, "ASSIGN must request an ACK");
+
+        assert!(
+            test.config
+                .state_read()
+                .subscribers
+                .attached_groups_of(DGNA_ISSI)
+                .contains(&DGNA_GSSI),
+            "DGNA assign must affiliate the GSSI in the subscriber registry"
+        );
+    }
+
+    /// Operator DGNA deassign emits a D-FACILITY{DEASSIGN} naming the GSSI and removes the
+    /// affiliation.
+    #[test]
+    fn test_dgna_deassign_emits_d_facility_deassign() {
+        debug::setup_logging_verbose();
+        let (test, msgs) = run_dgna(false);
+
+        let (addr_ssi, facility) = find_d_facility(&msgs)
+            .unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA deassign, got {} msgs", msgs.len()));
+        assert_eq!(addr_ssi, DGNA_ISSI);
+
+        let body = facility.facility.expect("D-FACILITY must carry an SS-DGNA body");
+        let SsDgnaPdu::Deassign(deassign) = body.ss_pdu else {
+            panic!("expected a DEASSIGN, got {}", body.ss_pdu);
+        };
+        assert_eq!(deassign.groups.len(), 1);
+        assert_eq!(deassign.groups[0].group_ssi, DGNA_GSSI);
+
+        assert!(
+            !test
+                .config
+                .state_read()
+                .subscribers
+                .attached_groups_of(DGNA_ISSI)
+                .contains(&DGNA_GSSI),
+            "DGNA deassign must remove the GSSI from the subscriber registry"
+        );
+    }
+
+    /// DGNA to a terminal MM does not know is refused before any air emission: no D-FACILITY.
+    #[test]
+    fn test_dgna_to_unregistered_issi_emits_no_d_facility() {
+        debug::setup_logging_verbose();
+        let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+        test.populate_entities(vec![], vec![TetraEntity::Mle]);
+
+        let (dispatcher, endpoint) = make_control_link();
+        let cmce = CmceBs::new(test.get_shared_config(), None, Some(endpoint));
+        test.register_entity(cmce);
+        let mm = MmBs::new(test.get_shared_config(), None, None);
+        test.register_entity(mm);
+
+        // No registration first — MM must drop the command, so CMCE never emits a D-FACILITY.
+        dispatcher.send(ControlCommand::Dgna {
+            issi: 9_999_002,
+            gssi: DGNA_GSSI,
+            attach: true,
+        });
+        test.run_stack(Some(6));
+        let msgs = test.dump_sinks();
+
+        assert!(
+            find_d_facility(&msgs).is_none(),
+            "DGNA to an unregistered ISSI must not emit a D-FACILITY"
+        );
+    }
+
+    /// An uplink U-FACILITY carrying an SS-DGNA ASSIGN ACK is recognised and consumed (it confirms a
+    /// regroup whose BS state is already committed). It must NOT trigger D-CMCE-FUNCTION-NOT-SUPPORTED.
+    #[test]
+    fn test_u_facility_assign_ack_handled() {
+        debug::setup_logging_verbose();
+
+        let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+        test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
+
+        // Build a U-FACILITY{ASSIGN ACK} as the affected MS would send back.
+        let ack = AssignAck {
+            acks: vec![GroupAssignmentAck {
+                group_ssi: DGNA_GSSI,
+                group_extension: None,
+                result_of_assignment: ResultOfAssignment::Accepted,
+                result_of_attachment: ResultOfAttachment::Attached,
+            }],
+        };
+        let mut sdu = BitBuffer::new_autoexpand(32);
+        UFacility {
+            facility: Some(UFacilitySsBody {
+                routeing: 0,
+                ss_pdu: SsDgnaPdu::AssignAck(ack),
+            }),
+        }
+        .to_bitbuf(&mut sdu)
+        .expect("serialize U-FACILITY ASSIGN ACK");
+        sdu.seek(0);
+
+        test.submit_message(lcmc_ind(DGNA_ISSI, sdu));
+        test.run_stack(Some(1));
+        let msgs = test.dump_sinks();
+
+        assert!(
+            find_lcmc_req(&msgs, DGNA_ISSI, CmcePduTypeDl::CmceFunctionNotSupported).is_none(),
+            "an SS-DGNA ASSIGN ACK must be consumed, not answered with D-CMCE-FUNCTION-NOT-SUPPORTED"
+        );
+    }
 }

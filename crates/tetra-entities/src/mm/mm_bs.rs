@@ -1473,13 +1473,15 @@ impl MmBs {
     const DGNA_CLASS_OF_USAGE: u8 = 4;
 
     /// DGNA (Dynamic Group Number Assignment) — BS-initiated group attach/detach for one terminal,
-    /// driven from the dashboard. ETSI EN 300 392-2 §16 (SS-DGNA).
+    /// driven from the dashboard. SS-DGNA = TS 100 392-12-22 V1.5.1; legacy fallback = EN 300 392-2
+    /// V2.4.1 cl.16.8.
     ///
     /// Local-only: updates the BS-side affiliation (so local group calls and group SDS route to the
-    /// terminal) and pushes an unsolicited D-ATTACH/DETACH GROUP IDENTITY to the radio so it adds or
-    /// removes the group in its own list. Brew is intentionally not involved.
+    /// terminal) and asks the air-interface to be updated. By default that is an SS-DGNA
+    /// ASSIGN/DEASSIGN handed to CMCE for a D-FACILITY; with `dgna_use_ss_facility = false` it falls
+    /// back to an unsolicited MM D-ATTACH/DETACH GROUP IDENTITY. Brew is intentionally not involved.
     ///
-    /// Returns `true` if the command was accepted and a PDU was sent to the terminal.
+    /// Returns `true` if the command was accepted and the regroup was put on the air.
     fn do_dgna(&mut self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) -> bool {
         let verb = if attach { "assign" } else { "deassign" };
 
@@ -1515,8 +1517,24 @@ impl MmBs {
             }
         }
 
-        // Push the unsolicited D-ATTACH/DETACH GROUP IDENTITY to the terminal.
-        self.send_d_attach_detach_group_identity(queue, issi, gssi, attach);
+        // Put the regroup on the air. By default this is an SS-DGNA ASSIGN/DEASSIGN carried in a
+        // CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; transport EN 300 392-9 V1.7.1) — that SS PDU
+        // both *defines* the group and attaches it (cl.6.5.2.1), which is what makes the dynamic
+        // talkgroup appear and be selectable on a real terminal. The group attach/detach state and
+        // affiliation above are unchanged; CMCE owns only the air-interface emission, so we hand the
+        // request off over the Control SAP. The `dgna_use_ss_facility = false` rollback keeps the
+        // legacy MM-only D-ATTACH/DETACH GROUP IDENTITY (EN 300 392-2 V2.4.1 cl.16.8), which only
+        // toggles the L2 attachment of a group the radio already knows.
+        if self.config.config().cell.dgna_use_ss_facility {
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Mm,
+                dest: TetraEntity::Cmce,
+                msg: SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach },
+            });
+        } else {
+            self.send_d_attach_detach_group_identity(queue, issi, gssi, attach);
+        }
 
         // Persist for restart recovery (debounced) and refresh the dashboard with the full group set.
         self.recovery_mark_dirty();

@@ -3,15 +3,122 @@ use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, SsiType, TetraAddress};
 use tetra_pdus::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
 use tetra_pdus::cmce::pdus::cmce_function_not_supported::CmceFunctionNotSupported;
+use tetra_pdus::cmce::pdus::d_facility::{DFacility, DFacilitySsBody};
+use tetra_pdus::cmce::pdus::u_facility::UFacility;
+use tetra_pdus::cmce::ss_dgna::enums::results::GroupIdentityAttachmentMode;
+use tetra_pdus::cmce::ss_dgna::fields::group_assignment::GroupAssignment;
+use tetra_pdus::cmce::ss_dgna::fields::group_deassignment::GroupDeassignment;
+use tetra_pdus::cmce::ss_dgna::pdus::assign::Assign;
+use tetra_pdus::cmce::ss_dgna::pdus::deassign::Deassign;
+use tetra_pdus::cmce::ss_dgna::ss_dgna_pdu::SsDgnaPdu;
 use tetra_saps::lcmc::LcmcMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
-/// Clause 12 Supplementary Services CMCE sub-entity
+/// Clause 12 Supplementary Services CMCE sub-entity.
+///
+/// Hosts the BS side of SS-DGNA (TS 100 392-12-22 V1.5.1): it emits the
+/// SwMI-initiated ASSIGN/DEASSIGN as a CMCE D-FACILITY (the FE2 role,
+/// cl.4.1-4.2) and consumes the affected MS's ASSIGN ACK / DEASSIGN ACK off the
+/// uplink U-FACILITY. The group registry and affiliation state are owned by MM;
+/// this sub-entity only puts the SS PDU on the air and logs the ACK.
 pub struct SsBsSubentity {}
+
+/// Class of usage advertised in SS-DGNA group assignments. 4 mirrors the value
+/// the MM affiliation/ACK path uses (`mm_bs.rs` `DGNA_CLASS_OF_USAGE`), so an
+/// SS-DGNA-assigned group behaves identically to one the radio affiliated
+/// itself. EN 300 392-2 V2.4.1 cl.16.10.6.
+const DGNA_CLASS_OF_USAGE: u8 = 4;
 
 impl SsBsSubentity {
     pub fn new() -> Self {
         SsBsSubentity {}
+    }
+
+    /// Emit an SS-DGNA D-FACILITY to a single ISSI: an ASSIGN when `attach`, a
+    /// DEASSIGN otherwise. The SS PDU is wrapped in the EN 300 392-9 V1.7.1
+    /// Table 4 SS-PDU container (Routeing = 00, one SS PDU) inside the CMCE
+    /// D-FACILITY (EN 300 392-2 V2.4.1 cl.14.7.1.7).
+    ///
+    /// ASSIGN uses attachment mode 000 (attached permanently, TS Table 51) so
+    /// the PDU both defines and attaches the group in one step (cl.6.5.2.1) —
+    /// the same MLE handoff the MM D-ATTACH does, but only after the radio has
+    /// the group definition. No mnemonic is carried in v1: a real terminal shows
+    /// its own provisioned name for the GSSI, or the bare number.
+    ///
+    /// Reliability rests on the LLC ACK of the FACILITY transport, not a
+    /// DGNA-layer retransmit (cl.6.6 mandates no protocol timer), so this is sent
+    /// with `Layer2Service::Acknowledged` — the same choice the MM DGNA path made
+    /// for its individually-addressed D-ATTACH.
+    pub fn send_d_facility_dgna(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) {
+        let ss_pdu = if attach {
+            SsDgnaPdu::Assign(Assign {
+                groups: vec![GroupAssignment {
+                    group_ssi: gssi,
+                    group_extension: None,
+                    // 000 = attached permanently: no re-attach at the next ITSI attach / location
+                    // update, matching the persistent (lifetime=0) MM D-ATTACH the legacy path sent.
+                    attachment_mode: GroupIdentityAttachmentMode::AttachedPermanently,
+                    class_of_usage: Some(DGNA_CLASS_OF_USAGE),
+                    // No group-name config in v1 — the radio displays its own provisioned name.
+                    mnemonic: None,
+                    security_related_information: None,
+                    additional_group_information: None,
+                    vgssi: None,
+                }],
+                // Request the ASSIGN ACK so the air-interface outcome is observable in logs;
+                // BS-side state is already committed by MM at issue time.
+                ack_requested: true,
+            })
+        } else {
+            SsDgnaPdu::Deassign(Deassign {
+                groups: vec![GroupDeassignment {
+                    group_ssi: gssi,
+                    group_extension: None,
+                }],
+                ack_requested: true,
+            })
+        };
+
+        let pdu = DFacility {
+            facility: Some(DFacilitySsBody { routeing: 0, ss_pdu }),
+        };
+
+        let mut sdu = BitBuffer::new_autoexpand(32);
+        if let Err(e) = pdu.to_bitbuf(&mut sdu) {
+            tracing::error!("CMCE: failed serializing SS-DGNA D-FACILITY for ISSI {}: {:?}", issi, e);
+            return;
+        }
+        sdu.seek(0);
+        tracing::debug!(
+            "-> D-FACILITY (SS-DGNA {}) gssi={} issi={} sdu {}",
+            if attach { "assign" } else { "deassign" },
+            gssi,
+            issi,
+            sdu.dump_bin()
+        );
+
+        queue.push_back(SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu,
+                // Unsolicited, BS-initiated — no inbound L2 context to echo.
+                handle: 0,
+                endpoint_id: 0,
+                link_id: 0,
+                // Individually-addressed SS PDU: acknowledged BL-DATA, so the LLC layer carries the
+                // delivery guarantee the SS-DGNA layer does not (TS 100 392-12-22 cl.6.6).
+                layer2service: Layer2Service::Acknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                chan_alloc: None,
+                main_address: TetraAddress::new(issi, SsiType::Issi),
+                tx_reporter: None,
+            }),
+        });
     }
 
     pub fn route_re_deliver(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
@@ -21,16 +128,70 @@ impl SsBsSubentity {
             tracing::error!("BUG: unexpected message or state -- routing error");
             return;
         };
+        let issi = prim.received_tetra_address.ssi;
 
-        // ETSI EN 300 392-2 §14.7.2.5:
-        // BS does not support supplementary services (SS). Respond with
-        // D-CMCE-FUNCTION-NOT-SUPPORTED, function_not_supported_pointer=0
+        // Try to parse the U-FACILITY as an SS-DGNA carrier. An ASSIGN ACK /
+        // DEASSIGN ACK is the affected MS confirming a regroup we already issued;
+        // BS-side group state was committed optimistically by MM at issue time,
+        // so this is confirmation/telemetry only (mirrors MM's
+        // rx_u_attach_detach_group_identity_ack). We do NOT reply
+        // function-not-supported in that case.
+        match UFacility::from_bitbuf(&mut prim.sdu) {
+            Ok(UFacility {
+                facility: Some(body),
+            }) => {
+                match &body.ss_pdu {
+                    SsDgnaPdu::AssignAck(ack) => {
+                        for ie in &ack.acks {
+                            tracing::info!(
+                                "SS-DGNA: ISSI {} ASSIGN ACK gssi={} assignment={} attachment={}",
+                                issi,
+                                ie.group_ssi,
+                                ie.result_of_assignment,
+                                ie.result_of_attachment
+                            );
+                        }
+                    }
+                    SsDgnaPdu::DeassignAck(ack) => {
+                        for ie in &ack.acks {
+                            tracing::info!(
+                                "SS-DGNA: ISSI {} DEASSIGN ACK gssi={} deassignment={}",
+                                issi,
+                                ie.group_ssi,
+                                ie.result_of_deassignment
+                            );
+                        }
+                    }
+                    // An MS-originated ASSIGN/DEASSIGN would be the dispatcher (FE3) role, which the
+                    // BS does not act as in v1. Acknowledge nothing; the radio expects no reply to
+                    // an SS PDU we don't implement, and a function-not-supported here would be wrong
+                    // since the SS *is* recognised.
+                    other => {
+                        tracing::warn!("SS-DGNA: ignoring unsupported uplink SS-DGNA PDU from ISSI {}: {}", issi, other);
+                    }
+                }
+                return;
+            }
+            // Empty / non-DGNA U-FACILITY: a genuine SS request the BS does not support.
+            Ok(UFacility { facility: None }) => {
+                tracing::debug!(
+                    "CMCE: received empty U-FACILITY from ISSI {} — responding D-CMCE-FUNCTION-NOT-SUPPORTED",
+                    issi
+                );
+            }
+            Err(e) => {
+                tracing::debug!(
+                    "CMCE: U-FACILITY from ISSI {} not a recognised SS-DGNA PDU ({:?}) — responding D-CMCE-FUNCTION-NOT-SUPPORTED",
+                    issi,
+                    e
+                );
+            }
+        }
+
+        // ETSI EN 300 392-2 V2.4.1 cl.14.7.2.5:
+        // The BS does not support this supplementary service. Respond with
+        // D-CMCE-FUNCTION-NOT-SUPPORTED, function_not_supported_pointer = 0
         // (the PDU type itself is not supported, not a specific field).
-        tracing::debug!(
-            "CMCE: received U-FACILITY from ISSI {} — responding D-CMCE-FUNCTION-NOT-SUPPORTED",
-            prim.received_tetra_address.ssi
-        );
-
         let response = CmceFunctionNotSupported {
             not_supported_pdu_type: CmcePduTypeUl::UFacility.into_raw() as u8,
             call_identifier_present: false,
@@ -62,7 +223,7 @@ impl SsBsSubentity {
                 stealing_permission: false,
                 stealing_repeats_flag: false,
                 chan_alloc: None,
-                main_address: TetraAddress::new(prim.received_tetra_address.ssi, SsiType::Issi),
+                main_address: TetraAddress::new(issi, SsiType::Issi),
                 tx_reporter: None,
             }),
         });
