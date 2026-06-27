@@ -2526,6 +2526,19 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           </div>
           <span id="bts-access" class="bts-access">—</span>
         </div>
+        <!-- Dual-Carrier ON/OFF — applied via controlled service restart -->
+        <div class="bts-access-bar">
+          <div class="bts-access-info">
+            <span class="bts-access-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1a10 10 0 0 1 0-8.2"/><path d="M19.1 7.9a10 10 0 0 1 0 8.2"/><path d="M7.8 13.2a5 5 0 0 1 0-2.4"/><path d="M16.2 10.8a5 5 0 0 1 0 2.4"/><circle cx="12" cy="12" r="1.5"/></svg>
+            </span>
+            <div>
+              <div class="bts-access-title" data-i18n="dual_carrier">Dual Carrier</div>
+              <div class="bts-access-sub" id="dc-sub">—</div>
+            </div>
+          </div>
+          <span class="sw"><input type="checkbox" id="dc-toggle" onchange="onDualCarrierToggle(this)"><i></i></span>
+        </div>
       </div>
 
       <!-- TS Visualizer -->
@@ -4029,6 +4042,11 @@ const LANGS={
     active_calls:'Active Calls',circuits:'circuits in use',
     registered_terminals:'Registered Radios',
     bts_details:'TETRA BTS Details',bts_tx:'TX Freq',bts_rx:'RX Freq',bts_shift:'Duplex Shift',bts_rate:'Sample Rate',
+    dual_carrier:'Dual Carrier',dc_on_sub:'On · secondary carrier #{c}',dc_off_sub:'Off · single carrier',
+    dc_enter_carrier:'Secondary carrier number (e.g. main carrier ±1):',dc_bad_carrier:'Please enter a valid carrier number.',
+    dc_confirm_on:'Enable Dual Carrier? This RESTARTS the base station and briefly drops all active calls.',
+    dc_confirm_off:'Disable Dual Carrier? This RESTARTS the base station and briefly drops all active calls.',
+    dc_applying:'Applying…',dc_restarting:'Restarting to apply… reconnecting shortly.',dc_failed:'Could not change Dual Carrier',
     bts_la:'Location Area',bts_cc:'Colour Code',bts_carrier:'Main Carrier',bts_band:'Band',
     bts_access:'Registration Access',bts_wl_entries:'whitelisted ISSI',bts_wl_open:'Open — all ISSI may register',
     readability:'Readability',size_small:'Small',size_small_d:'Compact · normal contrast',size_medium:'Medium',size_medium_d:'Default · comfortable',size_high:'High',size_high_d:'Larger · stronger contrast',size_ultra:'Ultra',size_ultra_d:'Largest · maximum contrast',sdr:'SDR',power:'Power',
@@ -4136,6 +4154,11 @@ const LANGS={
     active_calls:'Apeluri Active',circuits:'circuite active',
     registered_terminals:'Radiouri Înregistrate',
     bts_details:'Detalii BTS TETRA',bts_tx:'Frecvență TX',bts_rx:'Frecvență RX',bts_shift:'Decalaj Duplex',bts_rate:'Rată Eșantionare',
+    dual_carrier:'Dual Carrier',dc_on_sub:'Pornit · carrier secundar #{c}',dc_off_sub:'Oprit · un singur carrier',
+    dc_enter_carrier:'Numărul carrier-ului secundar (ex. carrier principal ±1):',dc_bad_carrier:'Introdu un număr de carrier valid.',
+    dc_confirm_on:'Pornești Dual Carrier? Asta REPORNEȘTE stația de bază și pică toate apelurile active câteva secunde.',
+    dc_confirm_off:'Oprești Dual Carrier? Asta REPORNEȘTE stația de bază și pică toate apelurile active câteva secunde.',
+    dc_applying:'Se aplică…',dc_restarting:'Repornește pentru aplicare… reconectare în scurt timp.',dc_failed:'Nu am putut schimba Dual Carrier',
     bts_la:'Zonă (LA)',bts_cc:'Cod Culoare',bts_carrier:'Purtătoare Princ.',bts_band:'Bandă',
     bts_access:'Acces Înregistrare',bts_wl_entries:'ISSI permise',bts_wl_open:'Deschis — orice ISSI se poate înregistra',
     readability:'Lizibilitate',size_small:'Mic',size_small_d:'Compact · contrast normal',size_medium:'Mediu',size_medium_d:'Implicit · confortabil',size_high:'Mare',size_high_d:'Mai mare · contrast sporit',size_ultra:'Ultra',size_ultra_d:'Cel mai mare · contrast maxim',sdr:'SDR',power:'Consum',
@@ -4609,7 +4632,7 @@ function showPage(name,el){
   if(el)el.classList.add('active');
   else{const nav=document.getElementById('nav-'+name);if(nav)nav.classList.add('active');}
   document.getElementById('topbar-title').textContent=t(name)||name;
-  if(name==='stations'){loadBtsInfoLegacy();}
+  if(name==='stations'){loadBtsInfoLegacy();loadDualCarrier();}
   if(name==='sdslog'){loadSdsLog();}
   if(name==='health'){loadHealthIntegrations();}
   if(name==='asterisk'){loadAsteriskStatus();loadSnomNotify();}
@@ -6706,6 +6729,40 @@ function loadBrightness(){
 const BTS_TOWER_ICON='<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v13"/><path d="M8.5 22h7"/><path d="M7 8a6 6 0 0 1 10 0"/><path d="M4.5 6a9 9 0 0 1 15 0"/></svg>';
 const BTS_CLOCK_ICON='<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
 // TETRA BTS Details card — static cell + RF identity pulled from config (one fetch).
+// ── Dual-Carrier ON/OFF (first-page toggle; applied via controlled restart) ──
+let dcState={enabled:false,secondary_carrier:null,active:false,main_carrier:null};
+function setDcSub(txt){const e=document.getElementById('dc-sub');if(e)e.textContent=txt;}
+async function loadDualCarrier(){
+  try{
+    const r=await fetch('/api/dualcarrier',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    dcState=d;
+    const tg=document.getElementById('dc-toggle');
+    // Don't fight the user mid-toggle (while focused or a request is in flight).
+    if(tg&&!tg.disabled&&document.activeElement!==tg){tg.checked=!!d.active;}
+    setDcSub(d.active?t('dc_on_sub',{c:d.secondary_carrier}):t('dc_off_sub'));
+  }catch{}
+}
+async function onDualCarrierToggle(el){
+  const want=el.checked;
+  let secondary=dcState.secondary_carrier;
+  if(want&&!secondary){
+    const def=dcState.main_carrier?(dcState.main_carrier+1):'';
+    const v=prompt(t('dc_enter_carrier'),def);
+    if(v===null){el.checked=false;return;}
+    secondary=parseInt(v,10);
+    if(!Number.isInteger(secondary)||secondary<=0){el.checked=false;alert(t('dc_bad_carrier'));return;}
+  }
+  if(!confirm(want?t('dc_confirm_on'):t('dc_confirm_off'))){el.checked=!want;return;}
+  el.disabled=true;setDcSub(t('dc_applying'));
+  try{
+    const body=want?{enabled:true,secondary_carrier:secondary}:{enabled:false};
+    const r=await fetch('/api/dualcarrier',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.ok){setDcSub(t('dc_restarting'));}
+    else{const err=await r.text();alert(t('dc_failed')+': '+err);el.checked=!want;el.disabled=false;loadDualCarrier();}
+  }catch(e){alert(t('conn_error'));el.checked=!want;el.disabled=false;}
+}
 async function loadBtsInfo(){
   try{
     const r=await fetch('/api/btsinfo',{credentials:'same-origin'});
@@ -8065,6 +8122,7 @@ async function boot(){
   // instead of waiting for the user to open the System tab.
   loadSystemInfo();
   loadBtsInfoLegacy();  // TETRA BTS Details card on the default (Radios) page
+  loadDualCarrier();    // Dual-Carrier ON/OFF toggle state
   wifiProbeAvailable(); // toggles the WiFi nav item
   checkUpdate();
 }
