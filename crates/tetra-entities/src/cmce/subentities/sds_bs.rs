@@ -588,6 +588,79 @@ impl SdsBsSubentity {
         true
     }
 
+    /// Handle an already-built SDS Type-4 SDU from the Control entity (FH-BUG-052).
+    ///
+    /// Unlike [`Self::rx_sds_from_control`], `payload` here is a COMPLETE Type-4 SDU whose first byte
+    /// is its own protocol identifier (e.g. 0xC3 for a TPG2200 Call-Out). It MUST be delivered
+    /// verbatim — we do NOT prepend the `[0x82, 0x04, mr, 0x01]` SDS-TL simple-text header that the
+    /// SendSds path adds, because that would corrupt the SDU. Routing is otherwise identical.
+    pub fn rx_raw_sds_type4_from_control(&mut self, queue: &mut MessageQueue, message: ControlCommand) -> bool {
+        let ControlCommand::SendRawSdsType4 {
+            handle,
+            source_ssi,
+            dest_ssi,
+            dest_is_group,
+            len_bits,
+            payload,
+        } = message
+        else {
+            tracing::error!("SDS: rx_raw_sds_type4_from_control expected SendRawSdsType4 command, got unexpected command type");
+            return false;
+        };
+
+        tracing::info!(
+            "SDS: received RAW Type-4 from Control {}: {} -> {}, type={}, {} bits",
+            handle,
+            source_ssi,
+            dest_ssi,
+            dest_is_group.then(|| "GSSI").unwrap_or("ISSI"),
+            len_bits
+        );
+
+        // Deliver the payload exactly as supplied — it is already a full Type-4 SDU. No SDS-TL wrap.
+        let sds_data = SdsUserData::Type4(len_bits, payload);
+
+        self.log_sds("tx", source_ssi, dest_ssi, dest_is_group, &sds_data);
+
+        // Same routing as rx_sds_from_control: dashboard-originated remote SSIs go over Brew; local
+        // subscribers/groups and on-air requesters are served over our own RF.
+        const DASHBOARD_ISSI: u32 = 9999;
+        let is_local_issi = !dest_is_group && self.config.state_read().subscribers.is_registered(dest_ssi);
+        let is_local_group = dest_is_group && self.config.state_read().subscribers.has_group_members(dest_ssi);
+
+        if source_ssi == DASHBOARD_ISSI && !is_local_issi && !is_local_group && net_brew::feature_sds_enabled(&self.config) {
+            tracing::info!("SDS: forwarding raw Type-4 dashboard SDS to Brew: {} -> {}", source_ssi, dest_ssi);
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                msg: SapMsgInner::CmceSdsData(CmceSdsData {
+                    source_issi: source_ssi,
+                    dest_issi: dest_ssi,
+                    user_defined_data: sds_data,
+                }),
+            });
+            return true;
+        }
+
+        if !dest_is_group && !is_local_issi {
+            tracing::debug!(
+                "SDS: raw Type-4 dest ISSI {} from Control not in local registry; delivering over RF anyway",
+                dest_ssi
+            );
+        }
+
+        self.send_d_sds_data(
+            queue,
+            source_ssi,
+            dest_ssi,
+            if dest_is_group { SsiType::Gssi } else { SsiType::Issi },
+            sds_data,
+        );
+
+        true
+    }
+
     /// Handle incoming U-STATUS from a local MS (via RF uplink)
     pub fn route_status_deliver(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("SDS route_status_deliver");

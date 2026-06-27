@@ -21,6 +21,11 @@ use tetra_saps::control::sds::CmceSdsData;
 use tetra_saps::lcmc::{LcmcMleUnitdataInd, LcmcMleUnitdataReq};
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 
+use tetra_entities::cmce::cmce_bs::CmceBs;
+use tetra_entities::net_control::{ControlCommand, make_control_link};
+use tetra_entities::tpg2200::build_tpg2200_callout_payload;
+use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
+
 use crate::common::ComponentTest;
 
 /// Helper: register a subscriber ISSI in the StackState subscriber registry
@@ -111,6 +116,67 @@ fn test_sds_local_delivery() {
             assert_eq!(prim.main_address.ssi, 2000001);
             assert_eq!(prim.main_address.ssi_type, SsiType::Issi);
         }
+    }
+}
+
+/// FH-BUG-052: a TPG2200 / DAPNET Call-Out arrives as ControlCommand::SendRawSdsType4 — an
+/// already-built Type-4 SDU whose first byte is its own protocol id (0xC3). CMCE used to have no
+/// match arm for it and silently dropped it. It must now be delivered verbatim, with NO SDS-TL
+/// [0x82,..] wrap, as a D-SDS-DATA to the local destination.
+#[test]
+fn test_raw_sds_type4_from_control_delivered_verbatim() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Brew]);
+
+    // CMCE wired to a control endpoint so we can inject the raw-SDS command (mirrors test_mm_bs).
+    let (dispatcher, endpoint) = make_control_link();
+    let cmce = CmceBs::new(test.get_shared_config(), None, Some(endpoint));
+    test.register_entity(cmce);
+
+    const DEST: u32 = 2628191;
+    register_subscriber(&mut test, DEST);
+
+    let payload = build_tpg2200_callout_payload(1, "ALARM");
+    assert_eq!(payload[0], 0xC3, "sanity: a TPG2200 Call-Out SDU starts with PID 0xC3");
+
+    dispatcher.send(ControlCommand::SendRawSdsType4 {
+        handle: 0,
+        source_ssi: 9999,
+        dest_ssi: DEST,
+        dest_is_group: false,
+        len_bits: (payload.len() * 8) as u16,
+        payload: payload.clone(),
+    });
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+
+    // The fix: the command is no longer dropped — exactly one D-SDS-DATA is delivered locally.
+    assert_eq!(count_d_sds_data(&msgs), 1, "raw Type-4 SDS must be delivered, not ignored (FH-BUG-052)");
+    assert_eq!(count_brew_sds(&msgs), 0, "a local dest must not be forwarded to Brew");
+
+    // And the Type-4 SDU is delivered byte-for-byte, with NO SDS-TL wrap prepended.
+    let prim = msgs
+        .iter()
+        .find_map(|m| match &m.msg {
+            SapMsgInner::LcmcMleUnitdataReq(p) if m.dest == TetraEntity::Mle => Some(p),
+            _ => None,
+        })
+        .expect("a D-SDS-DATA at the Mle sink");
+    assert_eq!(prim.main_address.ssi, DEST);
+    assert_eq!(prim.main_address.ssi_type, SsiType::Issi);
+
+    let mut sdu = prim.sdu.clone();
+    sdu.seek(0);
+    let d_sds = DSdsData::from_bitbuf(&mut sdu).expect("decode D-SDS-DATA");
+    match d_sds.user_defined_data {
+        SdsUserData::Type4(_, data) => {
+            assert_eq!(data, payload, "raw Type-4 payload must be delivered verbatim");
+            assert_eq!(data[0], 0xC3, "no SDS-TL 0x82 wrap may be added to a raw Type-4 SDU");
+        }
+        other => panic!("expected Type-4 user data, got {:?}", other),
     }
 }
 
