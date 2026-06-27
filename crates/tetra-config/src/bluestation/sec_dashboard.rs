@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::Deserialize;
+use std::collections::HashMap;
 use toml::Value;
 
 /// Dashboard HTTP server configuration
@@ -67,8 +67,12 @@ pub struct CfgDashboardDto {
     pub extra: HashMap<String, Value>,
 }
 
-fn default_port() -> u16 { 8080 }
-fn default_bind() -> String { "0.0.0.0".to_string() }
+fn default_port() -> u16 {
+    8080
+}
+fn default_bind() -> String {
+    "0.0.0.0".to_string()
+}
 
 pub fn apply_dashboard_patch(src: CfgDashboardDto) -> Result<CfgDashboard, String> {
     if src.port == 0 {

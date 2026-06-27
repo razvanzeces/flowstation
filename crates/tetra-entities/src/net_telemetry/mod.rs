@@ -16,6 +16,6 @@ pub use self::events::TelemetryEvent;
 pub use self::worker::TelemetryWorker;
 
 /// Sent as subprotocol in WebSocket handshake
-pub const TELEMETRY_PROTOCOL_VERSION: &str = "bluestation-telemetry-v1";
+pub const TELEMETRY_PROTOCOL_VERSION: &str = "bluestation-telemetry-v2";
 pub const TELEMETRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 pub const TELEMETRY_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);

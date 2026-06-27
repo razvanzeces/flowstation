@@ -21,8 +21,7 @@ pub fn parse_whitelist_body(body: &str) -> Result<Vec<u32>, String> {
 
     // Try object form first: {"issi_whitelist":[...]}
     let arr_value = if trimmed.starts_with('{') {
-        let v: serde_json::Value =
-            serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON object: {e}"))?;
+        let v: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON object: {e}"))?;
         v.get("issi_whitelist")
             .cloned()
             .ok_or_else(|| "missing 'issi_whitelist' field".to_string())?
@@ -40,9 +39,7 @@ pub fn parse_whitelist_body(body: &str) -> Result<Vec<u32>, String> {
         let n = if let Some(u) = item.as_u64() {
             u
         } else if let Some(s) = item.as_str() {
-            s.trim()
-                .parse::<u64>()
-                .map_err(|_| format!("'{s}' is not a valid ISSI"))?
+            s.trim().parse::<u64>().map_err(|_| format!("'{s}' is not a valid ISSI"))?
         } else {
             return Err(format!("invalid ISSI entry: {item}"));
         };
@@ -109,10 +106,7 @@ pub fn write_whitelist_to_toml(config_path: &str, list: &[u32]) -> std::io::Resu
 
         // Within [security], replace an existing issi_whitelist line (skip comments).
         if in_security && !wrote_line {
-            let is_whitelist_line = trimmed
-                .trim_start_matches('#')
-                .trim_start()
-                .starts_with("issi_whitelist");
+            let is_whitelist_line = trimmed.trim_start_matches('#').trim_start().starts_with("issi_whitelist");
             // Only replace an *active* (uncommented) assignment. A commented example is
             // left in place and we add the active line just after it.
             if is_whitelist_line && !trimmed.starts_with('#') {

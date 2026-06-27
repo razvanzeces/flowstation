@@ -60,9 +60,7 @@ pub enum BrewEvent {
     /// SDS report received
     SdsReport { uuid: Uuid, status: u8 },
 
-
     // ── Circuit / individual call events ──────────────────────────
-
     /// TetraPack initiates a circuit call to a local MS (inbound SETUP_REQUEST)
     CircuitSetupRequest {
         uuid: Uuid,
@@ -145,11 +143,12 @@ pub enum BrewCommand {
     /// Send SDS report to Brew (delivery acknowledgement)
     SendSdsReport { uuid: Uuid, status: u8 },
 
-
     // ── Circuit / individual call commands ────────────────────────
-
     /// CMCE → Brew: initiate a circuit call setup to TetraPack (outbound)
-    SendSetupRequest { uuid: Uuid, call: super::protocol::BrewCircularCall },
+    SendSetupRequest {
+        uuid: Uuid,
+        call: super::protocol::BrewCircularCall,
+    },
 
     /// CMCE → Brew: accept an inbound circuit call (BS is the called side)
     SendSetupAccept { uuid: Uuid },
@@ -161,7 +160,10 @@ pub enum BrewCommand {
     SendCallAlert { uuid: Uuid },
 
     /// CMCE → Brew: called MS accepted the call
-    SendConnectRequest { uuid: Uuid, call: super::protocol::BrewCircularCall },
+    SendConnectRequest {
+        uuid: Uuid,
+        call: super::protocol::BrewCircularCall,
+    },
 
     /// CMCE → Brew: call confirmed and connected
     SendConnectConfirm { uuid: Uuid, grant: u8, permission: u8 },
@@ -593,7 +595,11 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 if let BrewCallPayload::GroupTransmission(gt) = cc.payload {
                     tracing::info!(
                         "BrewWorker: GROUP_TX uuid={} src={} dst={} prio={} service={} mnemonic={}",
-                        cc.identifier, gt.source, gt.destination, gt.priority, gt.service,
+                        cc.identifier,
+                        gt.source,
+                        gt.destination,
+                        gt.priority,
+                        gt.service,
                         gt.mnemonic.is_some()
                     );
                     // Detect server version from mnemonic presence (v1 includes 34-byte mnemonic)
@@ -627,12 +633,15 @@ impl<T: NetworkTransport> BrewWorker<T> {
 
             CALL_STATE_SETUP_REQUEST => {
                 if let BrewCallPayload::CircularCall(call) = cc.payload {
-                    tracing::info!("BrewWorker: SETUP_REQUEST uuid={} src={} dst={} number='{}' duplex={}",
-                        cc.identifier, call.source, call.destination, call.number, call.duplex);
-                    let _ = self.event_sender.send(BrewEvent::CircuitSetupRequest {
-                        uuid: cc.identifier,
-                        call,
-                    });
+                    tracing::info!(
+                        "BrewWorker: SETUP_REQUEST uuid={} src={} dst={} number='{}' duplex={}",
+                        cc.identifier,
+                        call.source,
+                        call.destination,
+                        call.number,
+                        call.duplex
+                    );
+                    let _ = self.event_sender.send(BrewEvent::CircuitSetupRequest { uuid: cc.identifier, call });
                 }
             }
             CALL_STATE_SETUP_ACCEPT => {
@@ -642,7 +651,10 @@ impl<T: NetworkTransport> BrewWorker<T> {
             CALL_STATE_SETUP_REJECT => {
                 let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
                 tracing::info!("BrewWorker: SETUP_REJECT uuid={} cause={}", cc.identifier, cause);
-                let _ = self.event_sender.send(BrewEvent::CircuitSetupReject { uuid: cc.identifier, cause });
+                let _ = self.event_sender.send(BrewEvent::CircuitSetupReject {
+                    uuid: cc.identifier,
+                    cause,
+                });
             }
             CALL_STATE_CALL_ALERT => {
                 tracing::info!("BrewWorker: CALL_ALERT uuid={}", cc.identifier);
@@ -650,28 +662,48 @@ impl<T: NetworkTransport> BrewWorker<T> {
             }
             CALL_STATE_CONNECT_REQUEST => {
                 if let BrewCallPayload::CircularCall(call) = cc.payload {
-                    tracing::info!("BrewWorker: CONNECT_REQUEST uuid={} src={} dst={} duplex={}",
-                        cc.identifier, call.source, call.destination, call.duplex);
-                    let _ = self.event_sender.send(BrewEvent::CircuitConnectRequest {
-                        uuid: cc.identifier,
-                        call,
-                    });
+                    tracing::info!(
+                        "BrewWorker: CONNECT_REQUEST uuid={} src={} dst={} duplex={}",
+                        cc.identifier,
+                        call.source,
+                        call.destination,
+                        call.duplex
+                    );
+                    let _ = self
+                        .event_sender
+                        .send(BrewEvent::CircuitConnectRequest { uuid: cc.identifier, call });
                 }
             }
             CALL_STATE_CONNECT_CONFIRM => {
                 let (grant, permission) = if let BrewCallPayload::CircularGrant(g) = cc.payload {
                     (g.grant, g.permission)
-                } else { (0, 0) };
-                tracing::info!("BrewWorker: CONNECT_CONFIRM uuid={} grant={} perm={}", cc.identifier, grant, permission);
+                } else {
+                    (0, 0)
+                };
+                tracing::info!(
+                    "BrewWorker: CONNECT_CONFIRM uuid={} grant={} perm={}",
+                    cc.identifier,
+                    grant,
+                    permission
+                );
                 let _ = self.event_sender.send(BrewEvent::CircuitConnectConfirm {
-                    uuid: cc.identifier, grant, permission,
+                    uuid: cc.identifier,
+                    grant,
+                    permission,
                 });
             }
             CALL_STATE_SIMPLEX_GRANTED => {
                 let (grant, permission) = if let BrewCallPayload::CircularGrant(g) = cc.payload {
                     (g.grant, g.permission)
-                } else { (0, 0) };
-                tracing::info!("BrewWorker: SIMPLEX_GRANTED uuid={} grant={} perm={}", cc.identifier, grant, permission);
+                } else {
+                    (0, 0)
+                };
+                tracing::info!(
+                    "BrewWorker: SIMPLEX_GRANTED uuid={} grant={} perm={}",
+                    cc.identifier,
+                    grant,
+                    permission
+                );
                 let _ = self.event_sender.send(BrewEvent::CircuitSimplexGranted {
                     uuid: cc.identifier,
                     grant,
@@ -681,8 +713,15 @@ impl<T: NetworkTransport> BrewWorker<T> {
             CALL_STATE_SIMPLEX_IDLE => {
                 let (grant, permission) = if let BrewCallPayload::CircularGrant(g) = cc.payload {
                     (g.grant, g.permission)
-                } else { (0, 0) };
-                tracing::info!("BrewWorker: SIMPLEX_IDLE uuid={} grant={} perm={}", cc.identifier, grant, permission);
+                } else {
+                    (0, 0)
+                };
+                tracing::info!(
+                    "BrewWorker: SIMPLEX_IDLE uuid={} grant={} perm={}",
+                    cc.identifier,
+                    grant,
+                    permission
+                );
                 let _ = self.event_sender.send(BrewEvent::CircuitSimplexIdle {
                     uuid: cc.identifier,
                     grant,
@@ -693,8 +732,14 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
                 tracing::info!("BrewWorker: CALL_RELEASE uuid={} cause={}", cc.identifier, cause);
                 // Send both events — entity will handle whichever is relevant
-                let _ = self.event_sender.send(BrewEvent::GroupCallEnd { uuid: cc.identifier, cause });
-                let _ = self.event_sender.send(BrewEvent::CircuitCallRelease { uuid: cc.identifier, cause });
+                let _ = self.event_sender.send(BrewEvent::GroupCallEnd {
+                    uuid: cc.identifier,
+                    cause,
+                });
+                let _ = self.event_sender.send(BrewEvent::CircuitCallRelease {
+                    uuid: cc.identifier,
+                    cause,
+                });
             }
             CALL_STATE_SHORT_TRANSFER => {
                 if let BrewCallPayload::ShortTransfer { source, destination } = cc.payload {

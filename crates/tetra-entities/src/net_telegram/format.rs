@@ -221,7 +221,9 @@ mod tests {
     use super::*;
 
     fn station() -> StationInfo {
-        StationInfo { label: "FlowStation · MCC 901 / MNC 9999 · LA 1 · CC 3".to_string() }
+        StationInfo {
+            label: "FlowStation · MCC 901 / MNC 9999 · LA 1 · CC 3".to_string(),
+        }
     }
 
     #[test]
@@ -243,10 +245,7 @@ mod tests {
 
     #[test]
     fn critical_logs_picks_error_title_and_counts_extra() {
-        let lines = vec![
-            ("WARN".to_string(), "w1".to_string()),
-            ("ERROR".to_string(), "e1".to_string()),
-        ];
+        let lines = vec![("WARN".to_string(), "w1".to_string()), ("ERROR".to_string(), "e1".to_string())];
         let m = critical_logs(&station(), &lines, 3);
         assert!(m.contains("<b>Station error</b>"));
         assert!(m.contains("and 3 more"));

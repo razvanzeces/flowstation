@@ -186,7 +186,10 @@ mod tests {
 
         assert!(!parsed.group_identity_report);
         assert!(parsed.group_identity_acknowledgement_request);
-        assert!(!parsed.group_identity_attach_detach_mode, "DGNA must amend, not reset, the group list");
+        assert!(
+            !parsed.group_identity_attach_detach_mode,
+            "DGNA must amend, not reset, the group list"
+        );
         let gids = parsed.group_identity_downlink.expect("downlink present");
         assert_eq!(gids.len(), 1);
         assert_eq!(gids[0].gssi, Some(1234567));

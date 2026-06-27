@@ -1129,7 +1129,9 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   .stat-grid{grid-template-columns:1fr;gap:10px;}
 
   /* TS visualizer: 2x2 instead of 1x4 so each block stays usable */
-  .ts-grid{grid-template-columns:1fr 1fr;gap:8px;padding:10px 12px;}
+  .ts-grid{gap:10px;padding:10px 12px;}
+  .ts-row{grid-template-columns:1fr 1fr;gap:8px;}
+  .ts-carrier-head{flex-direction:column;align-items:flex-start;gap:4px;}
 
   /* System info: vertical layout per row, full-width values */
   .info-row{flex-direction:column;align-items:flex-start;gap:4px;padding:10px 14px;}
@@ -1178,7 +1180,21 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 }
 
 /* ── TS Visualizer ───────────────────────────────────────────────── */
-.ts-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:16px 18px;}
+.ts-grid{display:flex;flex-direction:column;gap:12px;padding:16px 18px;}
+.ts-carrier-group{display:flex;flex-direction:column;gap:8px;}
+.ts-carrier-head{
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  padding:0 2px;
+}
+.ts-carrier-title{
+  font-family:var(--mono);font-size:10px;font-weight:700;
+  letter-spacing:0.10em;color:var(--text2);text-transform:uppercase;
+}
+.ts-carrier-meta{
+  font-family:var(--mono);font-size:10px;color:var(--text3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.ts-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
 .ts-block{
   border:1px solid var(--border);border-radius:8px;
   padding:12px 10px 8px;text-align:center;
@@ -2509,6 +2525,19 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </div>
           </div>
           <span id="bts-access" class="bts-access">—</span>
+        </div>
+        <!-- Dual-Carrier ON/OFF — applied via controlled service restart -->
+        <div class="bts-access-bar">
+          <div class="bts-access-info">
+            <span class="bts-access-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1a10 10 0 0 1 0-8.2"/><path d="M19.1 7.9a10 10 0 0 1 0 8.2"/><path d="M7.8 13.2a5 5 0 0 1 0-2.4"/><path d="M16.2 10.8a5 5 0 0 1 0 2.4"/><circle cx="12" cy="12" r="1.5"/></svg>
+            </span>
+            <div>
+              <div class="bts-access-title" data-i18n="dual_carrier">Dual Carrier</div>
+              <div class="bts-access-sub" id="dc-sub">—</div>
+            </div>
+          </div>
+          <span class="sw"><input type="checkbox" id="dc-toggle" onchange="onDualCarrierToggle(this)"><i></i></span>
         </div>
       </div>
 
@@ -4013,6 +4042,11 @@ const LANGS={
     active_calls:'Active Calls',circuits:'circuits in use',
     registered_terminals:'Registered Radios',
     bts_details:'TETRA BTS Details',bts_tx:'TX Freq',bts_rx:'RX Freq',bts_shift:'Duplex Shift',bts_rate:'Sample Rate',
+    dual_carrier:'Dual Carrier',dc_on_sub:'On · secondary carrier #{c}',dc_off_sub:'Off · single carrier',
+    dc_enter_carrier:'Secondary carrier number (e.g. main carrier ±1):',dc_bad_carrier:'Please enter a valid carrier number.',
+    dc_confirm_on:'Enable Dual Carrier? This RESTARTS the base station and briefly drops all active calls.',
+    dc_confirm_off:'Disable Dual Carrier? This RESTARTS the base station and briefly drops all active calls.',
+    dc_applying:'Applying…',dc_restarting:'Restarting to apply… reconnecting shortly.',dc_failed:'Could not change Dual Carrier',
     bts_la:'Location Area',bts_cc:'Colour Code',bts_carrier:'Main Carrier',bts_band:'Band',
     bts_access:'Registration Access',bts_wl_entries:'whitelisted ISSI',bts_wl_open:'Open — all ISSI may register',
     readability:'Readability',size_small:'Small',size_small_d:'Compact · normal contrast',size_medium:'Medium',size_medium_d:'Default · comfortable',size_high:'High',size_high_d:'Larger · stronger contrast',size_ultra:'Ultra',size_ultra_d:'Largest · maximum contrast',sdr:'SDR',power:'Power',
@@ -4120,6 +4154,11 @@ const LANGS={
     active_calls:'Apeluri Active',circuits:'circuite active',
     registered_terminals:'Radiouri Înregistrate',
     bts_details:'Detalii BTS TETRA',bts_tx:'Frecvență TX',bts_rx:'Frecvență RX',bts_shift:'Decalaj Duplex',bts_rate:'Rată Eșantionare',
+    dual_carrier:'Dual Carrier',dc_on_sub:'Pornit · carrier secundar #{c}',dc_off_sub:'Oprit · un singur carrier',
+    dc_enter_carrier:'Numărul carrier-ului secundar (ex. carrier principal ±1):',dc_bad_carrier:'Introdu un număr de carrier valid.',
+    dc_confirm_on:'Pornești Dual Carrier? Asta REPORNEȘTE stația de bază și pică toate apelurile active câteva secunde.',
+    dc_confirm_off:'Oprești Dual Carrier? Asta REPORNEȘTE stația de bază și pică toate apelurile active câteva secunde.',
+    dc_applying:'Se aplică…',dc_restarting:'Repornește pentru aplicare… reconectare în scurt timp.',dc_failed:'Nu am putut schimba Dual Carrier',
     bts_la:'Zonă (LA)',bts_cc:'Cod Culoare',bts_carrier:'Purtătoare Princ.',bts_band:'Bandă',
     bts_access:'Acces Înregistrare',bts_wl_entries:'ISSI permise',bts_wl_open:'Deschis — orice ISSI se poate înregistra',
     readability:'Lizibilitate',size_small:'Mic',size_small_d:'Compact · contrast normal',size_medium:'Mediu',size_medium_d:'Implicit · confortabil',size_high:'Mare',size_high_d:'Mai mare · contrast sporit',size_ultra:'Ultra',size_ultra_d:'Cel mai mare · contrast maxim',sdr:'SDR',power:'Consum',
@@ -4593,7 +4632,7 @@ function showPage(name,el){
   if(el)el.classList.add('active');
   else{const nav=document.getElementById('nav-'+name);if(nav)nav.classList.add('active');}
   document.getElementById('topbar-title').textContent=t(name)||name;
-  if(name==='stations'){loadBtsInfo();}
+  if(name==='stations'){loadBtsInfoLegacy();loadDualCarrier();}
   if(name==='sdslog'){loadSdsLog();}
   if(name==='health'){loadHealthIntegrations();}
   if(name==='asterisk'){loadAsteriskStatus();loadSnomNotify();}
@@ -5064,9 +5103,13 @@ function handleMsg(msg){
       (msg.ms||[]).forEach(m=>{state.ms[m.issi]={...m,_last_seen_ts:Date.now()-(m.last_seen_secs_ago||0)*1000,energy_saving_mode:m.energy_saving_mode||0};});
       (msg.calls||[]).forEach(c=>{
         state.calls[c.call_id]={...c,started_at:Date.now()-(c.started_secs_ago||0)*1000};
-        if(c.ts&&c.ts>=2){
+        if(c.carrier_num!=null)tsEnsureCarrierInfo(c.carrier_num);
+        if(c.peer_carrier_num!=null)tsEnsureCarrierInfo(c.peer_carrier_num);
+        if(tsCanRenderAssignedCarrier(c.carrier_num,c.ts)){
           const sub=c.call_type==='group'?t('call_group'):(c.simplex?t('call_p2p_s'):t('call_p2p_d'));
-          tsSetCall(c.ts,{...c,sub});
+          tsSetCallCarrier(c.carrier_num,c.ts,{...c,sub});
+          const peerCarrier=c.peer_carrier_num!=null?c.peer_carrier_num:c.carrier_num;
+          if(tsCanRenderAssignedCarrier(peerCarrier,c.peer_ts))tsSetCallCarrier(peerCarrier,c.peer_ts,{...c,sub});
         }
       });
       if(msg.log&&msg.log.length){document.getElementById('log-container').innerHTML='';msg.log.forEach(e=>appendLog(e));}
@@ -5118,26 +5161,31 @@ function handleMsg(msg){
       renderStations();break;
     case 'call_started':
       state.calls[msg.call_id]={...msg,started_at:Date.now()};
+      if(msg.carrier_num!=null)tsEnsureCarrierInfo(msg.carrier_num);
+      if(msg.peer_carrier_num!=null)tsEnsureCarrierInfo(msg.peer_carrier_num);
       // The caller keyed up on this GSSI → it's their actively-selected TG.
       if(msg.call_type==='group'&&msg.gssi!=null&&state.ms[msg.caller_issi]){state.ms[msg.caller_issi].selected_group=msg.gssi;renderStations();}
       if(msg.last_heard)pushLastHeard(msg.last_heard);
-      if(msg.ts&&msg.ts>=2){
+      if(tsCanRenderAssignedCarrier(msg.carrier_num,msg.ts)){
         const sub=msg.call_type==='group'?t('call_group'):(msg.simplex?t('call_p2p_s'):t('call_p2p_d'));
-        tsSetCall(msg.ts,{...msg,sub});
-        updateTsBlocks();
+        tsSetCallCarrier(msg.carrier_num,msg.ts,{...msg,sub});
+        const peerCarrier=msg.peer_carrier_num!=null?msg.peer_carrier_num:msg.carrier_num;
+        if(tsCanRenderAssignedCarrier(peerCarrier,msg.peer_ts))tsSetCallCarrier(peerCarrier,msg.peer_ts,{...msg,sub});
+        updateTsBlocksCarrier();
       }
       renderCalls();renderLastHeard();break;
     case 'call_ended':
-      tsClearCall(msg.call_id);updateTsBlocks();
+      tsClearCallCarrier(msg.call_id);updateTsBlocksCarrier();
       delete state.calls[msg.call_id];renderCalls();break;
     case 'ts_voice':
-      tsVoice(msg.ts);break;
+      if(msg.carrier_num!=null)tsVoiceCarrier(msg.carrier_num,msg.ts,msg.speaker_issi);break;
     case 'speaker_changed':
       if(state.calls[msg.call_id])state.calls[msg.call_id].active_speaker=msg.speaker_issi;
-      // Reflect the new speaker on the timeslot visualizer immediately.
-      tsSetSpeaker(msg.call_id,msg.speaker_issi);updateTsBlocks();
+      if(msg.carrier_num!=null)tsEnsureCarrierInfo(msg.carrier_num);
+      tsSetSpeakerCarrier(msg.call_id,msg.carrier_num,msg.ts,msg.speaker_issi);updateTsBlocksCarrier();
       // The new speaker has this call's GSSI selected (looked up from the active call).
-      {const sg=state.calls[msg.call_id]&&state.calls[msg.call_id].gssi;
+      {const activeCall=state.calls[msg.call_id];
+       const sg=activeCall&&activeCall.call_type==='group'?activeCall.gssi:null;
        if(sg!=null&&state.ms[msg.speaker_issi]){state.ms[msg.speaker_issi].selected_group=sg;renderStations();}}
       if(msg.last_heard){pushLastHeard(msg.last_heard);renderLastHeard();}
       renderCalls();break;
@@ -5208,7 +5256,7 @@ function rssiPct(v){if(v==null)return 0;return Math.max(0,Math.min(100,(v+60)/50
 // usable=info, marginal=warn, weak/none=danger/idle.
 function rssiGaugeClass(v){if(v==null)return'is-idle';if(v>-20)return'';if(v>-30)return'is-info';if(v>-40)return'is-warn';return'is-danger';}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocks();}
+function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocksCarrier();}
 
 // ── TS Visualizer ─────────────────────────────────────────────────────────
 // tsState[ts-1]: {call_id, call_type, label, sub, voice_ts, started_at}
@@ -5353,6 +5401,307 @@ function tsVoice(ts){
 }
 setInterval(updateTsBlocks, 150); // refresh to catch voice decay + duration tick
 
+// Carrier-aware RF visualizer. The original strip above assumes a single carrier;
+// this overlay keeps the same look but keys everything by carrier+timeslot so a
+// secondary RF carrier gets its own labelled 4-slot row.
+const tsStateCarrier={};
+const tsWaveHeightsCarrier={};
+const tsCarrierInfo={};
+
+function fmtMhz(hz,dp){return(hz!=null&&isFinite(hz))?(hz/1e6).toFixed(dp==null?4:dp)+' MHz':'-';}
+function tsCarrierKey(carrierNum,ts){return String(carrierNum)+':'+String(ts);}
+function tsCanRenderAssignedCarrier(carrierNum,ts){
+  if(carrierNum==null||!isFinite(carrierNum)||ts==null||!isFinite(ts))return false;
+  if(ts<1||ts>4)return false;
+  if(state.mainCarrierNum!=null&&carrierNum===state.mainCarrierNum)return ts>=2&&ts<=4;
+  return true;
+}
+function tsCarrierNumbers(){
+  return Object.keys(tsCarrierInfo).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+}
+function tsEnsureCarrierInfo(carrierNum,txFreqHz,rxFreqHz){
+  if(carrierNum==null||!isFinite(carrierNum))return;
+  const key=String(carrierNum);
+  const info=tsCarrierInfo[key]||{carrier_num:carrierNum,tx_freq_hz:null,rx_freq_hz:null};
+  if(txFreqHz!=null&&isFinite(txFreqHz))info.tx_freq_hz=txFreqHz;
+  if(rxFreqHz!=null&&isFinite(rxFreqHz))info.rx_freq_hz=rxFreqHz;
+  tsCarrierInfo[key]=info;
+}
+function tsCarrierMeta(info){
+  const parts=[];
+  if(info&&info.tx_freq_hz!=null)parts.push('DL '+fmtMhz(info.tx_freq_hz));
+  if(info&&info.rx_freq_hz!=null)parts.push('UL '+fmtMhz(info.rx_freq_hz));
+  return parts.join(' | ')||'Waiting for RF info';
+}
+function tsCarrierBlockHtml(carrierNum,ts){
+  const idleHeights=(carrierNum===state.mainCarrierNum&&ts===1)?[8,14,10,16,8,12,6]:[3,3,3,3,3,3,3];
+  return `<div class="ts-block${carrierNum===state.mainCarrierNum&&ts===1?' mcch':''}" id="ts-block-${carrierNum}-${ts}">
+    <div class="ts-num">TS ${ts}</div>
+    ${ts===1?'':'<div class="ts-timer"></div>'}
+    <div class="ts-led"></div>
+    <div class="ts-wave">${idleHeights.map(h=>`<div class="ts-wave-bar" style="height:${h}px"></div>`).join('')}</div>
+    <div class="ts-label">${carrierNum===state.mainCarrierNum&&ts===1?'MCCH':(ts===1?'BCCH':'-')}</div>
+    <div class="ts-sub">${carrierNum===state.mainCarrierNum&&ts===1?'ACTIVE':(ts===1?'SECONDARY':'Idle')}</div>
+    <div class="ts-flash"></div>
+    <div class="ts-duration-bar"></div>
+  </div>`;
+}
+function renderTsGridCarrier(){
+  const grid=document.getElementById('ts-grid');
+  if(!grid)return;
+  let carriers=tsCarrierNumbers();
+  if(!carriers.length&&state.mainCarrierNum!=null)carriers=[state.mainCarrierNum];
+  if(!carriers.length)return;
+  grid.innerHTML=carriers.map(carrierNum=>{
+    const info=tsCarrierInfo[String(carrierNum)]||{carrier_num:carrierNum};
+    return `<div class="ts-carrier-group" data-carrier="${carrierNum}">
+      <div class="ts-carrier-head">
+        <div class="ts-carrier-title">Carrier #${carrierNum}${carrierNum===state.mainCarrierNum?' | Main':''}</div>
+        <div class="ts-carrier-meta">${tsCarrierMeta(info)}</div>
+      </div>
+      <div class="ts-row">${[1,2,3,4].map(ts=>tsCarrierBlockHtml(carrierNum,ts)).join('')}</div>
+    </div>`;
+  }).join('');
+  updateTsBlocksCarrier();
+}
+function tsRandWaveCarrier(carrierNum,ts){
+  tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)]=Array.from({length:7},()=>Math.floor(Math.random()*14)+4);
+}
+function tsApplyWaveCarrier(carrierNum,ts,active){
+  const block=document.getElementById(`ts-block-${carrierNum}-${ts}`);
+  if(!block)return;
+  const bars=block.querySelectorAll('.ts-wave-bar');
+  if(active){
+    const heights=tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)]||[];
+    heights.forEach((h,i)=>{if(bars[i])bars[i].style.height=h+'px';});
+  }else{
+    bars.forEach(b=>b.style.height='3px');
+  }
+}
+function formatDurCarrier(s){
+  if(s<60)return s+'s';
+  return Math.floor(s/60)+'m'+String(s%60).padStart(2,'0')+'s';
+}
+function tsIssiTextCarrier(issi){
+  if(!issi)return '';
+  const c=callsigns[issi];
+  if(!c||!c.cs)return ''+issi;
+  const fl=c.fl?c.fl+' ':'';
+  return issi+' | '+fl+c.cs;
+}
+function privatePartyRole(call,issi){
+  if(!call||issi==null)return '';
+  if(issi===call.caller_issi)return 'CALLER';
+  if(issi===call.called_issi)return 'CALLED';
+  return 'TALKER';
+}
+function privateSlotRef(carrierNum,ts){
+  return carrierNum!=null&&ts!=null?('C'+carrierNum+'/TS'+ts):'-';
+}
+function privateAllocText(call){
+  if(!call||call.call_type!=='individual')return '';
+  const main=privateSlotRef(call.carrier_num,call.ts);
+  const peerCarrier=call.peer_carrier_num!=null?call.peer_carrier_num:call.carrier_num;
+  const peerTs=call.peer_ts!=null?call.peer_ts:call.ts;
+  const hasPeer=call.peer_carrier_num!=null||call.peer_ts!=null;
+  if(call.simplex||!hasPeer)return 'Shared '+main+' UL/DL';
+  return 'Caller '+main+' UL/DL | Called '+privateSlotRef(peerCarrier,peerTs)+' UL/DL';
+}
+function tsLinesCarrier(st){
+  const speaker=st.speaker_issi;
+  if(st.call_type==='group')return {top:st.gssi!=null?('GSSI '+st.gssi):'GROUP',bottom:tsIssiTextCarrier(speaker||st.caller_issi)};
+  const slotRole=st.private_slot_role||'shared';
+  const top=`${st.caller_issi||'?'} <-> ${st.called_issi||'?'}`;
+  const shownIssi=speaker||(slotRole==='called'?st.called_issi:st.caller_issi);
+  const shownRole=privatePartyRole(st,shownIssi);
+  const who=tsIssiTextCarrier(shownIssi);
+  const slotText=slotRole==='caller'?'CALLER SLOT':(slotRole==='called'?'CALLED SLOT':'SHARED SLOT');
+  const talkerText=who?(`TX ${shownRole} ${who}`):'';
+  return {top,bottom:[slotText,talkerText].filter(Boolean).join(' | ')};
+}
+function updateTsBlocksCarrier(){
+  const now=Date.now();
+  const carriers=tsCarrierNumbers().length?tsCarrierNumbers():(state.mainCarrierNum!=null?[state.mainCarrierNum]:[]);
+  for(const carrierNum of carriers){
+    for(let ts=1;ts<=4;ts++){
+      const block=document.getElementById(`ts-block-${carrierNum}-${ts}`);
+      if(!block)continue;
+      const label=block.querySelector('.ts-label');
+      const sub=block.querySelector('.ts-sub');
+      const dur=block.querySelector('.ts-duration-bar');
+      const timer=block.querySelector('.ts-timer');
+      const st=tsStateCarrier[tsCarrierKey(carrierNum,ts)];
+      if(ts===1&&carrierNum===state.mainCarrierNum){
+        block.className='ts-block mcch';
+        label.textContent='MCCH';
+        sub.textContent='ACTIVE';
+        if(!tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)])tsRandWaveCarrier(carrierNum,ts);
+        tsApplyWaveCarrier(carrierNum,ts,true);
+        if(dur)dur.style.width='0%';
+        continue;
+      }
+      if(!st){
+        block.className='ts-block';
+        label.textContent=ts===1?'BCCH':'-';
+        sub.textContent=ts===1?'SECONDARY':'Idle';
+        tsApplyWaveCarrier(carrierNum,ts,false);
+        if(timer)timer.textContent='';
+        if(dur)dur.style.width='0%';
+        continue;
+      }
+      const voiceRecent=st.voice_ts&&(now-st.voice_ts)<TS_VOICE_DECAY_MS;
+      const lines=tsLinesCarrier(st);
+      label.textContent=lines.top;
+      if(voiceRecent){
+        block.className='ts-block voice';
+        sub.textContent=lines.bottom?('â–¶ '+lines.bottom):'â–¶ TX';
+      }else{
+        block.className='ts-block call';
+        sub.textContent=lines.bottom||(st.sub||'Alloc');
+      }
+      if((st.priority||0)>=15)block.classList.add('emergency');
+      if(timer){
+        const elapsed=Math.floor((now-(st.started_at||now))/1000);
+        timer.textContent=elapsed>0?formatDurCarrier(elapsed):'';
+      }
+      tsApplyWaveCarrier(carrierNum,ts,voiceRecent);
+      if(dur&&st.started_at){
+        const pct=Math.min(100,((now-st.started_at)/120000)*100);
+        dur.style.width=pct+'%';
+      }
+    }
+  }
+}
+function tsSetCallCarrier(carrierNum,ts,call){
+  if(!tsCanRenderAssignedCarrier(carrierNum,ts))return;
+  tsEnsureCarrierInfo(carrierNum);
+  if(!document.getElementById(`ts-block-${carrierNum}-${ts}`))renderTsGridCarrier();
+  const peerCarrier=call.peer_carrier_num!=null?call.peer_carrier_num:call.carrier_num;
+  const peerTs=call.peer_ts!=null?call.peer_ts:call.ts;
+  const hasPeer=call.peer_carrier_num!=null||call.peer_ts!=null;
+  const privateSlotRole=call.call_type!=='individual'
+    ? null
+    : ((call.simplex||!hasPeer)
+      ? 'shared'
+      : ((carrierNum===call.carrier_num&&ts===call.ts)?'caller':((carrierNum===peerCarrier&&ts===peerTs)?'called':'shared')));
+  tsStateCarrier[tsCarrierKey(carrierNum,ts)]={
+    call_id:call.call_id,call_type:call.call_type,
+    gssi:call.gssi,called_issi:call.called_issi,caller_issi:call.caller_issi,
+    speaker_issi:call.call_type==='individual'?(call.active_speaker||call.speaker_issi||null):(call.active_speaker||call.speaker_issi||call.caller_issi),
+    simplex:call.simplex,sub:call.sub,priority:call.priority||0,
+    voice_ts:null,started_at:Date.now(),carrier_num:carrierNum,ts:ts,private_slot_role:privateSlotRole
+  };
+}
+function tsSetSpeakerCarrier(callId,speakerIssi){
+  Object.keys(tsStateCarrier).forEach(key=>{if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId)tsStateCarrier[key].speaker_issi=speakerIssi;});
+}
+function tsClearCallCarrier(callId){
+  Object.keys(tsStateCarrier).forEach(key=>{if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId)delete tsStateCarrier[key];});
+}
+function tsVoiceCarrier(carrierNum,ts,speakerIssi){
+  if(!tsCanRenderAssignedCarrier(carrierNum,ts))return;
+  tsEnsureCarrierInfo(carrierNum);
+  if(!document.getElementById(`ts-block-${carrierNum}-${ts}`))renderTsGridCarrier();
+  const key=tsCarrierKey(carrierNum,ts);
+  // Voice bursts should animate an existing allocation, not create a synthetic
+  // "PRIVATE" slot that outlives the call if a late frame arrives after call_ended.
+  if(!tsStateCarrier[key])return;
+  tsStateCarrier[key].voice_ts=Date.now();
+  if(speakerIssi)tsStateCarrier[key].speaker_issi=speakerIssi;
+  tsRandWaveCarrier(carrierNum,ts);
+  const block=document.getElementById(`ts-block-${carrierNum}-${ts}`);
+  if(block){
+    const flash=block.querySelector('.ts-flash');
+    if(flash){flash.style.animation='none';void flash.offsetWidth;flash.style.animation='ts-flash-in 0.08s ease-out forwards';}
+  }
+  updateTsBlocksCarrier();
+}
+setInterval(updateTsBlocksCarrier, 150);
+
+function tsCarrierBlockHtml(carrierNum,ts){
+  const idleHeights=(carrierNum===state.mainCarrierNum&&ts===1)?[8,14,10,16,8,12,6]:[3,3,3,3,3,3,3];
+  const label=(carrierNum===state.mainCarrierNum&&ts===1)?'MCCH':(ts===1?'BCCH':'-');
+  const sub=(carrierNum===state.mainCarrierNum&&ts===1)?'ACTIVE':(ts===1?'SECONDARY':'Idle');
+  return `<div class="ts-block${carrierNum===state.mainCarrierNum&&ts===1?' mcch':''}" id="ts-block-${carrierNum}-${ts}">
+    <div class="ts-num">TS ${ts}</div>
+    ${ts===1?'':'<div class="ts-timer"></div>'}
+    <div class="ts-led"></div>
+    <div class="ts-wave">${idleHeights.map(h=>`<div class="ts-wave-bar" style="height:${h}px"></div>`).join('')}</div>
+    <div class="ts-label">${label}</div>
+    <div class="ts-sub">${sub}</div>
+    <div class="ts-flash"></div>
+    <div class="ts-duration-bar"></div>
+  </div>`;
+}
+
+function updateTsBlocksCarrier(){
+  const now=Date.now();
+  const carriers=tsCarrierNumbers().length?tsCarrierNumbers():(state.mainCarrierNum!=null?[state.mainCarrierNum]:[]);
+  for(const carrierNum of carriers){
+    for(let ts=1;ts<=4;ts++){
+      const block=document.getElementById(`ts-block-${carrierNum}-${ts}`);
+      if(!block)continue;
+      const label=block.querySelector('.ts-label');
+      const sub=block.querySelector('.ts-sub');
+      const dur=block.querySelector('.ts-duration-bar');
+      const timer=block.querySelector('.ts-timer');
+      const st=tsStateCarrier[tsCarrierKey(carrierNum,ts)];
+
+      if(ts===1&&carrierNum===state.mainCarrierNum){
+        block.className='ts-block mcch';
+        label.textContent='MCCH';
+        sub.textContent='ACTIVE';
+        if(!tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)])tsRandWaveCarrier(carrierNum,ts);
+        tsApplyWaveCarrier(carrierNum,ts,true);
+        if(dur)dur.style.width='0%';
+        continue;
+      }
+
+      if(!st){
+        block.className='ts-block';
+        label.textContent=ts===1?'BCCH':'-';
+        sub.textContent=ts===1?'SECONDARY':'Idle';
+        tsApplyWaveCarrier(carrierNum,ts,false);
+        if(timer)timer.textContent='';
+        if(dur)dur.style.width='0%';
+        continue;
+      }
+
+      const voiceRecent=st.voice_ts&&(now-st.voice_ts)<TS_VOICE_DECAY_MS;
+      const lines=tsLinesCarrier(st);
+      label.textContent=lines.top;
+      if(voiceRecent){
+        block.className='ts-block voice';
+        sub.textContent=lines.bottom?('TX '+lines.bottom):'TX';
+      }else{
+        block.className='ts-block call';
+        sub.textContent=lines.bottom||(st.sub||'Alloc');
+      }
+      if((st.priority||0)>=15)block.classList.add('emergency');
+      if(timer){
+        const elapsed=Math.floor((now-(st.started_at||now))/1000);
+        timer.textContent=elapsed>0?formatDurCarrier(elapsed):'';
+      }
+      tsApplyWaveCarrier(carrierNum,ts,voiceRecent);
+      if(dur&&st.started_at){
+        const pct=Math.min(100,((now-st.started_at)/120000)*100);
+        dur.style.width=pct+'%';
+      }
+    }
+  }
+}
+
+function tsSetSpeakerCarrier(callId,carrierNum,ts,speakerIssi){
+  if(carrierNum!=null&&ts!=null){
+    const key=tsCarrierKey(carrierNum,ts);
+    if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId){
+      tsStateCarrier[key].speaker_issi=speakerIssi;
+      return;
+    }
+  }
+  Object.keys(tsStateCarrier).forEach(key=>{if(tsStateCarrier[key]&&tsStateCarrier[key].call_id===callId)tsStateCarrier[key].speaker_issi=speakerIssi;});
+}
+
 function renderStations(){
   const ms=Object.values(state.ms);
   const msCount=ms.length,callCount=Object.keys(state.calls).length;
@@ -5423,8 +5772,13 @@ function renderCalls(){
     const mm=String(Math.floor(dur/60)).padStart(2,'0'),ss=String(dur%60).padStart(2,'0');
     const pillv=c.call_type==='group'?'pill-info':'pill-warn';
     const label=c.call_type==='group'?t('call_group'):(c.simplex?t('call_p2p_s'):t('call_p2p_d'));
-    const to=c.call_type==='group'?`GSSI ${c.gssi}`:idCell(c.called_issi);
-    const spk=c.active_speaker?idCell(c.active_speaker):'<span class="muted">—</span>';
+    const allocMeta=c.call_type==='individual'
+      ? `<div style="margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--text2)">${escHtml(privateAllocText(c))}</div>`
+      : '';
+    const to=c.call_type==='group'?`GSSI ${c.gssi}`:`${idCell(c.called_issi)}${allocMeta}`;
+    const spk=c.active_speaker
+      ? `${idCell(c.active_speaker)}${c.call_type==='individual'?` <span class="badge badge-dim" style="font-size:9px">${privatePartyRole(c,c.active_speaker)}</span>`:''}`
+      : '<span style="color:var(--text3)">—</span>';
     // Emergency call = ETSI call priority 15 (terminal emergency button). Flag it prominently.
     const emg=(c.priority||0)>=15;
     const emgBadge=emg?`<span class="pill pill-danger"><span class="pill-icon">${svgIcon('emergency')}</span>${t('call_emergency')}</span> `:'';
@@ -6375,6 +6729,40 @@ function loadBrightness(){
 const BTS_TOWER_ICON='<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v13"/><path d="M8.5 22h7"/><path d="M7 8a6 6 0 0 1 10 0"/><path d="M4.5 6a9 9 0 0 1 15 0"/></svg>';
 const BTS_CLOCK_ICON='<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
 // TETRA BTS Details card — static cell + RF identity pulled from config (one fetch).
+// ── Dual-Carrier ON/OFF (first-page toggle; applied via controlled restart) ──
+let dcState={enabled:false,secondary_carrier:null,active:false,main_carrier:null};
+function setDcSub(txt){const e=document.getElementById('dc-sub');if(e)e.textContent=txt;}
+async function loadDualCarrier(){
+  try{
+    const r=await fetch('/api/dualcarrier',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    dcState=d;
+    const tg=document.getElementById('dc-toggle');
+    // Don't fight the user mid-toggle (while focused or a request is in flight).
+    if(tg&&!tg.disabled&&document.activeElement!==tg){tg.checked=!!d.active;}
+    setDcSub(d.active?t('dc_on_sub',{c:d.secondary_carrier}):t('dc_off_sub'));
+  }catch{}
+}
+async function onDualCarrierToggle(el){
+  const want=el.checked;
+  let secondary=dcState.secondary_carrier;
+  if(want&&!secondary){
+    const def=dcState.main_carrier?(dcState.main_carrier+1):'';
+    const v=prompt(t('dc_enter_carrier'),def);
+    if(v===null){el.checked=false;return;}
+    secondary=parseInt(v,10);
+    if(!Number.isInteger(secondary)||secondary<=0){el.checked=false;alert(t('dc_bad_carrier'));return;}
+  }
+  if(!confirm(want?t('dc_confirm_on'):t('dc_confirm_off'))){el.checked=!want;return;}
+  el.disabled=true;setDcSub(t('dc_applying'));
+  try{
+    const body=want?{enabled:true,secondary_carrier:secondary}:{enabled:false};
+    const r=await fetch('/api/dualcarrier',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.ok){setDcSub(t('dc_restarting'));}
+    else{const err=await r.text();alert(t('dc_failed')+': '+err);el.checked=!want;el.disabled=false;loadDualCarrier();}
+  }catch(e){alert(t('conn_error'));el.checked=!want;el.disabled=false;}
+}
 async function loadBtsInfo(){
   try{
     const r=await fetch('/api/btsinfo',{credentials:'same-origin'});
@@ -6387,7 +6775,34 @@ async function loadBtsInfo(){
     set('bts-shift', (d.shift_hz!=null&&isFinite(d.shift_hz))?((d.shift_hz>=0?'+':'')+(d.shift_hz/1e6).toFixed(3)+' MHz'):'—');
     set('bts-mcc', d.mcc);
     set('bts-mnc', d.mnc);
-    set('bts-carrier', d.main_carrier);
+    const carrierValue=document.getElementById('bts-carrier');
+    const carrierLabel=carrierValue?.previousElementSibling;
+    if(carrierValue){
+      const carriers=(Array.isArray(d.carriers)&&d.carriers.length)?d.carriers:[{
+        carrier_num:d.main_carrier,
+        tx_freq_hz:d.tx_freq_hz,
+        rx_freq_hz:d.rx_freq_hz,
+      }];
+      if(carrierLabel)carrierLabel.textContent=(t('bts_carrier')||'Carrier')+(carriers.length>1?'s':'');
+      carrierValue.classList.toggle('bts-carrier-listing', carriers.length>1);
+      carrierValue.innerHTML=carriers.map(c=>{
+        const carrierNum=(c.carrier_num??'â€”');
+        const dl=mhz(c.tx_freq_hz);
+        const ul=mhz(c.rx_freq_hz);
+        return `<span class="bts-carrier-line">#${carrierNum} · DL ${dl} · UL ${ul}</span>`;
+      }).join('');
+      carrierValue.innerHTML=carrierValue.innerHTML
+        .replace(/\u00c2\u00b7/g,' | ')
+        .replace(/\u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u009d/g,'-');
+    }
+    state.mainCarrierNum=d.main_carrier!=null?d.main_carrier:state.mainCarrierNum;
+    set('bts-carrier', d.main_carrier!=null?('#'+d.main_carrier):'â€”');
+    ((Array.isArray(d.carriers)&&d.carriers.length)?d.carriers:[{
+      carrier_num:d.main_carrier,
+      tx_freq_hz:d.tx_freq_hz,
+      rx_freq_hz:d.rx_freq_hz,
+    }]).forEach(c=>tsEnsureCarrierInfo(c.carrier_num,c.tx_freq_hz,c.rx_freq_hz));
+    renderTsGridCarrier();
     // Neighbor-cell + hangtime chips in the card header
     const nb=document.getElementById('bts-neighbor');
     if(nb){
@@ -6413,6 +6828,57 @@ async function loadBtsInfo(){
         : t('bts_wl_open');
     }
   }catch(e){/* config endpoint unavailable — leave placeholders */}
+}
+
+async function loadBtsInfoLegacy(){
+  try{
+    const r=await fetch('/api/btsinfo',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const set=(id,v)=>setText(id,(v==null||v==='')?'-':v);
+    const mhz=(hz,dp)=>(hz!=null&&isFinite(hz))?(hz/1e6).toFixed(dp==null?4:dp)+' MHz':'-';
+    const carriers=(Array.isArray(d.carriers)&&d.carriers.length)?d.carriers:[{
+      carrier_num:d.main_carrier,
+      tx_freq_hz:d.tx_freq_hz,
+      rx_freq_hz:d.rx_freq_hz,
+    }];
+
+    set('bts-tx', mhz(d.tx_freq_hz));
+    set('bts-rx', mhz(d.rx_freq_hz));
+    set('bts-shift', (d.shift_hz!=null&&isFinite(d.shift_hz))?((d.shift_hz>=0?'+':'')+(d.shift_hz/1e6).toFixed(3)+' MHz'):'-');
+    set('bts-mcc', d.mcc);
+    set('bts-mnc', d.mnc);
+    set('bts-carrier', d.main_carrier!=null?('#'+d.main_carrier):'-');
+
+    state.mainCarrierNum=d.main_carrier!=null?d.main_carrier:state.mainCarrierNum;
+    Object.keys(tsCarrierInfo).forEach(key=>delete tsCarrierInfo[key]);
+    carriers.forEach(c=>tsEnsureCarrierInfo(c.carrier_num,c.tx_freq_hz,c.rx_freq_hz));
+    renderTsGridCarrier();
+
+    const nb=document.getElementById('bts-neighbor');
+    if(nb){
+      const n=d.neighbor_count||0;
+      nb.innerHTML=BTS_TOWER_ICON+'Neighbor Cell | '+(n>0?('ON ('+n+' '+(n===1?'neighbor':'neighbors')+')'):'OFF');
+      nb.className='bts-chip '+(n>0?'on':'off');
+    }
+    const hg=document.getElementById('bts-hang');
+    if(hg){
+      hg.innerHTML=BTS_CLOCK_ICON+'HangTime | '+(d.hangtime_secs!=null?d.hangtime_secs:'-')+' sec';
+      hg.className='bts-chip time';
+    }
+    const acc=document.getElementById('bts-access');
+    if(acc){
+      const restricted=!!d.whitelist_restricted;
+      acc.textContent=restricted?'RESTRICTED':'OPEN';
+      acc.className='bts-access '+(restricted?'restricted':'open');
+    }
+    const sub=document.getElementById('bts-access-sub');
+    if(sub){
+      sub.textContent=d.whitelist_restricted
+        ? ((d.whitelist_count||0)+' '+t('bts_wl_entries'))
+        : t('bts_wl_open');
+    }
+  }catch(e){/* config endpoint unavailable - leave placeholders */}
 }
 
 async function loadSystemInfo(){
@@ -7655,7 +8121,8 @@ async function boot(){
   // Populate the topbar SDR badge (and prime system data) immediately on load,
   // instead of waiting for the user to open the System tab.
   loadSystemInfo();
-  loadBtsInfo();        // TETRA BTS Details card on the default (Radios) page
+  loadBtsInfoLegacy();  // TETRA BTS Details card on the default (Radios) page
+  loadDualCarrier();    // Dual-Carrier ON/OFF toggle state
   wifiProbeAvailable(); // toggles the WiFi nav item
   checkUpdate();
 }

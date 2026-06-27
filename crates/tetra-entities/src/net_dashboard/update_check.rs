@@ -11,8 +11,7 @@
 
 use std::time::Duration;
 
-const GITHUB_API_LATEST: &str =
-    "https://api.github.com/repos/razvanzeces/flowstation/releases/latest";
+const GITHUB_API_LATEST: &str = "https://api.github.com/repos/razvanzeces/flowstation/releases/latest";
 // GitHub requires a User-Agent on all API requests.
 const USER_AGENT: &str = "FlowStation-Dashboard";
 
@@ -123,10 +122,7 @@ pub fn check_for_update(current_version: &str) -> UpdateCheck {
     };
 
     let tag = json.get("tag_name").and_then(|v| v.as_str());
-    let html_url = json
-        .get("html_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let html_url = json.get("html_url").and_then(|v| v.as_str()).map(|s| s.to_string());
 
     let Some(tag) = tag else {
         return UpdateCheck::unknown(current_version);
@@ -153,26 +149,58 @@ mod tests {
 
     #[test]
     fn parse_plain() {
-        assert_eq!(SemVer::parse("0.2.5"), Some(SemVer { major: 0, minor: 2, patch: 5 }));
+        assert_eq!(
+            SemVer::parse("0.2.5"),
+            Some(SemVer {
+                major: 0,
+                minor: 2,
+                patch: 5
+            })
+        );
     }
 
     #[test]
     fn parse_v_prefix() {
-        assert_eq!(SemVer::parse("v1.4.0"), Some(SemVer { major: 1, minor: 4, patch: 0 }));
+        assert_eq!(
+            SemVer::parse("v1.4.0"),
+            Some(SemVer {
+                major: 1,
+                minor: 4,
+                patch: 0
+            })
+        );
     }
 
     #[test]
     fn parse_git_suffix() {
         assert_eq!(
             SemVer::parse("v0.2.5-gabc123"),
-            Some(SemVer { major: 0, minor: 2, patch: 5 })
+            Some(SemVer {
+                major: 0,
+                minor: 2,
+                patch: 5
+            })
         );
     }
 
     #[test]
     fn parse_partial() {
-        assert_eq!(SemVer::parse("v2.1"), Some(SemVer { major: 2, minor: 1, patch: 0 }));
-        assert_eq!(SemVer::parse("3"), Some(SemVer { major: 3, minor: 0, patch: 0 }));
+        assert_eq!(
+            SemVer::parse("v2.1"),
+            Some(SemVer {
+                major: 2,
+                minor: 1,
+                patch: 0
+            })
+        );
+        assert_eq!(
+            SemVer::parse("3"),
+            Some(SemVer {
+                major: 3,
+                minor: 0,
+                patch: 0
+            })
+        );
     }
 
     #[test]

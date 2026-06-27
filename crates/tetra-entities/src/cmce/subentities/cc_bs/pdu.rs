@@ -54,14 +54,16 @@ impl CcBsSubentity {
 
     #[inline]
     pub(super) fn p2p_call_timeout(simplex_duplex: bool) -> CallTimeout {
-        if simplex_duplex {
-            CallTimeout::Infinite
-        } else {
-            CallTimeout::T5m
-        }
+        if simplex_duplex { CallTimeout::Infinite } else { CallTimeout::T5m }
     }
 
-    pub(super) fn build_d_setup_prim(pdu: &DSetup, usage: u8, ts: u8, ul_dl: UlDlAssignment) -> (BitBuffer, CmceChanAllocReq) {
+    pub(super) fn build_d_setup_prim(
+        pdu: &DSetup,
+        usage: u8,
+        carrier_num: u16,
+        ts: u8,
+        ul_dl: UlDlAssignment,
+    ) -> (BitBuffer, CmceChanAllocReq) {
         tracing::debug!("-> {:?}", pdu);
 
         let mut sdu = BitBuffer::new_autoexpand(80);
@@ -74,7 +76,7 @@ impl CcBsSubentity {
         let chan_alloc = CmceChanAllocReq {
             usage: Some(usage),
             alloc_type: ChanAllocType::Replace,
-            carrier: None,
+            carrier: Some(carrier_num),
             timeslots,
             ul_dl_assigned: ul_dl,
         };
@@ -146,14 +148,22 @@ impl CcBsSubentity {
         }
     }
 
-    pub(super) fn build_sapmsg_stealing(sdu: BitBuffer, dltime: TdmaTime, address: TetraAddress, ts: u8, usage: Option<u8>) -> SapMsg {
-        Self::build_sapmsg_stealing_ul_dl(sdu, dltime, address, ts, usage, UlDlAssignment::Both)
+    pub(super) fn build_sapmsg_stealing(
+        sdu: BitBuffer,
+        dltime: TdmaTime,
+        address: TetraAddress,
+        carrier_num: u16,
+        ts: u8,
+        usage: Option<u8>,
+    ) -> SapMsg {
+        Self::build_sapmsg_stealing_ul_dl(sdu, dltime, address, carrier_num, ts, usage, UlDlAssignment::Both)
     }
 
     pub(super) fn build_sapmsg_stealing_ul_dl(
         sdu: BitBuffer,
         _dltime: TdmaTime,
         address: TetraAddress,
+        carrier_num: u16,
         ts: u8,
         usage: Option<u8>,
         ul_dl_assigned: UlDlAssignment,
@@ -163,7 +173,7 @@ impl CcBsSubentity {
         timeslots[(ts - 1) as usize] = true;
         let chan_alloc = CmceChanAllocReq {
             usage,
-            carrier: None,
+            carrier: Some(carrier_num),
             timeslots,
             alloc_type: ChanAllocType::Replace,
             ul_dl_assigned,
@@ -737,12 +747,15 @@ impl CcBsSubentity {
         queue: &mut MessageQueue,
         call: &CmceCircuit,
         _dltime: TdmaTime,
+        peer_carrier_num: Option<u16>,
         peer_ts: Option<u8>,
         dl_media_source: CircuitDlMediaSource,
     ) {
         let circuit = Circuit {
             direction: call.direction,
             ts: call.ts,
+            carrier_num: call.carrier_num,
+            peer_carrier_num,
             peer_ts,
             usage: call.usage,
             circuit_mode: call.circuit_mode,
@@ -764,7 +777,11 @@ impl CcBsSubentity {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::Close(circuit.direction, circuit.ts)),
+            msg: SapMsgInner::CmceCallControl(CallControl::CloseSlot {
+                direction: circuit.direction,
+                carrier_num: circuit.carrier_num,
+                ts: circuit.ts,
+            }),
         };
         queue.push_back(cmd);
     }
@@ -822,7 +839,15 @@ impl CcBsSubentity {
     }
 
     /// Send D-TX GRANTED via FACCH stealing
-    pub(super) fn send_d_tx_granted_facch(&mut self, queue: &mut MessageQueue, call_id: u16, source_issi: u32, dest_gssi: u32, ts: u8) {
+    pub(super) fn send_d_tx_granted_facch(
+        &mut self,
+        queue: &mut MessageQueue,
+        call_id: u16,
+        source_issi: u32,
+        dest_gssi: u32,
+        carrier_num: u16,
+        ts: u8,
+    ) {
         let pdu = DTxGranted {
             call_identifier: call_id,
             transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
@@ -845,12 +870,12 @@ impl CcBsSubentity {
         sdu.seek(0);
 
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts, None);
+        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, carrier_num, ts, None);
         queue.push_back(msg);
     }
 
     /// Send D-TX CEASED via FACCH stealing
-    pub(super) fn send_d_tx_ceased_facch(&mut self, queue: &mut MessageQueue, call_id: u16, dest_gssi: u32, ts: u8) {
+    pub(super) fn send_d_tx_ceased_facch(&mut self, queue: &mut MessageQueue, call_id: u16, dest_gssi: u32, carrier_num: u16, ts: u8) {
         let pdu = DTxCeased {
             call_identifier: call_id,
             transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
@@ -866,7 +891,7 @@ impl CcBsSubentity {
         sdu.seek(0);
 
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts, None);
+        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, carrier_num, ts, None);
         queue.push_back(msg);
     }
 
@@ -893,14 +918,15 @@ impl CcBsSubentity {
             let dest_ssi = call.dest_gssi;
             let is_local = matches!(call.origin, CallOrigin::Local { .. });
 
-            if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
+            let carrier_num = call.carrier_num;
+            if let Ok(circuit) = self.circuits.close_circuit_slot(Direction::Both, carrier_num, ts) {
                 Self::signal_umac_circuit_close(queue, circuit, self.dltime);
             }
 
             // Ensure UMAC clears any hangtime override for this slot even if the circuit close is delayed.
             self.notify_call_ended(
                 queue,
-                CallTimeslot { call_id, ts },
+                CallTimeslot { call_id, carrier_num, ts },
                 true,
                 if is_local {
                     BrewNotification::IfGroupRoutable(dest_ssi)
@@ -909,7 +935,7 @@ impl CcBsSubentity {
                 },
             );
 
-            self.release_timeslot(ts);
+            self.release_timeslot_slot(CarrierSlot { carrier_num, ts });
         }
 
         // Clean up
@@ -983,14 +1009,21 @@ impl CcBsSubentity {
                         sdu_calling,
                         self.dltime,
                         call.calling_addr,
+                        call.calling_carrier_num,
                         call.calling_ts,
                         Some(call.calling_usage),
                     );
                     queue.push_back(prim_calling);
                 }
                 if send_called_leg {
-                    let prim_called =
-                        Self::build_sapmsg_stealing(sdu_called, self.dltime, call.called_addr, call.called_ts, Some(call.called_usage));
+                    let prim_called = Self::build_sapmsg_stealing(
+                        sdu_called,
+                        self.dltime,
+                        call.called_addr,
+                        call.called_carrier_num,
+                        call.called_ts,
+                        Some(call.called_usage),
+                    );
                     queue.push_back(prim_called);
                 }
             }
@@ -1021,18 +1054,34 @@ impl CcBsSubentity {
         }
 
         // Close the circuit(s)
-        let mut ts_list = vec![call.calling_ts];
-        if call.called_ts != call.calling_ts {
-            ts_list.push(call.called_ts);
+        let mut slot_list = vec![CarrierSlot {
+            carrier_num: call.calling_carrier_num,
+            ts: call.calling_ts,
+        }];
+        let called_slot = CarrierSlot {
+            carrier_num: call.called_carrier_num,
+            ts: call.called_ts,
+        };
+        if !slot_list.contains(&called_slot) {
+            slot_list.push(called_slot);
         }
-        for ts in ts_list {
-            if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
+        for slot in slot_list {
+            if let Ok(circuit) = self.circuits.close_circuit_slot(Direction::Both, slot.carrier_num, slot.ts) {
                 Self::signal_umac_circuit_close(queue, circuit, self.dltime);
             }
 
-            self.notify_call_ended(queue, CallTimeslot { call_id, ts }, true, BrewNotification::Never);
+            self.notify_call_ended(
+                queue,
+                CallTimeslot {
+                    call_id,
+                    carrier_num: slot.carrier_num,
+                    ts: slot.ts,
+                },
+                true,
+                BrewNotification::Never,
+            );
 
-            self.release_timeslot(ts);
+            self.release_timeslot_slot(slot);
         }
         self.cached_setups.remove(&call_id);
 
@@ -1049,11 +1098,23 @@ impl CcBsSubentity {
         self.emit(crate::net_telemetry::TelemetryEvent::IndividualCallEnded { call_id });
     }
 
-    pub(super) fn release_timeslot(&mut self, ts: u8) {
+    pub(super) fn release_timeslot_slot(&mut self, slot: CarrierSlot) {
         let mut state = self.config.state_write();
-        if let Err(err) = state.timeslot_alloc.release(TimeslotOwner::Cmce, ts) {
-            tracing::warn!("CcBsSubentity: failed to release timeslot ts={} err={:?}", ts, err);
+        if let Err(err) = state.timeslot_alloc.release_slot(TimeslotOwner::Cmce, slot) {
+            tracing::warn!(
+                "CcBsSubentity: failed to release timeslot carrier={} ts={} err={:?}",
+                slot.carrier_num,
+                slot.ts,
+                err
+            );
         }
+    }
+
+    pub(super) fn release_timeslot(&mut self, ts: u8) {
+        self.release_timeslot_slot(CarrierSlot {
+            carrier_num: self.config.config().cell.main_carrier,
+            ts,
+        });
     }
 
     /// Map `cell.call_timeout_secs` from config to the nearest ETSI `CallTimeout` enum value.
@@ -1081,8 +1142,8 @@ impl CcBsSubentity {
     }
 
     /// Number of currently free traffic timeslots (TS2..=TS4) on this cell.
-    fn free_timeslot_count(&self) -> usize {
-        self.config.state_read().timeslot_alloc.free_count()
+    fn free_traffic_timeslots(&self) -> usize {
+        self.config.state_read().timeslot_alloc.free_slot_count()
     }
 
     /// Pick the best active call to pre-empt for a higher-priority call, or `None` if none is
@@ -1093,21 +1154,26 @@ impl CcBsSubentity {
     /// release); then the lowest call_id, purely for deterministic behaviour. `exclude` holds
     /// call_ids already released this round so the loop always makes progress.
     fn select_preemption_victim(&self, incoming_priority: u8, exclude: &[u16]) -> Option<PreemptVictim> {
-        let mut candidates: Vec<(u8, u8, u16, PreemptVictim)> = Vec::new();
+        let mut candidates: Vec<(u8, u16, PreemptVictim, usize)> = Vec::new();
         for (id, call) in self.active_calls.iter() {
             if call.priority < incoming_priority && !exclude.contains(id) {
-                candidates.push((call.priority, call.tx_active as u8, *id, PreemptVictim::Group(*id)));
+                candidates.push((call.priority, *id, PreemptVictim::Group(*id), 1));
             }
         }
         for (id, call) in self.individual_calls.iter() {
             if call.priority < incoming_priority && !exclude.contains(id) {
-                candidates.push((call.priority, call.is_active() as u8, *id, PreemptVictim::Individual(*id)));
+                let slots = if call.calling_carrier_num == call.called_carrier_num && call.calling_ts == call.called_ts {
+                    1
+                } else {
+                    2
+                };
+                candidates.push((call.priority, *id, PreemptVictim::Individual(*id), slots));
             }
         }
         candidates
             .into_iter()
-            .min_by_key(|(priority, active, call_id, _)| (*priority, *active, *call_id))
-            .map(|(_, _, _, victim)| victim)
+            .min_by_key(|(priority, call_id, _, slots)| (*priority, usize::MAX - *slots, *call_id))
+            .map(|(_, _, victim, _)| victim)
     }
 
     /// ETSI EN 300 392-2 clause 14.8 pre-emptive priority handling. When a call requested at a
@@ -1117,36 +1183,38 @@ impl CcBsSubentity {
     /// with `DisconnectCause::PreEmptiveUseOfResource`. This is a no-op for non-pre-emptive
     /// priorities, and stops as soon as enough slots are free or no lower-priority call remains
     /// (in which case the caller's own allocation will fail and reject the call normally).
-    pub(super) fn preempt_for_priority(&mut self, queue: &mut MessageQueue, needed: usize, incoming_priority: u8) {
-        if !is_preemptive_priority(incoming_priority) {
-            return;
+    pub(super) fn ensure_timeslots_for_priority(&mut self, queue: &mut MessageQueue, required_slots: usize, priority: u8) -> bool {
+        if self.free_traffic_timeslots() >= required_slots {
+            return true;
+        }
+        if !is_preemptive_priority(priority) {
+            return false;
         }
         let mut attempted: Vec<u16> = Vec::new();
-        while self.free_timeslot_count() < needed {
-            let Some(victim) = self.select_preemption_victim(incoming_priority, &attempted) else {
+        while self.free_traffic_timeslots() < required_slots {
+            let Some(victim) = self.select_preemption_victim(priority, &attempted) else {
                 tracing::info!(
                     "CMCE: pre-emption for priority {} call cannot free enough channels ({} of {} slots free, no lower-priority call to release)",
-                    incoming_priority,
-                    self.free_timeslot_count(),
-                    needed
+                    priority,
+                    self.free_traffic_timeslots(),
+                    required_slots
                 );
-                break;
+                return false;
             };
             attempted.push(victim.call_id());
             tracing::info!(
                 "CMCE: pre-empting {:?} to free a traffic channel for an incoming priority {} call",
                 victim,
-                incoming_priority
+                priority
             );
             match victim {
-                PreemptVictim::Group(call_id) => {
-                    self.release_group_call(queue, call_id, DisconnectCause::PreEmptiveUseOfResource)
-                }
+                PreemptVictim::Group(call_id) => self.release_group_call(queue, call_id, DisconnectCause::PreEmptiveUseOfResource),
                 PreemptVictim::Individual(call_id) => {
                     self.release_individual_call(queue, call_id, DisconnectCause::PreEmptiveUseOfResource)
                 }
             }
         }
+        true
     }
 }
 

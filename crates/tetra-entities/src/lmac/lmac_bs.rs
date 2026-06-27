@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use tetra_config::bluestation::{SharedConfig, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BurstType, PhyBlockNum, PhysicalChannel, Sap, TdmaTime, TrainingSequence};
 use tetra_saps::tmv::TmvUnitdataInd;
 use tetra_saps::tmv::enums::logical_chans::LogicalChannel;
-use tetra_saps::tp::{TpUnitdataInd, TpUnitdataReqSlot};
+use tetra_saps::tp::{TpUnitdataInd, TpUnitdataReqSlot, TpUnitdataReqSlots};
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use crate::lmac::components::{errorcontrol, scrambler};
@@ -49,10 +51,10 @@ pub struct LmacBs {
     /// Per-timeslot UL physical channel indicator from UMAC.
     /// UL bursts arrive 2 timeslots after the corresponding DL slot, so we must
     /// keep this keyed by timeslot rather than a single "latest" value.
-    uplink_phy_chan: [PhysicalChannel; 4],
+    uplink_phy_chan: HashMap<(u16, u8), PhysicalChannel>,
 
     /// Signalled by Umac per timeslot. Set to true when in a traffic burst, the 1st stolen block shows that the 2nd slot is also stolen
-    blk2_stolen: bool,
+    blk2_stolen: HashMap<(u16, u8), bool>,
     // Details about current burst, parsed from BBK broadcast block
     // cur_burst: CurBurst,
 }
@@ -81,8 +83,8 @@ impl LmacBs {
             scrambling_code: sc,
 
             dltime: TdmaTime::default(),
-            uplink_phy_chan: [PhysicalChannel::Unallocated; 4],
-            blk2_stolen: false,
+            uplink_phy_chan: HashMap::new(),
+            blk2_stolen: HashMap::new(),
         }
     }
 
@@ -161,7 +163,10 @@ impl LmacBs {
                                 LogicalChannel::TchS
                             }
                         } else {
-                            tracing::warn!("LMAC: NUB/NormalTrainSeq2 unexpected block_num {:?}, treating as Stch", blk.block_num);
+                            tracing::warn!(
+                                "LMAC: NUB/NormalTrainSeq2 unexpected block_num {:?}, treating as Stch",
+                                blk.block_num
+                            );
                             LogicalChannel::Stch
                         }
                     }
@@ -215,7 +220,11 @@ impl LmacBs {
             sap: Sap::TmdSap,
             src: TetraEntity::Lmac,
             dest: TetraEntity::Umac,
-            msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd { ts: ul_time.t, data }),
+            msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd {
+                carrier_num: blk.carrier_num,
+                ts: ul_time.t,
+                data,
+            }),
         };
         queue.push_back(msg);
     }
@@ -230,13 +239,17 @@ impl LmacBs {
         }
 
         let block_num = blk.block_num;
+        let carrier_num = blk.carrier_num;
         let rssi_dbfs = blk.rssi_dbfs;
         let (type1bits, crc_pass) = errorcontrol::decode_cp(lchan, blk, Some(self.scrambling_code));
         // decode_cp only returns None when no scrambling code is available; we always pass
         // Some() here, so this is guaranteed. Use let-else instead of unwrap to stay
         // panic-free if that contract ever changes.
         let Some(type1bits) = type1bits else {
-            tracing::warn!("LMAC: decode_cp returned None for {:?} despite scrambling code set, dropping", lchan);
+            tracing::warn!(
+                "LMAC: decode_cp returned None for {:?} despite scrambling code set, dropping",
+                lchan
+            );
             return;
         };
 
@@ -259,6 +272,7 @@ impl LmacBs {
             src: TetraEntity::Lmac,
             dest: TetraEntity::Umac,
             msg: SapMsgInner::TmvUnitdataInd(TmvUnitdataInd {
+                carrier_num,
                 pdu: type1bits,
                 logical_channel: lchan,
                 block_num,
@@ -277,21 +291,28 @@ impl LmacBs {
     fn rx_tp_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         tracing::debug!("rx_tp_prim: msg {:?}", message);
 
-        let SapMsgInner::TpUnitdataInd(prim) = message.msg else { tracing::error!("BUG: unexpected message or state -- routing error"); return; };
+        let SapMsgInner::TpUnitdataInd(prim) = message.msg else {
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
 
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
-        let ts_idx = msg_dltime.t as usize - 1;
-        let pchan = self.uplink_phy_chan[ts_idx];
-        let lchan = Self::determine_logical_channel_ul(&prim, pchan == PhysicalChannel::Tp, self.blk2_stolen);
+        let key = (prim.carrier_num, msg_dltime.t);
+        let pchan = self.uplink_phy_chan.get(&key).copied().unwrap_or(PhysicalChannel::Unallocated);
+        let blk2_stolen = self.blk2_stolen.get(&key).copied().unwrap_or(false);
+        let lchan = Self::determine_logical_channel_ul(&prim, pchan == PhysicalChannel::Tp, blk2_stolen);
 
         // Sanity checks
-        if prim.block_num == PhyBlockNum::Block1 && self.blk2_stolen {
+        if prim.block_num == PhyBlockNum::Block1 && blk2_stolen {
             tracing::warn!("lmac_bs: blk2_stolen set when receiving block1, resetting");
-            self.blk2_stolen = false;
+            self.blk2_stolen.insert(key, false);
         }
-        if pchan != PhysicalChannel::Tp && self.blk2_stolen {
-            tracing::warn!("lmac_bs: blk2_stolen set on non-traffic burst (pchan={:?}), resetting — likely late STCH after circuit close", pchan);
-            self.blk2_stolen = false;
+        if pchan != PhysicalChannel::Tp && blk2_stolen {
+            tracing::warn!(
+                "lmac_bs: blk2_stolen set on non-traffic burst (pchan={:?}), resetting — likely late STCH after circuit close",
+                pchan
+            );
+            self.blk2_stolen.insert(key, false);
             return;
         }
 
@@ -304,17 +325,20 @@ impl LmacBs {
                 self.rx_blk_control(queue, prim, lchan);
             }
             _ => {
-                    tracing::error!("BUG: unexpected message or state -- routing error"); return;
-                }
+                tracing::error!("BUG: unexpected message or state -- routing error");
+                return;
+            }
         }
     }
 
     fn rx_tmv_configure_req(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
         let SapMsgInner::TmvConfigureReq(prim) = &message.msg else {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
-            };
-        if let Some(stolen) = prim.blk2_stolen {
-            self.blk2_stolen = stolen;
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
+        let carrier_num = prim.carrier_num.unwrap_or(self.config.config().cell.main_carrier);
+        if let (Some(time), Some(stolen)) = (prim.time, prim.blk2_stolen) {
+            self.blk2_stolen.insert((carrier_num, time.t), stolen);
         }
     }
 
@@ -322,12 +346,11 @@ impl LmacBs {
     fn rx_tmv_unitdata_req_slot(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::debug!("rx_tmv_unitdata_req_slot");
         let SapMsgInner::TmvUnitdataReq(prim) = &mut message.msg else {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
-            };
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
 
-        // Update per-timeslot UL physical channel indicator
-        let ts_idx = prim.ts.t as usize - 1;
-        self.uplink_phy_chan[ts_idx] = prim.ul_phy_chan;
+        self.uplink_phy_chan.insert((prim.carrier_num, prim.ts.t), prim.ul_phy_chan);
 
         let Some(bbk) = prim.bbk.take() else {
             tracing::error!("LMAC: rx_tmv_unitdata_req_slot: bbk missing, dropping slot");
@@ -373,12 +396,16 @@ impl LmacBs {
                 (BurstType::NDB, TrainingSequence::NormalTrainSeq2)
             }
             _ => {
-                tracing::warn!("LMAC: unsupported logical channel {:?} in rx_tmv_unitdata_req_slot, dropping", blk1.logical_channel);
+                tracing::warn!(
+                    "LMAC: unsupported logical channel {:?} in rx_tmv_unitdata_req_slot, dropping",
+                    blk1.logical_channel
+                );
                 return;
             }
         };
 
         let mut prim_phy = TpUnitdataReqSlot {
+            carrier_num: prim.carrier_num,
             train_type,
             burst_type,
             bbk: None,
@@ -411,6 +438,86 @@ impl LmacBs {
         queue.push_back(m);
     }
 
+    fn rx_tmv_unitdata_req_slots(&mut self, queue: &mut MessageQueue, message: SapMsg) {
+        let SapMsgInner::TmvUnitdataReqSlots(batch) = message.msg else {
+            tracing::error!("BUG: unexpected message or state -- routing error");
+            return;
+        };
+
+        let mut phy_slots = Vec::with_capacity(batch.slots.len());
+        for prim in batch.slots {
+            self.uplink_phy_chan.insert((prim.carrier_num, prim.ts.t), prim.ul_phy_chan);
+
+            let Some(bbk) = prim.bbk else {
+                tracing::error!("LMAC: batched slot missing bbk on carrier={} ts={}", prim.carrier_num, prim.ts.t);
+                continue;
+            };
+            let Some(blk1) = prim.blk1 else {
+                tracing::error!("LMAC: batched slot missing blk1 on carrier={} ts={}", prim.carrier_num, prim.ts.t);
+                continue;
+            };
+            let blk2 = prim.blk2;
+
+            let (burst_type, train_type) = match blk1.logical_channel {
+                LogicalChannel::Bsch => {
+                    if blk2.is_none() {
+                        tracing::warn!("LMAC: Bsch slot missing blk2, dropping");
+                        continue;
+                    }
+                    (BurstType::SDB, TrainingSequence::SyncTrainSeq)
+                }
+                LogicalChannel::SchF | LogicalChannel::TchS | LogicalChannel::Tch24 | LogicalChannel::Tch48 | LogicalChannel::Tch72 => {
+                    (BurstType::NDB, TrainingSequence::NormalTrainSeq1)
+                }
+                LogicalChannel::SchHd | LogicalChannel::Stch | LogicalChannel::Bnch => {
+                    if blk2.is_none() {
+                        tracing::warn!("LMAC: {:?} slot missing blk2, dropping", blk1.logical_channel);
+                        continue;
+                    }
+                    (BurstType::NDB, TrainingSequence::NormalTrainSeq2)
+                }
+                _ => {
+                    tracing::warn!(
+                        "LMAC: unsupported logical channel {:?} in batched slot, dropping",
+                        blk1.logical_channel
+                    );
+                    continue;
+                }
+            };
+
+            let mut prim_phy = TpUnitdataReqSlot {
+                carrier_num: prim.carrier_num,
+                train_type,
+                burst_type,
+                bbk: Some(errorcontrol::encode_aach(bbk.mac_block, bbk.scrambling_code)),
+                blk1: None,
+                blk2: None,
+            };
+
+            prim_phy.blk1 = Some(if blk1.logical_channel.is_traffic() {
+                errorcontrol::encode_tp(blk1, 1)
+            } else {
+                errorcontrol::encode_cp(blk1)
+            });
+            if let Some(blk2) = blk2 {
+                prim_phy.blk2 = Some(if blk2.logical_channel.is_traffic() {
+                    errorcontrol::encode_tp(blk2, 2)
+                } else {
+                    errorcontrol::encode_cp(blk2)
+                });
+            }
+
+            phy_slots.push(prim_phy);
+        }
+
+        queue.push_back(SapMsg {
+            sap: Sap::TpSap,
+            src: TetraEntity::Lmac,
+            dest: TetraEntity::Phy,
+            msg: SapMsgInner::TpUnitdataReqSlots(TpUnitdataReqSlots { slots: phy_slots }),
+        });
+    }
+
     fn rx_tmv_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         tracing::trace!("rx_tmv_prim");
 
@@ -421,11 +528,15 @@ impl LmacBs {
             SapMsgInner::TmvUnitdataReq(_) => {
                 self.rx_tmv_unitdata_req_slot(queue, message);
             }
+            SapMsgInner::TmvUnitdataReqSlots(_) => {
+                self.rx_tmv_unitdata_req_slots(queue, message);
+            }
             // SapMsgInner::CmceCallControl(_) => {
             //     self.rx_control(queue, message);
             // }
             _ => {
-                tracing::error!("BUG: unexpected message or state -- routing error"); return;
+                tracing::error!("BUG: unexpected message or state -- routing error");
+                return;
             }
         }
     }
@@ -475,6 +586,5 @@ impl TetraEntityTrait for LmacBs {
 
     fn tick_start(&mut self, _queue: &mut MessageQueue, ts: TdmaTime) {
         self.dltime = ts;
-        self.blk2_stolen = false; // reset in case it was set during this tick
     }
 }

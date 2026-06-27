@@ -15,21 +15,24 @@ pub struct MsState {
     pub rssi_dbfs: Option<f32>,
     pub registered_at: u64,
     pub last_seen_secs_ago: u64,
-    pub energy_saving_mode: u8,   // 0=StayAlive, 1=Eg1..7=Eg7
+    pub energy_saving_mode: u8, // 0=StayAlive, 1=Eg1..7=Eg7
 }
 
 /// Active call state
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CallState {
     pub call_id: u16,
-    pub call_type: &'static str,  // "group" or "individual"
+    pub call_type: &'static str, // "group" or "individual"
     pub gssi: u32,
     pub caller_issi: u32,
     pub called_issi: u32,
     pub active_speaker: Option<u32>,
     pub started_secs_ago: u64,
     pub simplex: bool,
+    pub carrier_num: u16,
     pub ts: u8,
+    pub peer_carrier_num: Option<u16>,
+    pub peer_ts: Option<u8>,
     /// ETSI call priority (0..=15). 15 = emergency call; 12..=15 = pre-emptive priority.
     pub priority: u8,
 }
@@ -53,18 +56,18 @@ pub struct LogEntry {
 /// Last Heard entry — one entry per call start or SDS activity
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LastHeardEntry {
-    pub ts: String,           // HH:MM:SS timestamp
-    pub issi: u32,            // source ISSI
-    pub activity: String,     // "call_group", "call_individual", "sds"
-    pub dest: u32,            // destination GSSI or ISSI (0 if unknown)
+    pub ts: String,       // HH:MM:SS timestamp
+    pub issi: u32,        // source ISSI
+    pub activity: String, // "call_group", "call_individual", "sds"
+    pub dest: u32,        // destination GSSI or ISSI (0 if unknown)
 }
 
 /// SDS Log entry — one SDS message the BS sent or received locally. Persisted to disk
 /// (`sds_log.json` next to the active config) so the log survives a restart.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SdsLogEntry {
-    pub ts: String,           // "YYYY-MM-DD HH:MM:SS" local time
-    pub direction: String,    // "rx" (from MS) | "net" (from network) | "tx" (from dashboard)
+    pub ts: String,        // "YYYY-MM-DD HH:MM:SS" local time
+    pub direction: String, // "rx" (from MS) | "net" (from network) | "tx" (from dashboard)
     pub source_issi: u32,
     pub dest_issi: u32,
     pub is_group: bool,
@@ -76,8 +79,8 @@ pub struct SdsLogEntry {
 /// disk (`dapnet_log.json` next to the active config) so the history survives a restart.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DapnetLogEntry {
-    pub ts: String,           // "YYYY-MM-DD HH:MM:SS" local time
-    pub direction: String,    // "rx" | "tx"
+    pub ts: String,        // "YYYY-MM-DD HH:MM:SS" local time
+    pub direction: String, // "rx" | "tx"
     pub id: String,
     pub callsign: String,
     pub recipient: String,
@@ -197,7 +200,10 @@ pub struct CallEntry {
     pub speaker_issi: Option<u32>,
     pub started_at: Instant,
     pub simplex: bool,
+    pub carrier_num: u16,
     pub ts: u8,
+    pub peer_carrier_num: Option<u16>,
+    pub peer_ts: Option<u8>,
     /// ETSI call priority (0..=15); 15 = emergency. Mirrored from the call-started telemetry.
     pub priority: u8,
 }
@@ -358,42 +364,54 @@ impl DashboardStateInner {
     }
 
     pub fn snapshot_ms(&self) -> Vec<MsState> {
-        self.ms_map.values().map(|e| MsState {
-            issi: e.issi,
-            groups: e.groups.clone(),
-            selected_group: e.selected_group,
-            rssi_dbfs: e.rssi_dbfs,
-            registered_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .saturating_sub(e.registered_at.elapsed().as_secs()),
-            last_seen_secs_ago: e.last_seen.elapsed().as_secs(),
-            energy_saving_mode: e.energy_saving_mode,
-        }).collect()
+        self.ms_map
+            .values()
+            .map(|e| MsState {
+                issi: e.issi,
+                groups: e.groups.clone(),
+                selected_group: e.selected_group,
+                rssi_dbfs: e.rssi_dbfs,
+                registered_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    .saturating_sub(e.registered_at.elapsed().as_secs()),
+                last_seen_secs_ago: e.last_seen.elapsed().as_secs(),
+                energy_saving_mode: e.energy_saving_mode,
+            })
+            .collect()
     }
 
     pub fn snapshot_calls(&self) -> Vec<CallState> {
-        self.calls.values().map(|c| CallState {
-            call_id: c.call_id,
-            call_type: if c.is_group { "group" } else { "individual" },
-            gssi: c.gssi,
-            caller_issi: c.caller_issi,
-            called_issi: c.called_issi,
-            active_speaker: c.speaker_issi,
-            started_secs_ago: c.started_at.elapsed().as_secs(),
-            simplex: c.simplex,
-            ts: c.ts,
-            priority: c.priority,
-        }).collect()
+        self.calls
+            .values()
+            .map(|c| CallState {
+                call_id: c.call_id,
+                call_type: if c.is_group { "group" } else { "individual" },
+                gssi: c.gssi,
+                caller_issi: c.caller_issi,
+                called_issi: c.called_issi,
+                active_speaker: c.speaker_issi,
+                started_secs_ago: c.started_at.elapsed().as_secs(),
+                simplex: c.simplex,
+                carrier_num: c.carrier_num,
+                ts: c.ts,
+                peer_carrier_num: c.peer_carrier_num,
+                peer_ts: c.peer_ts,
+                priority: c.priority,
+            })
+            .collect()
     }
 
     pub fn snapshot_emergencies(&self) -> Vec<EmergencyState> {
-        self.emergencies.values().map(|e| EmergencyState {
-            issi: e.issi,
-            dest_ssi: e.dest_ssi,
-            started_secs_ago: e.started_at.elapsed().as_secs(),
-        }).collect()
+        self.emergencies
+            .values()
+            .map(|e| EmergencyState {
+                issi: e.issi,
+                dest_ssi: e.dest_ssi,
+                started_secs_ago: e.started_at.elapsed().as_secs(),
+            })
+            .collect()
     }
 
     /// Raise (or refresh) an emergency for `issi`. Returns true only on the idle→emergency
@@ -401,13 +419,20 @@ impl DashboardStateInner {
     pub fn emergency_enter(&mut self, issi: u32, dest_ssi: u32) -> bool {
         match self.emergencies.get_mut(&issi) {
             Some(e) => {
-                if dest_ssi != 0 { e.dest_ssi = dest_ssi; }
+                if dest_ssi != 0 {
+                    e.dest_ssi = dest_ssi;
+                }
                 false
             }
             None => {
-                self.emergencies.insert(issi, EmergencyEntry {
-                    issi, dest_ssi, started_at: Instant::now(),
-                });
+                self.emergencies.insert(
+                    issi,
+                    EmergencyEntry {
+                        issi,
+                        dest_ssi,
+                        started_at: Instant::now(),
+                    },
+                );
                 true
             }
         }

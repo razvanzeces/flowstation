@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Per-ID lookup endpoint. radioid.net answers `{"count":N,"results":[{"id":..,"callsign":..}]}`.
-const API_URL_PREFIX:      &str = "https://radioid.net/api/dmr/user/?id=";
+const API_URL_PREFIX: &str = "https://radioid.net/api/dmr/user/?id=";
 const RPTR_API_URL_PREFIX: &str = "https://radioid.net/api/dmr/repeater/?id=";
 /// Politeness delay between successive API calls (each ID is fetched only once, ever).
 const FETCH_THROTTLE: Duration = Duration::from_millis(1100);
@@ -57,7 +57,11 @@ impl RadioIdCache {
         if !map.is_empty() {
             tracing::info!("RadioID: loaded {} cached callsign(s) from {}", map.len(), path.display());
         }
-        let inner = Arc::new(Mutex::new(Inner { map, pending: HashSet::new(), path }));
+        let inner = Arc::new(Mutex::new(Inner {
+            map,
+            pending: HashSet::new(),
+            path,
+        }));
         let (tx, rx) = crossbeam_channel::unbounded::<u32>();
         let worker_inner = Arc::clone(&inner);
         std::thread::Builder::new()
@@ -152,12 +156,7 @@ fn query_radioid(client: &reqwest::blocking::Client, url: &str) -> Result<Option
     let json: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
     match json.get("results").and_then(|r| r.as_array()) {
         Some(arr) if !arr.is_empty() => {
-            let cs = arr[0]
-                .get("callsign")
-                .and_then(|c| c.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            let cs = arr[0].get("callsign").and_then(|c| c.as_str()).unwrap_or("").trim().to_string();
             if cs.is_empty() { Ok(None) } else { Ok(Some(cs)) }
         }
         Some(_) => Ok(None), // empty results array = not in DB
@@ -169,7 +168,9 @@ fn query_radioid(client: &reqwest::blocking::Client, url: &str) -> Result<Option
 fn load_disk(path: &PathBuf) -> HashMap<u32, Entry> {
     let mut map = HashMap::new();
     let Ok(text) = std::fs::read_to_string(path) else { return map };
-    let Ok(json) = serde_json::from_str::<HashMap<String, String>>(&text) else { return map };
+    let Ok(json) = serde_json::from_str::<HashMap<String, String>>(&text) else {
+        return map;
+    };
     for (k, v) in json {
         if let Ok(id) = k.parse::<u32>() {
             map.insert(id, if v.is_empty() { Entry::NotFound } else { Entry::Found(v) });

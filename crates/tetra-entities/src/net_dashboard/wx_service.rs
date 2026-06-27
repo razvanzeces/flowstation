@@ -204,20 +204,41 @@ pub fn decode_metar(raw: &str) -> String {
         }
 
         // Trend
-        if t == "NOSIG" { parts.push("NOSIG".to_string()); i += 1; continue; }
-        if t == "TEMPO" { parts.push("TEMPO".to_string()); i += 1; continue; }
-        if t == "BECMG" { parts.push("BECMG".to_string()); i += 1; continue; }
+        if t == "NOSIG" {
+            parts.push("NOSIG".to_string());
+            i += 1;
+            continue;
+        }
+        if t == "TEMPO" {
+            parts.push("TEMPO".to_string());
+            i += 1;
+            continue;
+        }
+        if t == "BECMG" {
+            parts.push("BECMG".to_string());
+            i += 1;
+            continue;
+        }
 
         // Weather phenomena
         let wx = match t {
-            "BR" => Some("Mist"), "FG" => Some("Fog"), "HZ" => Some("Haze"),
-            "TS" => Some("TS"), "SN" => Some("Snow"), "RA" => Some("Rain"),
-            "DZ" => Some("Drizzle"), "GR" => Some("Hail"),
-            "-RA" => Some("Lt rain"), "+RA" => Some("Hvy rain"),
-            "-SN" => Some("Lt snow"), "+SN" => Some("Hvy snow"),
+            "BR" => Some("Mist"),
+            "FG" => Some("Fog"),
+            "HZ" => Some("Haze"),
+            "TS" => Some("TS"),
+            "SN" => Some("Snow"),
+            "RA" => Some("Rain"),
+            "DZ" => Some("Drizzle"),
+            "GR" => Some("Hail"),
+            "-RA" => Some("Lt rain"),
+            "+RA" => Some("Hvy rain"),
+            "-SN" => Some("Lt snow"),
+            "+SN" => Some("Hvy snow"),
             "TSRA" | "+TSRA" => Some("TS+rain"),
-            "MIFG" => Some("Shallow fog"), "FU" => Some("Smoke"),
-            "SQ" => Some("Squall"), "FC" => Some("Funnel cloud"),
+            "MIFG" => Some("Shallow fog"),
+            "FU" => Some("Smoke"),
+            "SQ" => Some("Squall"),
+            "FC" => Some("Funnel cloud"),
             _ => None,
         };
         if let Some(w) = wx {
@@ -314,9 +335,7 @@ pub fn fetch_wx(location: &str) -> Result<String, String> {
 
 /// Keep only digits and sign from a temperature string, e.g. "+18°C" -> "+18".
 fn clean_temp(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_ascii_digit() || *c == '+' || *c == '-')
-        .collect()
+    s.chars().filter(|c| c.is_ascii_digit() || *c == '+' || *c == '-').collect()
 }
 
 /// Replace wttr.in arrow glyphs with compass text and strip any remaining non-ASCII,
@@ -346,10 +365,7 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 /// Rewrite (or insert) the `[wx_service]` section in the TOML file, preserving everything
 /// else. The whole section is regenerated from the override values; an existing
 /// `[wx_service]` block (from its header until the next section header or EOF) is replaced.
-pub fn write_wx_to_toml(
-    config_path: &str,
-    ov: &tetra_config::bluestation::WxRuntimeOverride,
-) -> std::io::Result<()> {
+pub fn write_wx_to_toml(config_path: &str, ov: &tetra_config::bluestation::WxRuntimeOverride) -> std::io::Result<()> {
     let original = std::fs::read_to_string(config_path)?;
 
     let icao_escaped = ov.periodic_icao.replace('\\', "\\\\").replace('"', "\\\"");
@@ -362,13 +378,7 @@ pub fn write_wx_to_toml(
          periodic_is_group = {}\n\
          periodic_icao = \"{}\"\n\
          periodic_interval_secs = {}",
-        ov.enabled,
-        ov.service_issi,
-        ov.periodic_enabled,
-        ov.periodic_issi,
-        ov.periodic_is_group,
-        icao_escaped,
-        ov.periodic_interval_secs
+        ov.enabled, ov.service_issi, ov.periodic_enabled, ov.periodic_issi, ov.periodic_is_group, icao_escaped, ov.periodic_interval_secs
     );
 
     let lines: Vec<&str> = original.lines().collect();

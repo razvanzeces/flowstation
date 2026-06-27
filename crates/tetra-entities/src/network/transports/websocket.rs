@@ -237,10 +237,7 @@ fn read_http_response(stream: &mut AuthStream) -> Result<String, NetworkError> {
         match stream.read(&mut chunk) {
             Ok(0) => break, // peer closed the connection
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            Err(ref e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
                 // read timeout fired: stop with what we have rather than hang
                 break;
             }

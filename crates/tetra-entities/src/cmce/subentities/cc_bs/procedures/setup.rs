@@ -45,7 +45,7 @@ impl CcBsSubentity {
         handle: u32,
         link_id: u32,
         endpoint_id: u32,
-        allocated_timeslots: &[u8],
+        allocated_slots: &[CarrierSlot],
         cause: DisconnectCause,
     ) {
         tracing::info!("CMCE: aborting unsuccessful individual setup call_id={} cause={}", call_id, cause);
@@ -55,17 +55,17 @@ impl CcBsSubentity {
         self.cached_setups.remove(&call_id);
         self.individual_calls.remove(&call_id);
 
-        let mut released = Vec::new();
-        for &ts in allocated_timeslots {
-            if released.contains(&ts) {
+        let mut released = Vec::<CarrierSlot>::new();
+        for &slot in allocated_slots {
+            if released.contains(&slot) {
                 continue;
             }
-            released.push(ts);
+            released.push(slot);
 
-            if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
+            if let Ok(circuit) = self.circuits.close_circuit_slot(Direction::Both, slot.carrier_num, slot.ts) {
                 Self::signal_umac_circuit_close(queue, circuit, self.dltime);
             }
-            self.release_timeslot(ts);
+            self.release_timeslot_slot(slot);
         }
     }
 
@@ -106,7 +106,7 @@ impl CcBsSubentity {
         // Emergency / pre-emptive priority: if the cell is full, free one traffic channel by
         // releasing a lower-priority call before allocating (ETSI EN 300 392-2 clause 14.8).
         // No-op for ordinary priority.
-        self.preempt_for_priority(queue, 1, pdu.call_priority);
+        self.ensure_timeslots_for_priority(queue, 1, pdu.call_priority);
 
         // Allocate circuit (DL+UL for group call)
         let circuit = match {
@@ -150,7 +150,7 @@ impl CcBsSubentity {
         );
 
         // Signal UMAC to open DL+UL circuits.
-        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, CircuitDlMediaSource::LocalLoopback);
+        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, None, CircuitDlMediaSource::LocalLoopback);
 
         // Build channel allocation timeslot mask for this call.
         let mut timeslots = [false; 4];
@@ -222,7 +222,7 @@ impl CcBsSubentity {
                 chan_alloc: Some(CmceChanAllocReq {
                     usage: Some(circuit.usage),
                     alloc_type: ChanAllocType::Replace,
-                    carrier: None,
+                    carrier: Some(circuit.carrier_num),
                     timeslots,
                     ul_dl_assigned: UlDlAssignment::Both,
                 }),
@@ -263,7 +263,8 @@ impl CcBsSubentity {
         );
         let d_setup_ref = &self.cached_setups.get(&circuit.call_id).unwrap().pdu;
 
-        let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, circuit.usage, circuit.ts, UlDlAssignment::Both);
+        let (setup_sdu, setup_chan_alloc) =
+            Self::build_d_setup_prim(d_setup_ref, circuit.usage, circuit.carrier_num, circuit.ts, UlDlAssignment::Both);
         let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), self.dltime, dest_addr, None);
         queue.push_back(setup_msg);
 
@@ -274,6 +275,7 @@ impl CcBsSubentity {
                 calling_party,
                 dest_gssi,
                 calling_party.ssi,
+                circuit.carrier_num,
                 circuit.ts,
                 circuit.usage,
                 self.dltime,
@@ -287,6 +289,7 @@ impl CcBsSubentity {
             call_id: circuit.call_id,
             gssi: dest_gssi,
             caller_issi: calling_party.ssi,
+            carrier_num: circuit.carrier_num,
             ts: circuit.ts,
             priority: pdu.call_priority,
         });
@@ -297,7 +300,9 @@ impl CcBsSubentity {
                 call_id: circuit.call_id,
                 source_issi: calling_party.ssi,
                 dest_gssi,
+                carrier_num: circuit.carrier_num,
                 ts: circuit.ts,
+                is_group: true,
             },
             false,
             BrewNotification::IfGroupRoutable(dest_gssi),
@@ -412,11 +417,7 @@ impl CcBsSubentity {
         // Emergency / pre-emptive priority: if the cell is full, free the traffic channel(s) this
         // call needs by releasing lower-priority calls before allocating (ETSI EN 300 392-2 clause
         // 14.8). Duplex needs two slots, simplex one. No-op for ordinary priority.
-        self.preempt_for_priority(
-            queue,
-            if pdu.simplex_duplex_selection { 2 } else { 1 },
-            pdu.call_priority,
-        );
+        self.ensure_timeslots_for_priority(queue, if pdu.simplex_duplex_selection { 2 } else { 1 }, pdu.call_priority);
 
         // Allocate circuit(s). Duplex uses two traffic timeslots, one per MS, with cross-routing.
         let (circuit_calling, circuit_called) = {
@@ -459,8 +460,16 @@ impl CcBsSubentity {
                 ) {
                     Ok(circuit) => Some(circuit.clone()),
                     Err(e) => {
-                        let _ = self.circuits.close_circuit(Direction::Both, circuit_calling.ts);
-                        let _ = state.timeslot_alloc.release(TimeslotOwner::Cmce, circuit_calling.ts);
+                        let _ = self
+                            .circuits
+                            .close_circuit_slot(Direction::Both, circuit_calling.carrier_num, circuit_calling.ts);
+                        let _ = state.timeslot_alloc.release_slot(
+                            TimeslotOwner::Cmce,
+                            CarrierSlot {
+                                carrier_num: circuit_calling.carrier_num,
+                                ts: circuit_calling.ts,
+                            },
+                        );
                         tracing::info!(
                             "CMCE: rejecting U-SETUP P2P from ISSI {} to ISSI {}, failed to allocate second circuit for duplex P2P, error {:?}",
                             calling_party.ssi,
@@ -485,13 +494,14 @@ impl CcBsSubentity {
             (circuit_calling, circuit_called)
         };
 
+        let calling_carrier_num = circuit_calling.carrier_num;
         let calling_ts = circuit_calling.ts;
         let calling_usage = circuit_calling.usage;
         let call_id = circuit_calling.call_id;
-        let (called_ts, called_usage) = if let Some(called) = &circuit_called {
-            (called.ts, called.usage)
+        let (called_carrier_num, called_ts, called_usage) = if let Some(called) = &circuit_called {
+            (called.carrier_num, called.ts, called.usage)
         } else {
-            (calling_ts, calling_usage)
+            (calling_carrier_num, calling_ts, calling_usage)
         };
 
         tracing::info!(
@@ -560,7 +570,9 @@ impl CcBsSubentity {
                 called_handle: None,
                 called_link_id: None,
                 called_endpoint_id: None,
+                calling_carrier_num,
                 calling_ts,
+                called_carrier_num,
                 called_ts,
                 calling_usage,
                 called_usage,
@@ -594,7 +606,16 @@ impl CcBsSubentity {
                         prim.handle,
                         prim.link_id,
                         prim.endpoint_id,
-                        &[calling_ts, called_ts],
+                        &[
+                            CarrierSlot {
+                                carrier_num: calling_carrier_num,
+                                ts: calling_ts,
+                            },
+                            CarrierSlot {
+                                carrier_num: called_carrier_num,
+                                ts: called_ts,
+                            },
+                        ],
                         DisconnectCause::NoIdleCcEntity,
                     );
                 }
@@ -607,7 +628,16 @@ impl CcBsSubentity {
                         prim.handle,
                         prim.link_id,
                         prim.endpoint_id,
-                        &[calling_ts, called_ts],
+                        &[
+                            CarrierSlot {
+                                carrier_num: calling_carrier_num,
+                                ts: calling_ts,
+                            },
+                            CarrierSlot {
+                                carrier_num: called_carrier_num,
+                                ts: called_ts,
+                            },
+                        ],
                         DisconnectCause::IncompatibleTrafficCase,
                     );
                 }
@@ -786,6 +816,7 @@ impl CcBsSubentity {
         };
 
         let call_id = circuit_calling.call_id;
+        let carrier_num = circuit_calling.carrier_num;
         let ts = circuit_calling.ts;
         let usage = circuit_calling.usage;
         let brew_uuid = uuid::Uuid::new_v4();
@@ -825,7 +856,9 @@ impl CcBsSubentity {
                 called_handle: None,
                 called_link_id: None,
                 called_endpoint_id: None,
+                calling_carrier_num: carrier_num,
                 calling_ts: ts,
+                called_carrier_num: carrier_num,
                 called_ts: ts,
                 calling_usage: usage,
                 called_usage: usage,
@@ -857,7 +890,7 @@ impl CcBsSubentity {
                         prim.handle,
                         prim.link_id,
                         prim.endpoint_id,
-                        &[ts],
+                        &[CarrierSlot { carrier_num, ts }],
                         DisconnectCause::NoIdleCcEntity,
                     );
                 }
@@ -870,7 +903,7 @@ impl CcBsSubentity {
                         prim.handle,
                         prim.link_id,
                         prim.endpoint_id,
-                        &[ts],
+                        &[CarrierSlot { carrier_num, ts }],
                         DisconnectCause::IncompatibleTrafficCase,
                     );
                 }

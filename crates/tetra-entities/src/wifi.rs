@@ -129,19 +129,21 @@ pub fn scan() -> Result<Vec<WifiScanResult>, WifiError> {
     // what made the scan fail every time the WiFi tab was reopened shortly after the first
     // scan. `auto` is reliable on repeated opens and still refreshes when genuinely stale.
     let out = run_nmcli(&[
-        "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
-        "device", "wifi", "list", "--rescan", "auto",
+        "-t",
+        "-f",
+        "IN-USE,SSID,SIGNAL,SECURITY",
+        "device",
+        "wifi",
+        "list",
+        "--rescan",
+        "auto",
     ])?;
 
     // Build a set of saved SSIDs so we can mark them in the scan results.
     // We do this *after* the scan call so the scan can fail fast if nmcli is
     // gone; if listing saved profiles fails we just treat everything as
     // not-saved rather than aborting the whole scan.
-    let saved_ssids: std::collections::HashSet<String> = list_saved()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|p| p.name)
-        .collect();
+    let saved_ssids: std::collections::HashSet<String> = list_saved().unwrap_or_default().into_iter().map(|p| p.name).collect();
 
     let mut results = Vec::new();
     for line in out.lines() {
@@ -149,18 +151,32 @@ pub fn scan() -> Result<Vec<WifiScanResult>, WifiError> {
         // a naïve split(':') would mangle SSIDs containing colons. We do a
         // single-char state machine that unescapes as it goes.
         let fields = parse_terse_line(line);
-        if fields.len() < 4 { continue; }
+        if fields.len() < 4 {
+            continue;
+        }
         let in_use = fields[0].as_str();
-        let ssid   = fields[1].clone();
+        let ssid = fields[1].clone();
         let signal: u8 = fields[2].parse().unwrap_or(0);
-        let security = if fields[3].is_empty() { "--".to_string() } else { fields[3].clone() };
+        let security = if fields[3].is_empty() {
+            "--".to_string()
+        } else {
+            fields[3].clone()
+        };
         // Hidden networks show up with empty SSID; skip them so the list
         // isn't polluted by anonymous duplicates. Hidden APs can still be
         // added via the manual "Connect to hidden network" UI path.
-        if ssid.is_empty() { continue; }
+        if ssid.is_empty() {
+            continue;
+        }
         let saved = saved_ssids.contains(&ssid);
         let active = in_use == "*";
-        results.push(WifiScanResult { ssid, signal, security, saved, active });
+        results.push(WifiScanResult {
+            ssid,
+            signal,
+            security,
+            saved,
+            active,
+        });
     }
 
     // Deduplicate by SSID, keeping the strongest signal. APs broadcasting on
@@ -175,16 +191,17 @@ pub fn scan() -> Result<Vec<WifiScanResult>, WifiError> {
 /// List Wi-Fi profiles saved by NetworkManager. Ethernet / VPN profiles are
 /// filtered out — the UI only wants to show Wi-Fi.
 pub fn list_saved() -> Result<Vec<WifiSavedProfile>, WifiError> {
-    let out = run_nmcli(&[
-        "-t", "-f", "UUID,NAME,TYPE,ACTIVE",
-        "connection", "show",
-    ])?;
+    let out = run_nmcli(&["-t", "-f", "UUID,NAME,TYPE,ACTIVE", "connection", "show"])?;
     let mut profiles = Vec::new();
     for line in out.lines() {
         let fields = parse_terse_line(line);
-        if fields.len() < 4 { continue; }
+        if fields.len() < 4 {
+            continue;
+        }
         let conn_type = fields[2].clone();
-        if conn_type != "802-11-wireless" { continue; }
+        if conn_type != "802-11-wireless" {
+            continue;
+        }
         profiles.push(WifiSavedProfile {
             uuid: fields[0].clone(),
             name: fields[1].clone(),
@@ -264,7 +281,9 @@ pub fn status() -> Result<WifiStatus, WifiError> {
     let mut wifi_dev: Option<String> = None;
     for line in dev_out.lines() {
         let fields = parse_terse_line(line);
-        if fields.len() < 4 { continue; }
+        if fields.len() < 4 {
+            continue;
+        }
         if fields[1] == "wifi" {
             device_present = true;
             wifi_dev = Some(fields[0].clone());
@@ -347,8 +366,7 @@ fn run_nmcli(args: &[&str]) -> Result<String, WifiError> {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let output = child.wait_with_output()
-                    .map_err(|e| WifiError::Io(e.to_string()))?;
+                let output = child.wait_with_output().map_err(|e| WifiError::Io(e.to_string()))?;
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 if status.success() {
@@ -356,7 +374,9 @@ fn run_nmcli(args: &[&str]) -> Result<String, WifiError> {
                 }
                 return Err(WifiError::Failed(if stderr.is_empty() {
                     format!("exit code {}", status.code().unwrap_or(-1))
-                } else { stderr }));
+                } else {
+                    stderr
+                }));
             }
             Ok(None) => {
                 if start.elapsed() > NMCLI_TIMEOUT {

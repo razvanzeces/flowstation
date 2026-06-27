@@ -73,6 +73,15 @@ impl CmceBs {
                     cep.respond(ControlResponse::SendSdsResponse { handle, success });
                 }
             }
+            ControlCommand::SendRawSdsType4 { handle, .. } => {
+                // FH-BUG-052: TPG2200 / DAPNET / GeoAlarm Call-Outs arrive as an already-built
+                // Type-4 SDU (first byte is its own protocol id, e.g. 0xC3). Deliver it verbatim,
+                // WITHOUT re-wrapping in the SDS-TL simple-text header the SendSds path adds.
+                let success = sds.rx_raw_sds_type4_from_control(queue, cmd);
+                if let Some(cep) = responder {
+                    cep.respond(ControlResponse::SendSdsResponse { handle, success });
+                }
+            }
             ControlCommand::KickMs { issi } => {
                 tracing::info!("CMCE: KickMs issi={} requested", issi);
                 let success = cc.kick_ms(queue, issi);
@@ -111,7 +120,12 @@ impl CmceBs {
                     std::time::Duration::from_millis(500),
                 );
             }
-            ControlCommand::AddLiveSds { text, protocol_id, source_issi, repeat_count } => {
+            ControlCommand::AddLiveSds {
+                text,
+                protocol_id,
+                source_issi,
+                repeat_count,
+            } => {
                 let mut state = sds.shared_config().state_write();
                 let id = state.next_live_sds_id;
                 state.next_live_sds_id = state.next_live_sds_id.wrapping_add(1).max(1);

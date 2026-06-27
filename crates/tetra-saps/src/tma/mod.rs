@@ -50,6 +50,8 @@ pub struct TmaReportInd {
 /// transmit a TM-SDU.
 #[derive(Debug, Clone)]
 pub struct TmaUnitdataReq {
+    /// Preferred carrier for BS-internal routing. Legacy MCCH signalling may leave this unset.
+    pub carrier_num: Option<u16>,
     pub req_handle: Todo,
     pub pdu: BitBuffer,
     pub main_address: TetraAddress,
@@ -76,6 +78,8 @@ pub struct TmaUnitdataReq {
 /// without an associated TM-SDU.
 #[derive(Debug, Clone)]
 pub struct TmaUnitdataInd {
+    /// Carrier on which this TM-SDU was received.
+    pub carrier_num: u16,
     pub pdu: Option<BitBuffer>,
     pub main_address: TetraAddress,
     pub scrambling_code: u32,

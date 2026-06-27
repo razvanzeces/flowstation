@@ -18,7 +18,13 @@ pub struct Circuit {
     /// Timeslot in which this circuit exists
     pub ts: u8,
 
-    /// Optional peer timeslot for duplex cross-routing (UL on ts → DL on peer_ts)
+    /// Carrier number in which this circuit exists.
+    pub carrier_num: u16,
+
+    /// Optional peer carrier for duplex cross-routing.
+    pub peer_carrier_num: Option<u16>,
+
+    /// Optional peer timeslot for duplex cross-routing (UL on ts -> DL on peer_ts)
     pub peer_ts: Option<u8>,
 
     /// Usage number, between 4 and 63
@@ -83,23 +89,26 @@ pub enum CallControl {
     /// Umac forwards to Lmac
     /// Contains (Direction, timeslot) of associated circuit
     Close(Direction, u8),
+    /// Carrier-aware close for exact resource release.
+    CloseSlot { direction: Direction, carrier_num: u16, ts: u8 },
     /// Floor granted: a speaker has been given transmission permission.
     /// Sent to UMAC to exit hangtime (resume traffic mode) and to Brew to start forwarding voice.
     FloorGranted {
         call_id: u16,
         source_issi: u32,
         dest_gssi: u32,
+        carrier_num: u16,
         ts: u8,
     },
     /// Remote floor granted: a network/Brew speaker has been given transmission permission.
     /// Sent to UMAC to exit hangtime without arming local stuck-uplink detection.
-    RemoteFloorGranted { call_id: u16, ts: u8 },
+    RemoteFloorGranted { call_id: u16, carrier_num: u16, ts: u8 },
     /// Floor released: speaker stopped transmitting (entering hangtime).
     /// Sent to UMAC to enter hangtime signalling mode and to Brew to stop forwarding audio.
-    FloorReleased { call_id: u16, ts: u8 },
+    FloorReleased { call_id: u16, carrier_num: u16, ts: u8 },
     /// Call ended: the call is being torn down.
     /// Sent to UMAC to clear hangtime state and to Brew to clean up call tracking.
-    CallEnded { call_id: u16, ts: u8 },
+    CallEnded { call_id: u16, carrier_num: u16, ts: u8 },
     /// Request CMCE to start a network-initiated group call
     /// Sent by Brew when TetraPack sends GROUP_TX
     NetworkCallStart {
@@ -113,6 +122,7 @@ pub enum CallControl {
     NetworkCallReady {
         brew_uuid: uuid::Uuid, // Matches request
         call_id: u16,          // CMCE-allocated call identifier
+        carrier_num: u16,      // Allocated carrier
         ts: u8,                // Allocated timeslot
         usage: u8,             // Usage number
     },
@@ -123,7 +133,7 @@ pub enum CallControl {
     },
     /// UL inactivity detected on a traffic timeslot: no voice frames received
     /// for the timeout period. Sent by UMAC to CMCE.
-    UlInactivityTimeout { ts: u8 },
+    UlInactivityTimeout { carrier_num: u16, ts: u8 },
     /// Circuit-call setup request over Brew (individual/PBX/phone)
     NetworkCircuitSetupRequest { brew_uuid: uuid::Uuid, call: NetworkCircuitCall },
     /// Circuit-call setup accepted
@@ -141,7 +151,12 @@ pub enum CallControl {
     /// Circuit-call simplex floor idle/release
     NetworkCircuitSimplexIdle { brew_uuid: uuid::Uuid, grant: u8, permission: u8 },
     /// Circuit-call media is active on this local timeslot
-    NetworkCircuitMediaReady { brew_uuid: uuid::Uuid, call_id: u16, ts: u8 },
+    NetworkCircuitMediaReady {
+        brew_uuid: uuid::Uuid,
+        call_id: u16,
+        carrier_num: u16,
+        ts: u8,
+    },
     /// Circuit-call INFO/DTMF payload from MS to SwMI/Brew
     NetworkCircuitDtmf {
         brew_uuid: uuid::Uuid,

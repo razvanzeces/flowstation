@@ -48,19 +48,11 @@ pub fn json_escape(s: &str) -> String {
 /// else. The whole section is regenerated from the override values; an existing block (from its
 /// header until the next section header or EOF) is replaced. A `.telegram.bak` backup is made.
 /// Mirrors [`crate::net_dashboard::wx_service::write_wx_to_toml`].
-pub fn write_telegram_to_toml(
-    config_path: &str,
-    ov: &TelegramRuntimeOverride,
-) -> std::io::Result<()> {
+pub fn write_telegram_to_toml(config_path: &str, ov: &TelegramRuntimeOverride) -> std::io::Result<()> {
     let original = std::fs::read_to_string(config_path)?;
 
     let token_escaped = ov.bot_token.replace('\\', "\\\\").replace('"', "\\\"");
-    let chat_ids = ov
-        .chat_ids
-        .iter()
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let chat_ids = ov.chat_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
     let section = format!(
         "[telegram_alerts]\n\
          enabled = {}\n\
@@ -204,8 +196,7 @@ mod tests {
         let path = dir.join("fs_tg_test_roundtrip.toml");
         std::fs::write(&path, cfg).unwrap();
         write_telegram_to_toml(path.to_str().unwrap(), &ov()).unwrap();
-        let parsed = tetra_config::bluestation::parsing::from_file(path.to_str().unwrap())
-            .expect("written telegram section must parse");
+        let parsed = tetra_config::bluestation::parsing::from_file(path.to_str().unwrap()).expect("written telegram section must parse");
         let tg = parsed.telegram.expect("telegram present");
         assert!(tg.enabled);
         assert_eq!(tg.chat_ids, vec![987654321, -1001234567890]);

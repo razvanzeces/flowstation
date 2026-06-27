@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::typed_pdu_fields::Type3FieldGeneric;
 use tetra_core::{
-    BitBuffer, Direction, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, TimeslotOwner, TxReporter, tetra_entities::TetraEntity,
-    unimplemented_log,
+    BitBuffer, CarrierSlot, Direction, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, TimeslotOwner, TxReporter,
+    tetra_entities::TetraEntity, unimplemented_log,
 };
 use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_pdus::cmce::{

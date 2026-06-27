@@ -1,7 +1,6 @@
 use tetra_config::bluestation::{
-    CfgAsterisk, CfgCellInfo, CfgDapnet, CfgEmergency, CfgGeoalarm, CfgHealth, CfgNetInfo, CfgPhyIo,
-    CfgRecovery, CfgSecurity, CfgSnomNotify, CfgTpg2200Action, CfgWxService, PhyBackend, StackConfig,
-    StackMode,
+    CfgAsterisk, CfgCellInfo, CfgDapnet, CfgEmergency, CfgGeoalarm, CfgHealth, CfgNetInfo, CfgPhyIo, CfgRecovery, CfgSecurity,
+    CfgSnomNotify, CfgTpg2200Action, CfgWxService, PhyBackend, StackConfig, StackMode,
 };
 use tetra_core::{freqs::FreqInfo, ranges::SortedDisjointSsiRanges};
 
@@ -59,6 +58,7 @@ pub fn default_cell_info(freq_info: FreqInfo) -> CfgCellInfo {
         colour_code: 1,
         location_area: 2,
         main_carrier: freq_info.carrier,
+        secondary_carrier: None,
         freq_band: freq_info.band,
         freq_offset_hz: freq_info.freq_offset_hz,
         duplex_spacing_id: freq_info.duplex_spacing_id,

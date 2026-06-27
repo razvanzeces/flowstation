@@ -1,6 +1,6 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
-use tetra_core::{Direction, TdmaTime, TimeslotAllocator, TimeslotOwner, frames, multiframes};
+use tetra_core::{CarrierSlot, Direction, TdmaTime, TimeslotAllocator, TimeslotOwner, frames, multiframes};
 use tetra_pdus::cmce::structs::cmce_circuit::CmceCircuit;
 use tetra_saps::{
     control::enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType},
@@ -18,20 +18,20 @@ pub enum CircuitErr {
 }
 
 pub enum CircuitMgrCmd {
-    SendDSetup(CallId, u8, u8), // call id, usage number, timeslot
+    SendDSetup(CallId, u8, u16, u8), // call id, usage number, carrier, timeslot
     SendClose(CallId, CmceCircuit),
 }
 
 pub struct CircuitMgr {
     pub dltime: TdmaTime,
 
-    /// Holds any Dl and Dl+Ul circuits
-    pub dl: [Option<CmceCircuit>; 4],
-    /// Holds any Ul-only circuits, with no recipients on this cell
-    pub ul_only: [Option<CmceCircuit>; 4],
+    /// Holds any Dl and Dl+Ul circuits.
+    pub dl: Vec<CmceCircuit>,
+    /// Holds any Ul-only circuits, with no recipients on this cell.
+    pub ul_only: Vec<CmceCircuit>,
 
-    /// Data blocks queued to be transmitted, per timeslot
-    pub tx_data: [VecDeque<Vec<u8>>; 4],
+    /// Data blocks queued to be transmitted, per carrier/timeslot.
+    pub tx_data: HashMap<(u16, u8), VecDeque<Vec<u8>>>,
 
     /// 14-bit call identifier. Zero value is reserved.
     pub next_call_identifier: u16,
@@ -43,46 +43,81 @@ impl CircuitMgr {
     pub fn new() -> Self {
         Self {
             dltime: TdmaTime::default(),
-            dl: [None, None, None, None],
-            ul_only: [None, None, None, None],
-            tx_data: [VecDeque::new(), VecDeque::new(), VecDeque::new(), VecDeque::new()],
+            dl: Vec::new(),
+            ul_only: Vec::new(),
+            tx_data: HashMap::new(),
             next_call_identifier: 4,
             next_usage_number: 4,
         }
     }
 
-    /// Checks if a circuit is active on the given timeslot
-    /// Returns (dl_active, ul_active)
-    pub fn is_active(&self, ts: u8) -> (bool, bool) {
-        match &self.dl[ts as usize - 1] {
+    fn key(carrier_num: u16, ts: u8) -> (u16, u8) {
+        (carrier_num, ts)
+    }
+
+    fn find_dl(&self, carrier_num: u16, ts: u8) -> Option<&CmceCircuit> {
+        self.dl.iter().find(|c| c.carrier_num == carrier_num && c.ts == ts)
+    }
+
+    fn find_ul_only(&self, carrier_num: u16, ts: u8) -> Option<&CmceCircuit> {
+        self.ul_only.iter().find(|c| c.carrier_num == carrier_num && c.ts == ts)
+    }
+
+    fn remove_dl(&mut self, carrier_num: u16, ts: u8) -> Option<CmceCircuit> {
+        let index = self.dl.iter().position(|c| c.carrier_num == carrier_num && c.ts == ts)?;
+        Some(self.dl.remove(index))
+    }
+
+    fn remove_ul_only(&mut self, carrier_num: u16, ts: u8) -> Option<CmceCircuit> {
+        let index = self.ul_only.iter().position(|c| c.carrier_num == carrier_num && c.ts == ts)?;
+        Some(self.ul_only.remove(index))
+    }
+
+    /// Checks if a circuit is active on the given carrier/timeslot.
+    /// Returns (dl_active, ul_active).
+    pub fn is_active_slot(&self, carrier_num: u16, ts: u8) -> (bool, bool) {
+        match self.find_dl(carrier_num, ts) {
             Some(dl) => {
                 if dl.direction == Direction::Both {
                     (true, true)
                 } else {
-                    (true, self.ul_only[ts as usize - 1].is_some())
+                    (true, self.find_ul_only(carrier_num, ts).is_some())
                 }
             }
-            None => (false, self.ul_only[ts as usize - 1].is_some()),
+            None => (false, self.find_ul_only(carrier_num, ts).is_some()),
         }
     }
 
-    /// Checks if a circuit is active on the given timeslot and direction
-    /// Direction must be Dl or Ul
+    /// Backwards-compatible check by timeslot; true if any configured carrier uses it.
+    pub fn is_active(&self, ts: u8) -> (bool, bool) {
+        let dl_active = self.dl.iter().any(|c| c.ts == ts);
+        let ul_active = self.ul_only.iter().any(|c| c.ts == ts) || self.dl.iter().any(|c| c.ts == ts && c.direction == Direction::Both);
+        (dl_active, ul_active)
+    }
+
+    pub fn is_active_dir_slot(&self, carrier_num: u16, ts: u8, dir: Direction) -> bool {
+        match dir {
+            Direction::Dl => self.find_dl(carrier_num, ts).is_some(),
+            Direction::Ul => {
+                self.find_ul_only(carrier_num, ts).is_some()
+                    || self.find_dl(carrier_num, ts).is_some_and(|dl| dl.direction == Direction::Both)
+            }
+            _ => {
+                tracing::error!(
+                    "CMCE: is_active_dir_slot called with non-specific direction {:?}, returning false",
+                    dir
+                );
+                false
+            }
+        }
+    }
+
     pub fn is_active_dir(&self, ts: u8, dir: Direction) -> bool {
         match dir {
-            Direction::Dl => self.dl[ts as usize - 1].is_some(),
+            Direction::Dl => self.dl.iter().any(|c| c.ts == ts),
             Direction::Ul => {
-                let dl_is_both = if let Some(dl) = &self.dl[ts as usize - 1] {
-                    if self.ul_only[ts as usize - 1].is_some() {
-                        tracing::warn!("CMCE: circuit_mgr ts={} has both dl and ul_only set simultaneously (invariant violation)", ts);
-                    }
-                    dl.direction == Direction::Both
-                } else {
-                    false
-                };
-                self.ul_only[ts as usize - 1].is_some() || dl_is_both
+                self.ul_only.iter().any(|c| c.ts == ts) || self.dl.iter().any(|c| c.ts == ts && c.direction == Direction::Both)
             }
-
             _ => {
                 tracing::error!("CMCE: is_active_dir called with non-specific direction {:?}, returning false", dir);
                 false
@@ -90,24 +125,27 @@ impl CircuitMgr {
         }
     }
 
-    /// Gets the usage number of an active circuit, (Option<dl_usage>, Option<ul_usage>)
-    pub fn get_usage(&self, ts: u8) -> (Option<u8>, Option<u8>) {
-        let (dl_usage, dl_is_both) = if let Some(dl) = &self.dl[ts as usize - 1] {
+    pub fn get_usage_slot(&self, carrier_num: u16, ts: u8) -> (Option<u8>, Option<u8>) {
+        let (dl_usage, dl_is_both) = if let Some(dl) = self.find_dl(carrier_num, ts) {
             (Some(dl.usage), dl.direction == Direction::Both)
         } else {
             (None, false)
         };
         let ul_usage = if dl_is_both {
-            if self.ul_only[ts as usize - 1].is_some() {
-                tracing::warn!("CMCE: circuit_mgr ts={} get_usage has both Dl+Ul circuit and ul_only set simultaneously (invariant violation)", ts);
-            }
             dl_usage
-        } else if let Some(ul) = &self.ul_only[ts as usize - 1] {
-            Some(ul.usage)
         } else {
-            None
+            self.find_ul_only(carrier_num, ts).map(|ul| ul.usage)
         };
         (dl_usage, ul_usage)
+    }
+
+    pub fn get_usage(&self, ts: u8) -> (Option<u8>, Option<u8>) {
+        let circuit = self
+            .dl
+            .iter()
+            .find(|c| c.ts == ts)
+            .or_else(|| self.ul_only.iter().find(|c| c.ts == ts));
+        circuit.map_or((None, None), |circuit| self.get_usage_slot(circuit.carrier_num, ts))
     }
 
     pub fn get_next_call_id(&mut self) -> CallId {
@@ -123,28 +161,57 @@ impl CircuitMgr {
         let usage = self.next_usage_number;
         self.next_usage_number += 1;
         if self.next_usage_number > 63 {
-            self.next_usage_number = 4; // Wrap around, skip reserved values
+            self.next_usage_number = 4;
         }
         usage
     }
 
-    /// Finds a free timeslot for the given direction (Ul, Dl or Both)
-    fn get_free_ts(&self, dir: Direction) -> Result<u8, CircuitErr> {
-        // TODO FIXME we may do a bit smarter allocation here
-        for ts in 2..=4 {
-            let (dl_active, ul_active) = self.is_active(ts);
-            match (dir, dl_active, ul_active) {
-                (Direction::Dl, false, _) => return Ok(ts),
-                (Direction::Ul, false, false) => return Ok(ts),
-                (Direction::Ul, true, false) => {
-                    // Check if dl circuit covers Dl+Ul
-                    let dl = self.dl[ts as usize - 1].as_ref().unwrap();
-                    if dl.direction != Direction::Both {
-                        return Ok(ts);
+    fn make_circuit(
+        &mut self,
+        dir: Direction,
+        slot: CarrierSlot,
+        call_id: CallId,
+        usage: u8,
+        comm_type: CommunicationType,
+        simplex_duplex: bool,
+    ) -> CmceCircuit {
+        CmceCircuit {
+            ts_created: self.dltime,
+            direction: dir,
+            ts: slot.ts,
+            carrier_num: slot.carrier_num,
+            call_id,
+            usage,
+            circuit_mode: CircuitModeType::TchS,
+            comm_type,
+            simplex_duplex,
+            speech_service: Some(0),
+            etee_encrypted: false,
+        }
+    }
+
+    fn get_free_slot(&self, dir: Direction) -> Result<CarrierSlot, CircuitErr> {
+        for carrier_num in self
+            .dl
+            .iter()
+            .map(|c| c.carrier_num)
+            .chain(self.ul_only.iter().map(|c| c.carrier_num))
+            .chain([0])
+        {
+            for ts in 2..=4 {
+                let (dl_active, ul_active) = self.is_active_slot(carrier_num, ts);
+                match (dir, dl_active, ul_active) {
+                    (Direction::Dl, false, _) => return Ok(CarrierSlot { carrier_num, ts }),
+                    (Direction::Ul, false, false) => return Ok(CarrierSlot { carrier_num, ts }),
+                    (Direction::Ul, true, false) => {
+                        let dl = self.find_dl(carrier_num, ts).unwrap();
+                        if dl.direction != Direction::Both {
+                            return Ok(CarrierSlot { carrier_num, ts });
+                        }
                     }
+                    (Direction::Both, false, false) => return Ok(CarrierSlot { carrier_num, ts }),
+                    _ => {}
                 }
-                (Direction::Both, false, false) => return Ok(ts),
-                _ => {}
             }
         }
         Err(CircuitErr::NoCircuitFree)
@@ -156,31 +223,13 @@ impl CircuitMgr {
         comm_type: CommunicationType,
         simplex_duplex: bool,
     ) -> Result<&CmceCircuit, CircuitErr> {
-        // Get timeslot, call_id and usage
-        let ts = self.get_free_ts(dir)?;
+        let slot = self.get_free_slot(dir)?;
         let call_id = self.get_next_call_id();
         let usage = self.get_next_usage_number();
-
-        // Create circuit
-        let circuit = CmceCircuit {
-            ts_created: self.dltime,
-            direction: dir,
-            ts,
-            call_id,
-            usage,
-            circuit_mode: CircuitModeType::TchS, // TODO: only speech supported for now
-            // endpoint_id: 0, // TODO, we don't use endpoints as of yet
-            comm_type,
-            simplex_duplex,
-            speech_service: Some(0), // TODO, only TETRA encoded speech for now
-            etee_encrypted: false,   // TODO, no encryption for now
-        };
-
-        // Register circuit and return
-        Ok(self.open_circuit(dir, circuit)?)
+        let circuit = self.make_circuit(dir, slot, call_id, usage, comm_type, simplex_duplex);
+        self.open_circuit(dir, circuit)
     }
 
-    /// Allocate circuit using centralized timeslot allocator
     pub fn allocate_circuit_with_allocator(
         &mut self,
         dir: Direction,
@@ -189,31 +238,13 @@ impl CircuitMgr {
         timeslot_alloc: &mut TimeslotAllocator,
         owner: TimeslotOwner,
     ) -> Result<&CmceCircuit, CircuitErr> {
-        // Get timeslot from centralized allocator
-        let ts = timeslot_alloc.allocate_any(owner).ok_or(CircuitErr::NoCircuitFree)?;
-
+        let slot = timeslot_alloc.allocate_any_slot(owner).ok_or(CircuitErr::NoCircuitFree)?;
         let call_id = self.get_next_call_id();
         let usage = self.get_next_usage_number();
-
-        // Create circuit
-        let circuit = CmceCircuit {
-            ts_created: self.dltime,
-            direction: dir,
-            ts,
-            call_id,
-            usage,
-            circuit_mode: CircuitModeType::TchS,
-            comm_type,
-            simplex_duplex,
-            speech_service: Some(0),
-            etee_encrypted: false,
-        };
-
-        // Register circuit and return
-        Ok(self.open_circuit(dir, circuit)?)
+        let circuit = self.make_circuit(dir, slot, call_id, usage, comm_type, simplex_duplex);
+        self.open_circuit(dir, circuit)
     }
 
-    /// Allocate an additional circuit for an existing call id using the centralized allocator.
     pub fn allocate_circuit_for_call_with_allocator(
         &mut self,
         call_id: CallId,
@@ -223,53 +254,39 @@ impl CircuitMgr {
         timeslot_alloc: &mut TimeslotAllocator,
         owner: TimeslotOwner,
     ) -> Result<&CmceCircuit, CircuitErr> {
-        let ts = timeslot_alloc.allocate_any(owner).ok_or(CircuitErr::NoCircuitFree)?;
+        let slot = timeslot_alloc.allocate_any_slot(owner).ok_or(CircuitErr::NoCircuitFree)?;
         let usage = self.get_next_usage_number();
-
-        let circuit = CmceCircuit {
-            ts_created: self.dltime,
-            direction: dir,
-            ts,
-            call_id,
-            usage,
-            circuit_mode: CircuitModeType::TchS,
-            comm_type,
-            simplex_duplex,
-            speech_service: Some(0),
-            etee_encrypted: false,
-        };
-
-        Ok(self.open_circuit(dir, circuit)?)
+        let circuit = self.make_circuit(dir, slot, call_id, usage, comm_type, simplex_duplex);
+        self.open_circuit(dir, circuit)
     }
 
-    /// Closes any active circuits for given timeslot and direction.
-    /// Returns the CmceCircuit
-    /// When direction is Both, closes both directions
     pub fn close_circuit(&mut self, dir: Direction, ts: u8) -> Result<CmceCircuit, CircuitErr> {
+        let carrier_num = self
+            .dl
+            .iter()
+            .chain(self.ul_only.iter())
+            .find(|c| c.ts == ts)
+            .map(|c| c.carrier_num)
+            .ok_or(CircuitErr::CircuitNotActive)?;
+        self.close_circuit_slot(dir, carrier_num, ts)
+    }
+
+    pub fn close_circuit_slot(&mut self, dir: Direction, carrier_num: u16, ts: u8) -> Result<CmceCircuit, CircuitErr> {
         match dir {
             Direction::Dl | Direction::Both => {
-                self.tx_data[ts as usize - 1].clear();
-                if dir == Direction::Both && self.ul_only[ts as usize - 1].is_some() {
-                    tracing::warn!("Closing Dl+Ul circuit on ts {} while Ul-only circuit exists", ts);
-                }
-                let circuit = self.dl[ts as usize - 1].take();
+                self.tx_data.remove(&Self::key(carrier_num, ts));
+                let circuit = self.remove_dl(carrier_num, ts);
                 circuit.ok_or(CircuitErr::CircuitNotActive)
             }
-            Direction::Ul => {
-                let circuit = self.ul_only[ts as usize - 1].take();
-                circuit.ok_or(CircuitErr::CircuitNotActive)
-            }
+            Direction::Ul => self.remove_ul_only(carrier_num, ts).ok_or(CircuitErr::CircuitNotActive),
             _ => panic!(),
         }
     }
 
-    /// Creates a new circuit on the given direction and timeslot
-    /// This channel should be free, if not, warnings will be issued and existing circuit will be closed first
-    /// Consumes the circuit but returns a reference
     fn open_circuit(&mut self, dir: Direction, circuit: CmceCircuit) -> Result<&CmceCircuit, CircuitErr> {
-        // Sanity check, close circuit and issue warning if exists
+        let carrier_num = circuit.carrier_num;
         let ts = circuit.ts;
-        let (dl_active, ul_active) = self.is_active(ts);
+        let (dl_active, ul_active) = self.is_active_slot(carrier_num, ts);
         if dir.includes_dl() && dl_active {
             return Err(CircuitErr::CircuitAlreadyInUse);
         }
@@ -279,76 +296,67 @@ impl CircuitMgr {
 
         match dir {
             Direction::Dl | Direction::Both => {
-                if !self.tx_data[ts as usize - 1].is_empty() {
-                    tracing::warn!("CircuitMgr::create had pending tx_data on Dl {}", ts);
-                    self.tx_data[ts as usize - 1].clear();
+                let key = Self::key(carrier_num, ts);
+                if self.tx_data.get(&key).is_some_and(|queue| !queue.is_empty()) {
+                    tracing::warn!("CircuitMgr::create had pending tx_data on Dl carrier={} ts={}", carrier_num, ts);
+                    self.tx_data.remove(&key);
                 }
-                self.dl[ts as usize - 1] = Some(circuit);
-                Ok(self.dl[ts as usize - 1].as_ref().unwrap())
+                self.dl.push(circuit);
+                Ok(self.dl.last().unwrap())
             }
             Direction::Ul => {
-                self.ul_only[ts as usize - 1] = Some(circuit);
-                Ok(self.ul_only[ts as usize - 1].as_ref().unwrap())
+                self.ul_only.push(circuit);
+                Ok(self.ul_only.last().unwrap())
             }
             _ => panic!(),
         }
     }
 
-    /// Put a block in the queue for transmission on an associated channel
-    pub fn put_block(&mut self, ts: u8, block: Vec<u8>) -> Result<(), CircuitErr> {
-        if !self.is_active_dir(ts, Direction::Dl) {
+    pub fn put_block(&mut self, carrier_num: u16, ts: u8, block: Vec<u8>) -> Result<(), CircuitErr> {
+        if !self.is_active_dir_slot(carrier_num, ts, Direction::Dl) {
             Err(CircuitErr::CircuitNotActive)
         } else {
-            self.tx_data[ts as usize - 1].push_back(block);
+            self.tx_data.entry(Self::key(carrier_num, ts)).or_default().push_back(block);
             Ok(())
         }
     }
 
-    /// Take a to-be-transmitted block from the queue
-    pub fn take_block(&mut self, ts: u8) -> Result<Option<Vec<u8>>, CircuitErr> {
-        if !self.is_active_dir(ts, Direction::Dl) {
+    pub fn take_block(&mut self, carrier_num: u16, ts: u8) -> Result<Option<Vec<u8>>, CircuitErr> {
+        if !self.is_active_dir_slot(carrier_num, ts, Direction::Dl) {
             return Err(CircuitErr::CircuitNotActive);
-        } else {
-            Ok(self.tx_data[ts as usize - 1].pop_front())
         }
+        Ok(self.tx_data.get_mut(&Self::key(carrier_num, ts)).and_then(VecDeque::pop_front))
     }
 
     /// Closes any circuits that have expired.
-    /// Safety timeout for simplex (HDX/PTT) circuits: 6 minutes (beyond the 5-minute call timeout T5m).
-    /// Full-duplex (FDX) circuits — normal voice calls — have no timeout here;
-    /// they are released by normal call signalling (U-DISCONNECT / CALL_RELEASE).
-    /// ETSI EN 300 392-2 §14.9: call timeout does not apply to FDX individual calls.
-    /// Active calls are cleaned up earlier by CMCE hangtime/release logic.
+    /// Full-duplex circuits are exempt; only simplex circuits are force-closed here.
     fn close_expired_circuits(&mut self, mut tasks: Option<Vec<CircuitMgrCmd>>) -> Option<Vec<CircuitMgrCmd>> {
-        const CIRCUIT_EXPIRY_TIMESLOTS: i32 = 6 * 60 * 18 * 4; // 6 minutes for simplex
+        const CIRCUIT_EXPIRY_TIMESLOTS: i32 = 6 * 60 * 18 * 4;
 
-        let mut to_close: Vec<_> = self
+        let mut to_close = self
             .dl
             .iter()
-            .filter_map(|circuit| circuit.as_ref())
-            // FDX circuits (simplex_duplex=true) have no safety timeout — skip them.
             .filter(|circuit| !circuit.simplex_duplex)
             .filter(|circuit| circuit.ts_created.age(self.dltime) > CIRCUIT_EXPIRY_TIMESLOTS)
-            .map(|circuit| (circuit.direction, circuit.ts, circuit.call_id))
-            .collect();
+            .map(|circuit| (circuit.direction, circuit.carrier_num, circuit.ts, circuit.call_id))
+            .collect::<Vec<_>>();
         to_close.extend(
             self.ul_only
                 .iter()
-                .filter_map(|circuit| circuit.as_ref())
                 .filter(|circuit| !circuit.simplex_duplex)
                 .filter(|circuit| circuit.ts_created.age(self.dltime) > CIRCUIT_EXPIRY_TIMESLOTS)
-                .map(|circuit| (circuit.direction, circuit.ts, circuit.call_id)),
+                .map(|circuit| (circuit.direction, circuit.carrier_num, circuit.ts, circuit.call_id)),
         );
-        for (dir, ts, call_id) in to_close {
-            match self.close_circuit(dir, ts) {
-                Ok(circuit) => {
-                    tasks.get_or_insert_with(Vec::new).push(CircuitMgrCmd::SendClose(call_id, circuit));
-                }
+        for (dir, carrier_num, ts, call_id) in to_close {
+            match self.close_circuit_slot(dir, carrier_num, ts) {
+                Ok(circuit) => tasks.get_or_insert_with(Vec::new).push(CircuitMgrCmd::SendClose(call_id, circuit)),
                 Err(_) => {
-                    // Already closed by normal release path racing with the expiry timer — safe to ignore.
                     tracing::debug!(
-                        "circuit_mgr: expiry close skipped for call_id={} ts={} dir={:?} (already closed)",
-                        call_id, ts, dir
+                        "circuit_mgr: expiry close skipped for call_id={} carrier={} ts={} dir={:?} (already closed)",
+                        call_id,
+                        carrier_num,
+                        ts,
+                        dir
                     );
                 }
             }
@@ -361,30 +369,17 @@ impl CircuitMgr {
         let mut tasks = None;
 
         if dltime.t == 1 {
-            // First, close any expired circuits
             tasks = self.close_expired_circuits(tasks);
 
-            // Next, go through channels, see if D-SETUPs need to be sent
-            // Late entry: resend D-SETUP every 5 seconds
             for circuit in self.dl.iter() {
-                if let Some(circuit) = circuit {
-                    let age = circuit.ts_created.age(dltime);
-
-                    // Send D-SETUP for the initial frame + 1 backup frame after circuit creation.
-                    // Matches ETSI Annex D Figure D.2: 1 initial + 1 back-up on MCCH.
-                    if age < frames!(D_SETUP_REPEATS) {
-                        tasks
-                            .get_or_insert_with(Vec::new)
-                            .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));
-                    }
-                    // Late entry: resend every 5 seconds.
-                    // Compare in frames (age/4) since tick_start only fires on t==1
-                    // but ts_created may have any timeslot value.
-                    else if (age / 4) % (LATE_ENTRY_INTERVAL_TIMESLOTS / 4) == 0 {
-                        tasks
-                            .get_or_insert_with(Vec::new)
-                            .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));
-                    }
+                let age = circuit.ts_created.age(dltime);
+                if age < frames!(D_SETUP_REPEATS) || (age / 4) % (LATE_ENTRY_INTERVAL_TIMESLOTS / 4) == 0 {
+                    tasks.get_or_insert_with(Vec::new).push(CircuitMgrCmd::SendDSetup(
+                        circuit.call_id,
+                        circuit.usage,
+                        circuit.carrier_num,
+                        circuit.ts,
+                    ));
                 }
             }
             return tasks;
@@ -397,35 +392,43 @@ impl CircuitMgr {
 mod tests {
     use super::*;
 
-    /// Regression (ETSI EN 300 392-2 §14.9): full-duplex (FDX) circuits must NOT be
-    /// force-closed by the 6-minute safety timeout — only simplex (HDX/PTT) circuits are.
-    /// The CMCE rewrite dropped the `simplex_duplex` filter, force-closing duplex voice
-    /// calls after 6 minutes; this verifies the exemption is restored.
     #[test]
     fn duplex_circuit_not_closed_after_six_minutes() {
         let mut mgr = CircuitMgr::new();
-        // Initialise the manager clock to a t==1 slot (close_expired_circuits only runs then).
-        let start = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
-        mgr.tick_start(start);
+        mgr.dl.push(CmceCircuit {
+            ts_created: TdmaTime { h: 0, m: 1, f: 1, t: 1 },
+            direction: Direction::Both,
+            ts: 2,
+            carrier_num: 1584,
+            call_id: 10,
+            usage: 4,
+            circuit_mode: CircuitModeType::TchS,
+            comm_type: CommunicationType::P2p,
+            simplex_duplex: true,
+            speech_service: Some(0),
+            etee_encrypted: false,
+        });
+        mgr.dl.push(CmceCircuit {
+            ts_created: TdmaTime { h: 0, m: 1, f: 1, t: 1 },
+            direction: Direction::Both,
+            ts: 3,
+            carrier_num: 1584,
+            call_id: 11,
+            usage: 5,
+            circuit_mode: CircuitModeType::TchS,
+            comm_type: CommunicationType::P2p,
+            simplex_duplex: false,
+            speech_service: Some(0),
+            etee_encrypted: false,
+        });
 
-        // Simplex (HDX) circuit on one timeslot, full-duplex (FDX) on another.
-        let simplex_ts = mgr
-            .allocate_circuit(Direction::Both, CommunicationType::P2p, false)
-            .expect("allocate simplex circuit")
-            .ts;
-        let duplex_ts = mgr
-            .allocate_circuit(Direction::Both, CommunicationType::P2p, true)
-            .expect("allocate duplex circuit")
-            .ts;
-        assert_ne!(simplex_ts, duplex_ts);
-
-        // Advance > 6 minutes, landing on a t==1 slot so the expiry sweep runs.
-        let seven_minutes = 7 * 60 * 18 * 4;
-        let later = start.add_timeslots(seven_minutes);
+        // 7 minutes after creation, past the 6-minute simplex expiry. The hardcoded {m: 8} was
+        // only ~7 multiframes (~7 s) after {m: 1} and never crossed CIRCUIT_EXPIRY_TIMESLOTS, so the
+        // sweep closed nothing -- restore a genuine 7-minute gap (matches main's add_timeslots form).
+        let later = (TdmaTime { h: 0, m: 1, f: 1, t: 1 }).add_timeslots(7 * 60 * 18 * 4);
         assert_eq!(later.t, 1, "expiry sweep only runs on t==1");
         let tasks = mgr.tick_start(later);
 
-        // The simplex circuit must have been force-closed (SendClose queued)...
         let closes: Vec<_> = tasks
             .unwrap_or_default()
             .into_iter()
@@ -434,18 +437,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(closes.len(), 1, "exactly the simplex circuit should be force-closed");
-        assert_eq!(closes[0].ts, simplex_ts);
-        assert!(!closes[0].simplex_duplex, "the closed circuit must be the simplex one");
-
-        // ...and the duplex circuit must still be active.
-        assert!(
-            mgr.is_active_dir(duplex_ts, Direction::Dl),
-            "FDX circuit must survive the 6-minute safety timeout"
-        );
-        assert!(
-            !mgr.is_active_dir(simplex_ts, Direction::Dl),
-            "simplex circuit should be gone after the safety timeout"
-        );
+        assert_eq!(closes.len(), 1);
+        assert_eq!(closes[0].ts, 3);
+        assert!(!closes[0].simplex_duplex);
+        assert!(mgr.is_active_dir_slot(1584, 2, Direction::Dl));
+        assert!(!mgr.is_active_dir_slot(1584, 3, Direction::Dl));
     }
 }

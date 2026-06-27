@@ -31,6 +31,9 @@ pub struct CmceCircuit {
     /// Timeslot in which this circuit exists
     pub ts: u8,
 
+    /// Carrier number in which this circuit exists.
+    pub carrier_num: u16,
+
     /// Call ID as allocated by CMCE
     pub call_id: CallId,
 

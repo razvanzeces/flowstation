@@ -10,19 +10,19 @@ use crate::bluestation::sec_cell::{CfgNeighborCellCa, SdsCommandControlDto};
 use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
 
 use super::config::{StackConfig, StackMode};
-use super::sec_brew::{CfgBrewDto, apply_brew_patch};
 use super::sec_asterisk::{CfgAsteriskDto, apply_asterisk_patch};
+use super::sec_brew::{CfgBrewDto, apply_brew_patch};
 use super::sec_dapnet::{CfgDapnetDto, apply_dapnet_patch};
-use super::sec_geoalarm::{CfgGeoalarmDto, apply_geoalarm_patch};
-use super::sec_tpg2200_action::{CfgTpg2200ActionDto, apply_tpg2200_action_patch};
-use super::sec_snom_notify::{CfgSnomNotifyDto, apply_snom_notify_patch};
 use super::sec_dashboard::{CfgDashboardDto, apply_dashboard_patch};
 use super::sec_emergency::{CfgEmergencyDto, apply_emergency_patch};
+use super::sec_geoalarm::{CfgGeoalarmDto, apply_geoalarm_patch};
 use super::sec_health::{CfgHealthDto, apply_health_patch};
 use super::sec_recovery::{CfgRecoveryDto, apply_recovery_patch};
 use super::sec_security::{CfgSecurityDto, apply_security_patch};
+use super::sec_snom_notify::{CfgSnomNotifyDto, apply_snom_notify_patch};
 use super::sec_telegram::{CfgTelegramDto, apply_telegram_patch};
 use super::sec_telemetry::{CfgTelemetryDto, apply_telemetry_patch};
+use super::sec_tpg2200_action::{CfgTpg2200ActionDto, apply_tpg2200_action_patch};
 use super::sec_wx::{CfgWxServiceDto, apply_wx_service_patch};
 use super::{PhyIoDto, phy_dto_to_cfg};
 
@@ -635,6 +635,22 @@ main_carrier_number = 1586
     fn test_unrecognized_cell_info_field_still_rejected() {
         let toml = minimal_toml("bogus_field = 42");
         assert!(from_toml_str(&toml).is_err(), "should reject unknown field");
+    }
+
+    #[test]
+    fn dual_carrier_enabled_flag_gates_effective_secondary_carrier() {
+        // Absent flag is backward compatible: a configured secondary carrier is on by default.
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1585")).expect("parse");
+        assert_eq!(cfg.cell.secondary_carrier, Some(1585), "absent flag => enabled");
+
+        // Explicitly enabled.
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1585\ndual_carrier_enabled = true")).expect("parse");
+        assert_eq!(cfg.cell.secondary_carrier, Some(1585));
+
+        // Disabled: the number stays in the file but the stack sees None (single carrier). This is
+        // what the dashboard "Dual-Carrier OFF" toggle writes, and the whole stack reads this field.
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1585\ndual_carrier_enabled = false")).expect("parse");
+        assert_eq!(cfg.cell.secondary_carrier, None, "disabled switch hides the carrier from the stack");
     }
 
     #[test]

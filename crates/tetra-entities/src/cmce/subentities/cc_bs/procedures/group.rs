@@ -68,6 +68,7 @@ impl CcBsSubentity {
         queue: &mut MessageQueue,
         call_id: u16,
         target_addr: TetraAddress,
+        carrier_num: u16,
         ts: u8,
         transmission_grant: TransmissionGrant,
         transmitting_party_issi: Option<u32>,
@@ -98,7 +99,7 @@ impl CcBsSubentity {
         d_tx_granted.to_bitbuf(&mut sdu).expect("Failed to serialize DTxGranted");
         sdu.seek(0);
 
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, target_addr, ts, None);
+        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, target_addr, carrier_num, ts, None);
         queue.push_back(msg);
     }
 
@@ -117,6 +118,7 @@ impl CcBsSubentity {
         Self::validate_group_transition(call_id, state, formal_state, GroupEvent::TxDemand)?;
 
         let ts = call.ts;
+        let carrier_num = call.carrier_num;
         let dest_ssi = call.dest_gssi;
         let current_speaker = call.source_issi;
         let grant_now = matches!(state, GroupCallState::NoActiveSpeaker { .. });
@@ -147,6 +149,7 @@ impl CcBsSubentity {
                         queue,
                         call_id,
                         requesting_party,
+                        carrier_num,
                         ts,
                         TransmissionGrant::RequestQueued,
                         Some(current_speaker),
@@ -157,6 +160,7 @@ impl CcBsSubentity {
                         queue,
                         call_id,
                         requesting_party,
+                        carrier_num,
                         ts,
                         TransmissionGrant::NotGranted,
                         Some(current_speaker),
@@ -171,11 +175,12 @@ impl CcBsSubentity {
             queue,
             call_id,
             requesting_party,
+            carrier_num,
             ts,
             TransmissionGrant::Granted,
             Some(requesting_party.ssi),
         );
-        self.send_d_tx_granted_facch(queue, call_id, requesting_party.ssi, dest_addr.ssi, ts);
+        self.send_d_tx_granted_facch(queue, call_id, requesting_party.ssi, dest_addr.ssi, carrier_num, ts);
 
         self.notify_floor_granted(
             queue,
@@ -183,7 +188,9 @@ impl CcBsSubentity {
                 call_id,
                 source_issi: requesting_party.ssi,
                 dest_gssi: dest_addr.ssi,
+                carrier_num,
                 ts,
+                is_group: true,
             },
             true,
             BrewNotification::IfGroupRoutable(dest_ssi),
@@ -215,6 +222,7 @@ impl CcBsSubentity {
         }
 
         let ts = call.ts;
+        let carrier_num = call.carrier_num;
         let dest_ssi = call.dest_gssi;
         let queued_request = call.take_queued_tx_demand();
         if let Some(requester) = queued_request {
@@ -231,8 +239,16 @@ impl CcBsSubentity {
         let dest_addr = cached.dest_addr;
 
         if let Some(requester) = queued_request {
-            self.fsm_send_d_tx_granted_individual(queue, call_id, requester, ts, TransmissionGrant::Granted, Some(requester.ssi));
-            self.send_d_tx_granted_facch(queue, call_id, requester.ssi, dest_addr.ssi, ts);
+            self.fsm_send_d_tx_granted_individual(
+                queue,
+                call_id,
+                requester,
+                carrier_num,
+                ts,
+                TransmissionGrant::Granted,
+                Some(requester.ssi),
+            );
+            self.send_d_tx_granted_facch(queue, call_id, requester.ssi, dest_addr.ssi, carrier_num, ts);
 
             self.notify_floor_granted(
                 queue,
@@ -240,7 +256,9 @@ impl CcBsSubentity {
                     call_id,
                     source_issi: requester.ssi,
                     dest_gssi: dest_addr.ssi,
+                    carrier_num,
                     ts,
+                    is_group: true,
                 },
                 true,
                 BrewNotification::IfGroupRoutable(dest_ssi),
@@ -261,12 +279,12 @@ impl CcBsSubentity {
         d_tx_ceased.to_bitbuf(&mut sdu).expect("Failed to serialize DTxCeased");
         sdu.seek(0);
 
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts, None);
+        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, carrier_num, ts, None);
         queue.push_back(msg);
 
         self.notify_floor_released(
             queue,
-            CallTimeslot { call_id, ts },
+            CallTimeslot { call_id, carrier_num, ts },
             true,
             BrewNotification::IfGroupRoutable(dest_ssi),
         );
@@ -299,12 +317,13 @@ impl CcBsSubentity {
         }
 
         let ts = call.ts;
+        let carrier_num = call.carrier_num;
         let usage = call.usage;
         let dest_gssi = call.dest_gssi;
 
-        self.send_d_tx_granted_facch(queue, call_id, source_issi, dest_gssi, ts);
+        self.send_d_tx_granted_facch(queue, call_id, source_issi, dest_gssi, carrier_num, ts);
 
-        self.notify_remote_floor_granted(queue, CallTimeslot { call_id, ts });
+        self.notify_remote_floor_granted(queue, CallTimeslot { call_id, carrier_num, ts });
 
         queue.push_back(SapMsg {
             sap: Sap::Control,
@@ -313,6 +332,7 @@ impl CcBsSubentity {
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
                 brew_uuid,
                 call_id,
+                carrier_num,
                 ts,
                 usage,
             }),
@@ -339,8 +359,17 @@ impl CcBsSubentity {
                 active_call.brew_uuid = None;
             }
 
-            self.send_d_tx_ceased_facch(queue, call_id, call.dest_gssi, call.ts);
-            self.notify_floor_released(queue, CallTimeslot { call_id, ts: call.ts }, true, BrewNotification::Never);
+            self.send_d_tx_ceased_facch(queue, call_id, call.dest_gssi, call.carrier_num, call.ts);
+            self.notify_floor_released(
+                queue,
+                CallTimeslot {
+                    call_id,
+                    carrier_num: call.carrier_num,
+                    ts: call.ts,
+                },
+                true,
+                BrewNotification::Never,
+            );
             return Ok(());
         }
 

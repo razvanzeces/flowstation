@@ -8,9 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tetra_config::bluestation::{
-    CfgGeoalarm, GeoalarmEventStatus, GeoalarmRuntimeStatus, SharedConfig,
-};
+use tetra_config::bluestation::{CfgGeoalarm, GeoalarmEventStatus, GeoalarmRuntimeStatus, SharedConfig};
 
 use crate::net_control::commands::ControlCommand;
 use crate::net_snom::SnomNotifySink;
@@ -87,9 +85,7 @@ impl GeoAlarmSink {
             return;
         }
         let _ = self.tx.send(GeoAlarmUpdate {
-            source: GeoAlarmSource::Meshcom {
-                src: src.to_string(),
-            },
+            source: GeoAlarmSource::Meshcom { src: src.to_string() },
             lat,
             lon,
         });
@@ -203,11 +199,7 @@ impl GeoAlarmWorker {
                 geoalarm.forward_sip,
                 geoalarm.forward_telegram
             );
-            if !(geoalarm.forward_tpg2200
-                || geoalarm.forward_sds
-                || geoalarm.forward_sip
-                || geoalarm.forward_telegram)
-            {
+            if !(geoalarm.forward_tpg2200 || geoalarm.forward_sds || geoalarm.forward_sip || geoalarm.forward_telegram) {
                 tracing::warn!("GeoAlarm: enabled but no forwarding target is enabled");
             }
         } else {
@@ -234,19 +226,11 @@ impl GeoAlarmWorker {
         }
 
         self.seen_positions = self.seen_positions.saturating_add(1);
-        let distance = haversine_m(
-            geoalarm.flowstation_lat,
-            geoalarm.flowstation_lon,
-            update.lat,
-            update.lon,
-        );
+        let distance = haversine_m(geoalarm.flowstation_lat, geoalarm.flowstation_lon, update.lat, update.lon);
         let inside = distance <= geoalarm.radius_m;
         let label = update.source.label();
         let stamp = now_stamp();
-        self.last_position = Some(format!(
-            "{} {:.0}m ({:.6},{:.6})",
-            label, distance, update.lat, update.lon
-        ));
+        self.last_position = Some(format!("{} {:.0}m ({:.6},{:.6})", label, distance, update.lat, update.lon));
 
         let key = update.source.key();
         let cooldown = Duration::from_secs(geoalarm.cooldown_secs.max(1));
@@ -255,10 +239,7 @@ impl GeoAlarmWorker {
                 inside: false,
                 last_alarm: None,
             });
-            let cooldown_elapsed = state
-                .last_alarm
-                .map(|last| last.elapsed() >= cooldown)
-                .unwrap_or(true);
+            let cooldown_elapsed = state.last_alarm.map(|last| last.elapsed() >= cooldown).unwrap_or(true);
             let was_inside = state.inside;
             state.inside = inside;
             (was_inside, cooldown_elapsed)
@@ -270,7 +251,11 @@ impl GeoAlarmWorker {
             paths = self.forward_alarm(geoalarm, &update.source, update.lat, update.lon, distance);
             if !paths.is_empty() {
                 self.alarm_count = self.alarm_count.saturating_add(1);
-                self.last_alarm = Some(format!("{} via {}", self.last_position.clone().unwrap_or_default(), paths.join(",")));
+                self.last_alarm = Some(format!(
+                    "{} via {}",
+                    self.last_position.clone().unwrap_or_default(),
+                    paths.join(",")
+                ));
                 if let Some(state) = self.devices.get_mut(&key) {
                     state.last_alarm = Some(Instant::now());
                 }
@@ -293,23 +278,10 @@ impl GeoAlarmWorker {
         }
     }
 
-    fn forward_alarm(
-        &mut self,
-        geoalarm: &CfgGeoalarm,
-        source: &GeoAlarmSource,
-        lat: f64,
-        lon: f64,
-        distance_m: f64,
-    ) -> Vec<String> {
+    fn forward_alarm(&mut self, geoalarm: &CfgGeoalarm, source: &GeoAlarmSource, lat: f64, lon: f64, distance_m: f64) -> Vec<String> {
         let mut paths = Vec::new();
         let label = source.label();
-        let body = format!(
-            "{} {:.0}m ({:.6},{:.6})",
-            label,
-            distance_m.max(0.0),
-            lat,
-            lon
-        );
+        let body = format!("{} {:.0}m ({:.6},{:.6})", label, distance_m.max(0.0), lat, lon);
 
         if geoalarm.forward_tpg2200 {
             match self.forward_tpg2200(geoalarm, &body) {
@@ -367,10 +339,7 @@ impl GeoAlarmWorker {
         let text = prefixed_text(&geoalarm.tpg2200_text_prefix, body);
         let (text, truncated) = truncate_chars(&text, geoalarm.tpg2200_max_text_chars);
         if truncated {
-            tracing::warn!(
-                "GeoAlarm: TPG2200 text truncated to {} chars",
-                geoalarm.tpg2200_max_text_chars
-            );
+            tracing::warn!("GeoAlarm: TPG2200 text truncated to {} chars", geoalarm.tpg2200_max_text_chars);
         }
         let payload = build_tpg2200_callout_payload(incident, &text);
         tracing::debug!(
@@ -410,15 +379,7 @@ impl GeoAlarmWorker {
         .map_err(|e| format!("send to CMCE failed: {}", e))
     }
 
-    fn forward_sip(
-        &self,
-        geoalarm: &CfgGeoalarm,
-        source: &str,
-        body: &str,
-        distance_m: f64,
-        lat: f64,
-        lon: f64,
-    ) -> Result<(), String> {
+    fn forward_sip(&self, geoalarm: &CfgGeoalarm, source: &str, body: &str, distance_m: f64, lat: f64, lon: f64) -> Result<(), String> {
         let Some(sink) = &self.snom_sink else {
             return Err("Snom notify sink unavailable".to_string());
         };
@@ -433,20 +394,11 @@ impl GeoAlarmWorker {
         Ok(())
     }
 
-    fn forward_telegram(
-        &self,
-        geoalarm: &CfgGeoalarm,
-        source: &str,
-        body: &str,
-    ) -> Result<(), String> {
+    fn forward_telegram(&self, geoalarm: &CfgGeoalarm, source: &str, body: &str) -> Result<(), String> {
         let Some(sink) = &self.telegram_sink else {
             return Err("Telegram alert sink unavailable".to_string());
         };
-        sink.send_geoalarm(
-            geoalarm.telegram_prefix.clone(),
-            source.to_string(),
-            body.to_string(),
-        );
+        sink.send_geoalarm(geoalarm.telegram_prefix.clone(), source.to_string(), body.to_string());
         Ok(())
     }
 
@@ -500,23 +452,18 @@ fn source_allowed(geoalarm: &CfgGeoalarm, source: &GeoAlarmSource) -> bool {
     match source {
         GeoAlarmSource::Tetra { issi } => {
             !geoalarm.tetra_issi_blacklist.contains(issi)
-                && (geoalarm.tetra_issi_whitelist.is_empty()
-                    || geoalarm.tetra_issi_whitelist.contains(issi))
+                && (geoalarm.tetra_issi_whitelist.is_empty() || geoalarm.tetra_issi_whitelist.contains(issi))
         }
         GeoAlarmSource::Meshcom { src } => {
             let src = src.trim().to_ascii_uppercase();
             !geoalarm.meshcom_source_blacklist.contains(&src)
-                && (geoalarm.meshcom_source_whitelist.is_empty()
-                    || geoalarm.meshcom_source_whitelist.contains(&src))
+                && (geoalarm.meshcom_source_whitelist.is_empty() || geoalarm.meshcom_source_whitelist.contains(&src))
         }
     }
 }
 
 fn coord_valid(lat: f64, lon: f64) -> bool {
-    lat.is_finite()
-        && lon.is_finite()
-        && (-90.0..=90.0).contains(&lat)
-        && (-180.0..=180.0).contains(&lon)
+    lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)
 }
 
 pub fn parse_lip_position_text(text: &str) -> Option<(f64, f64)> {
@@ -524,11 +471,7 @@ pub fn parse_lip_position_text(text: &str) -> Option<(f64, f64)> {
     let (lat, lon) = rest.split_once(',')?;
     let lat = lat.trim().parse::<f64>().ok()?;
     let lon = lon.trim().parse::<f64>().ok()?;
-    if coord_valid(lat, lon) {
-        Some((lat, lon))
-    } else {
-        None
-    }
+    if coord_valid(lat, lon) { Some((lat, lon)) } else { None }
 }
 
 fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
@@ -537,8 +480,7 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let phi2 = lat2.to_radians();
     let dphi = (lat2 - lat1).to_radians();
     let dlambda = (lon2 - lon1).to_radians();
-    let a = (dphi / 2.0).sin().powi(2)
-        + phi1.cos() * phi2.cos() * (dlambda / 2.0).sin().powi(2);
+    let a = (dphi / 2.0).sin().powi(2) + phi1.cos() * phi2.cos() * (dlambda / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
     r * c
 }

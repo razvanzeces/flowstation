@@ -43,6 +43,7 @@ pub enum Mode {
 }
 
 pub struct Demodulator {
+    carrier_num: u16,
     mode: Mode,
 
     /// Sample counter value at the beginning of hyperframe number 0
@@ -78,8 +79,9 @@ pub struct Demodulator {
 }
 
 impl Demodulator {
-    pub fn new(initial_mode: Mode) -> Self {
+    pub fn new(initial_mode: Mode, carrier_num: u16) -> Self {
         let mut self_ = Self {
+            carrier_num,
             mode: initial_mode,
             reference_time: 0,
             slot_ready_time: 0, // will be set by set_slot_ready_time
@@ -421,6 +423,7 @@ impl Demodulator {
         if self.demodulated_slot_available {
             self.demodulated_slot_available = false;
             Some(RxSlotBits {
+                carrier_num: self.carrier_num,
                 time: self.demodulated_slot_time,
                 slot: self.full_slot.get_burst(),
                 subslot1: self.subslot1.get_burst(),

@@ -33,10 +33,14 @@ pub struct PhyConfig<'a> {
     /// Downlink/uplink carrier frequency pairs to monitor.
     /// Uplink frequency can be set to None to monitor downlink only.
     pub monitor_frequencies: &'a [(f64, Option<f64>)],
+    /// Carrier numbers corresponding to `monitor_frequencies`, if any.
+    pub monitor_carrier_numbers: &'a [u16],
     /// Downlink carrier frequencies for a BS.
     pub bs_dl_frequencies: &'a [f64],
     /// Uplink carrier frequencies for a BS.
     pub bs_ul_frequencies: &'a [f64],
+    /// Carrier numbers corresponding to BS uplink/downlink frequencies.
+    pub bs_carrier_numbers: &'a [u16],
 }
 
 pub struct RxTxDevSoapySdr {
@@ -81,10 +85,20 @@ impl RxTxDevSoapySdr {
             ul_corrected / 1e6
         );
 
+        let bs_carriers = config_guard
+            .as_ref()
+            .bs_phase_mod_carriers()
+            .expect("validated carrier configuration should compute");
+        let bs_carrier_numbers = bs_carriers.iter().map(|(carrier_num, _, _)| *carrier_num).collect::<Vec<_>>();
+        let bs_dl_frequencies = bs_carriers.iter().map(|(_, dl_hz, _)| *dl_hz as f64).collect::<Vec<_>>();
+        let bs_ul_frequencies = bs_carriers.iter().map(|(_, _, ul_hz)| *ul_hz as f64).collect::<Vec<_>>();
+
         let phy_config = soapy_dev::PhyConfig {
-            bs_dl_frequencies: &[dl_corrected],
-            bs_ul_frequencies: &[ul_corrected],
-            ..Default::default()
+            monitor_frequencies: &[],
+            monitor_carrier_numbers: &[],
+            bs_dl_frequencies: &bs_dl_frequencies,
+            bs_ul_frequencies: &bs_ul_frequencies,
+            bs_carrier_numbers: &bs_carrier_numbers,
         };
 
         let mut sdr = match soapyio::SoapyIo::new(cfg) {
@@ -225,18 +239,34 @@ impl RxDsp {
             monitors: phy_config
                 .monitor_frequencies
                 .iter()
-                .map(|(dl_freq, ul_freq)| MonitorDlUlPair {
-                    dl: DemodulatorChannel::new(fft_planner, rx_fcfb_params, *dl_freq, demodulator::Mode::DlUnsynchronized),
-                    ul: ul_freq
-                        .as_ref()
-                        .map(|ul_freq| DemodulatorChannel::new(fft_planner, rx_fcfb_params, *ul_freq, demodulator::Mode::Idle)),
+                .enumerate()
+                .map(|(i, (dl_freq, ul_freq))| MonitorDlUlPair {
+                    dl: DemodulatorChannel::new(
+                        fft_planner,
+                        rx_fcfb_params,
+                        *dl_freq,
+                        demodulator::Mode::DlUnsynchronized,
+                        phy_config.monitor_carrier_numbers.get(i).copied().unwrap_or(0),
+                    ),
+                    ul: ul_freq.as_ref().map(|ul_freq| {
+                        DemodulatorChannel::new(
+                            fft_planner,
+                            rx_fcfb_params,
+                            *ul_freq,
+                            demodulator::Mode::Idle,
+                            phy_config.monitor_carrier_numbers.get(i).copied().unwrap_or(0),
+                        )
+                    }),
                 })
                 .collect(),
 
             ul_demodulators: phy_config
                 .bs_ul_frequencies
                 .iter()
-                .map(|ul_freq| DemodulatorChannel::new(fft_planner, rx_fcfb_params, *ul_freq, demodulator::Mode::Ul))
+                .zip(phy_config.bs_carrier_numbers.iter().copied())
+                .map(|(ul_freq, carrier_num)| {
+                    DemodulatorChannel::new(fft_planner, rx_fcfb_params, *ul_freq, demodulator::Mode::Ul, carrier_num)
+                })
                 .collect(),
         }
     }
@@ -373,9 +403,8 @@ impl TxDsp {
             modulators.push(ModulatorChannel::new(fft_planner, fcfb_params, *dl_freq, modulator::Mode::Dl));
         }
 
-        let monitor = telemetry.map(|sink| {
-            TxSignalMonitor::new(fft_planner, sink, sdr_sample_rate as RealSample, sdr.tx_center_frequency().unwrap())
-        });
+        let monitor = telemetry
+            .map(|sink| TxSignalMonitor::new(fft_planner, sink, sdr_sample_rate as RealSample, sdr.tx_center_frequency().unwrap()));
 
         Self {
             fcfb,
@@ -495,6 +524,7 @@ impl DemodulatorChannel {
         analysis_in_params: fcfb::AnalysisInputParameters,
         frequency: f64,
         mode: demodulator::Mode,
+        carrier_num: u16,
     ) -> Self {
         Self {
             downconverter: fcfb::AnalysisOutputProcessor::new_with_frequency(
@@ -504,7 +534,7 @@ impl DemodulatorChannel {
                 frequency,
                 Some(25000.0),
             ),
-            demodulator: demodulator::Demodulator::new(mode),
+            demodulator: demodulator::Demodulator::new(mode, carrier_num),
         }
     }
 
@@ -662,7 +692,7 @@ impl TxSignalMonitor {
 
     fn observe(&mut self, samples: &[ComplexSample], _tx_slots: &[TxSlotBits], _block_count: fcfb::BlockCount) {
         let now = std::time::Instant::now();
-        let need_visual  = now >= self.next_visual_emit;
+        let need_visual = now >= self.next_visual_emit;
         let need_quality = now >= self.next_quality_emit;
         if (!need_visual && !need_quality) || samples.len() < Self::FFT_LEN {
             return;
@@ -687,15 +717,15 @@ impl TxSignalMonitor {
             peak2 = peak2.max(p);
             sum2 += p;
             if need_quality {
-                sum_i  += sample.re;
-                sum_q  += sample.im;
+                sum_i += sample.re;
+                sum_q += sample.im;
                 sum_i2 += sample.re * sample.re;
                 sum_q2 += sample.im * sample.im;
                 sum_iq += sample.re * sample.im;
             }
         }
         let rms = (sum2 / n).sqrt();
-        let rms_dbfs  = 20.0 * rms.max(1.0e-12).log10();
+        let rms_dbfs = 20.0 * rms.max(1.0e-12).log10();
         let peak_dbfs = 20.0 * peak2.sqrt().max(1.0e-12).log10();
 
         // ── FFT (needed for spectrum AND for carrier-leak/OBW) ────────────
@@ -758,13 +788,17 @@ impl TxSignalMonitor {
             let var_q = (sum_q2 / n) - dc_offset_q * dc_offset_q;
             let iq_amplitude_imbalance_db = if var_i > 1.0e-12 && var_q > 1.0e-12 {
                 10.0 * (var_i / var_q).log10()
-            } else { 0.0 };
+            } else {
+                0.0
+            };
 
             // IQ phase imbalance via E[I·Q] normalized by sqrt(Var(I)·Var(Q)).
             let cov_iq = (sum_iq / n) - dc_offset_i * dc_offset_q;
             let phase_sin = if var_i > 1.0e-12 && var_q > 1.0e-12 {
                 (cov_iq / (var_i * var_q).sqrt()).clamp(-1.0, 1.0)
-            } else { 0.0 };
+            } else {
+                0.0
+            };
             let iq_phase_imbalance_deg = phase_sin.asin().to_degrees();
 
             // Carrier leakage: DC-bin power vs total.
@@ -824,7 +858,10 @@ impl TxSignalMonitor {
                     // and accumulate squared error.
                     let angle = derotated.im.atan2(derotated.re).rem_euclid(std::f32::consts::TAU);
                     let ideal_angle = (angle / std::f32::consts::FRAC_PI_4).round() * std::f32::consts::FRAC_PI_4;
-                    let ideal = ComplexSample { re: ideal_angle.cos(), im: ideal_angle.sin() };
+                    let ideal = ComplexSample {
+                        re: ideal_angle.cos(),
+                        im: ideal_angle.sin(),
+                    };
                     let err = derotated - ideal;
                     err_sum += err.norm_sqr();
                     err_count += 1;
@@ -875,9 +912,13 @@ impl TxSignalMonitor {
 /// FFT order — bin 0 = DC, bins 1..N/2 = positive freqs, bins N/2..N = negative.
 fn occupied_bandwidth(mag2_unshifted: &[RealSample], sample_rate: RealSample, fraction: RealSample) -> RealSample {
     let n = mag2_unshifted.len();
-    if n < 4 { return 0.0; }
+    if n < 4 {
+        return 0.0;
+    }
     let total: RealSample = mag2_unshifted.iter().sum::<RealSample>();
-    if total <= 1.0e-12 { return 0.0; }
+    if total <= 1.0e-12 {
+        return 0.0;
+    }
     let target = total * fraction;
 
     // Accumulate DC bin first, then symmetric pairs (k, N-k) representing +/- k.
@@ -1058,7 +1099,9 @@ impl SdrHealthMonitor {
 
     fn tick(&mut self, sdr: &soapyio::SoapyIo) {
         let now = std::time::Instant::now();
-        if now < self.next_emit { return; }
+        if now < self.next_emit {
+            return;
+        }
         self.next_emit = now + self.interval;
 
         // Only the temperature is read live — it's a single sensor read and the value

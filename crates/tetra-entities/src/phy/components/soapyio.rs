@@ -76,19 +76,14 @@ impl SoapyIo {
         let rx_ch = sdr_settings.rx_ch;
         let tx_ch = sdr_settings.tx_ch;
 
-        // Get PPM corrected freqs
-        let (dl_corrected, _) = soapy_cfg.dl_freq_corrected();
+        // Get PPM-corrected carrier and SDR center frequencies.
         let (ul_corrected, _) = soapy_cfg.ul_freq_corrected();
+        let (rx_center_corrected, _) = soapy_cfg.effective_rx_center_freq_corrected();
+        let (tx_center_corrected, _) = soapy_cfg.effective_tx_center_freq_corrected();
 
         let (rx_freq, tx_freq) = match mode {
-            StackMode::Bs => (
-                Some(ul_corrected - SOAPY_FREQ_OFFSET), // Offset RX center frequency from carrier frequency
-                Some(dl_corrected),
-            ),
-            StackMode::Ms => (
-                Some(dl_corrected - SOAPY_FREQ_OFFSET), // Offset RX center frequency from carrier frequency
-                Some(ul_corrected),
-            ),
+            StackMode::Bs => (Some(rx_center_corrected - SOAPY_FREQ_OFFSET), Some(tx_center_corrected)),
+            StackMode::Ms => (Some(rx_center_corrected - SOAPY_FREQ_OFFSET), Some(ul_corrected)),
             StackMode::Mon => {
                 unimplemented!("Monitor mode not implemented yet");
             }
@@ -359,28 +354,38 @@ impl SoapyIo {
     /// Read back the currently-active TX gain per stage, in dB.
     /// Returns the same gain-element names the radio uses (e.g. "PAD","IAMP" on LimeSDR).
     pub fn read_tx_gains(&self) -> Vec<(String, f32)> {
-        if !self.tx_enabled() { return Vec::new(); }
-        self.dev.list_gains(soapysdr::Direction::Tx, self.tx_ch)
+        if !self.tx_enabled() {
+            return Vec::new();
+        }
+        self.dev
+            .list_gains(soapysdr::Direction::Tx, self.tx_ch)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|name| {
                 let s = name.to_string();
-                self.dev.gain_element(soapysdr::Direction::Tx, self.tx_ch, s.clone())
-                    .ok().map(|g| (s, g as f32))
+                self.dev
+                    .gain_element(soapysdr::Direction::Tx, self.tx_ch, s.clone())
+                    .ok()
+                    .map(|g| (s, g as f32))
             })
             .collect()
     }
 
     /// Read back the currently-active RX gain per stage, in dB.
     pub fn read_rx_gains(&self) -> Vec<(String, f32)> {
-        if !self.rx_enabled() { return Vec::new(); }
-        self.dev.list_gains(soapysdr::Direction::Rx, self.rx_ch)
+        if !self.rx_enabled() {
+            return Vec::new();
+        }
+        self.dev
+            .list_gains(soapysdr::Direction::Rx, self.rx_ch)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|name| {
                 let s = name.to_string();
-                self.dev.gain_element(soapysdr::Direction::Rx, self.rx_ch, s.clone())
-                    .ok().map(|g| (s, g as f32))
+                self.dev
+                    .gain_element(soapysdr::Direction::Rx, self.rx_ch, s.clone())
+                    .ok()
+                    .map(|g| (s, g as f32))
             })
             .collect()
     }

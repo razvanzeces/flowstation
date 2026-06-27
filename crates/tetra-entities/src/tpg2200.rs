@@ -1,10 +1,6 @@
 /// Format a byte slice as uppercase comma-separated hex for diagnostics.
 pub fn format_hex_bytes(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|b| format!("{:02X}", b))
-        .collect::<Vec<_>>()
-        .join(", ")
+    bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(", ")
 }
 
 /// Parse a dashboard/operator-entered hex string. Accepts whitespace and common separators,
@@ -22,10 +18,7 @@ pub fn parse_hex_payload(raw: &str) -> Result<Vec<u8>, String> {
         .collect();
     let mut bytes = Vec::new();
     for token in normalized.split_whitespace() {
-        let hex = token
-            .strip_prefix("0x")
-            .or_else(|| token.strip_prefix("0X"))
-            .unwrap_or(token);
+        let hex = token.strip_prefix("0x").or_else(|| token.strip_prefix("0X")).unwrap_or(token);
         if hex.is_empty() {
             return Err(format!("hex token '{}' has no digits", token));
         }
@@ -99,10 +92,7 @@ pub fn build_sds_text_payload(text: &str) -> (u16, Vec<u8>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_sds_text_payload, build_tpg2200_callout_payload, parse_hex_payload,
-        tpg2200_incident_byte,
-    };
+    use super::{build_sds_text_payload, build_tpg2200_callout_payload, parse_hex_payload, tpg2200_incident_byte};
 
     #[test]
     fn tpg2200_incident_byte_preserves_confirmed_values_and_covers_256_ids() {
@@ -114,9 +104,7 @@ mod tests {
         assert_eq!(tpg2200_incident_byte(16), 0x01);
         assert_eq!(tpg2200_incident_byte(256), 0x00);
 
-        let selectors = (1..=256)
-            .map(tpg2200_incident_byte)
-            .collect::<std::collections::HashSet<_>>();
+        let selectors = (1..=256).map(tpg2200_incident_byte).collect::<std::collections::HashSet<_>>();
         assert_eq!(selectors.len(), 256);
     }
 
@@ -126,10 +114,7 @@ mod tests {
             parse_hex_payload("C3 00,0x09;0D:10-21").unwrap(),
             vec![0xC3, 0x00, 0x09, 0x0D, 0x10, 0x21]
         );
-        assert_eq!(
-            parse_hex_payload("C300090D").unwrap(),
-            vec![0xC3, 0x00, 0x09, 0x0D]
-        );
+        assert_eq!(parse_hex_payload("C300090D").unwrap(), vec![0xC3, 0x00, 0x09, 0x0D]);
         assert!(parse_hex_payload("C3 0X").is_err());
         assert!(parse_hex_payload("C3 0").is_err());
     }
@@ -139,15 +124,13 @@ mod tests {
         assert_eq!(
             build_tpg2200_callout_payload(1, "ALARM"),
             vec![
-                0xC3, 0x00, 0x09, 0x0D, 0x10, 0x11, 0x27, 0x0F, 0x02, 0x30, 0x8D, 0x41,
-                0x4C, 0x41, 0x52, 0x4D
+                0xC3, 0x00, 0x09, 0x0D, 0x10, 0x11, 0x27, 0x0F, 0x02, 0x30, 0x8D, 0x41, 0x4C, 0x41, 0x52, 0x4D
             ]
         );
         assert_eq!(
             build_tpg2200_callout_payload(2, "ALARM"),
             vec![
-                0xC3, 0x00, 0x09, 0x0D, 0x10, 0x21, 0x27, 0x0F, 0x02, 0x30, 0x8D, 0x41,
-                0x4C, 0x41, 0x52, 0x4D
+                0xC3, 0x00, 0x09, 0x0D, 0x10, 0x21, 0x27, 0x0F, 0x02, 0x30, 0x8D, 0x41, 0x4C, 0x41, 0x52, 0x4D
             ]
         );
     }

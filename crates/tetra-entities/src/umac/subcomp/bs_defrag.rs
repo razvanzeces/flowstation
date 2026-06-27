@@ -47,7 +47,11 @@ impl BsDefrag {
         let mut buf = if let Some(mut buf) = self.buffers[ts].remove(&ssi) {
             // MS sent a new burst before the previous one completed — normal under RF loss.
             // Drop the incomplete burst silently and start fresh.
-            tracing::debug!("defrag_buffer: ts {} ssi {} started new burst before previous completed, resetting", t.t, ssi);
+            tracing::debug!(
+                "defrag_buffer: ts {} ssi {} started new burst before previous completed, resetting",
+                t.t,
+                ssi
+            );
             buf.reset();
             buf
         } else {
@@ -83,7 +87,11 @@ impl BsDefrag {
         let buf = match self.buffers[ts].get_mut(&ssi) {
             Some(b) => b,
             None => {
-                tracing::debug!("defrag_buffer for ts {} ssi {} not found (start burst not seen — normal on RF loss)", t.t, ssi);
+                tracing::debug!(
+                    "defrag_buffer for ts {} ssi {} not found (start burst not seen — normal on RF loss)",
+                    t.t,
+                    ssi
+                );
                 return;
             }
         };
@@ -126,7 +134,11 @@ impl BsDefrag {
         let mut buf = match self.buffers[ts].remove(&ssi) {
             Some(b) => b,
             None => {
-                tracing::debug!("defrag_buffer for ts {} ssi {} not found (start burst not seen — normal on RF loss)", t.t, ssi);
+                tracing::debug!(
+                    "defrag_buffer for ts {} ssi {} not found (start burst not seen — normal on RF loss)",
+                    t.t,
+                    ssi
+                );
                 return None;
             }
         };
@@ -143,7 +155,11 @@ impl BsDefrag {
         let buf = match self.buffers[ts].get(&ssi) {
             Some(b) => b,
             None => {
-                tracing::debug!("defrag_buffer for ts {} ssi {} not found (start burst not seen — normal on RF loss)", t.t, ssi);
+                tracing::debug!(
+                    "defrag_buffer for ts {} ssi {} not found (start burst not seen — normal on RF loss)",
+                    t.t,
+                    ssi
+                );
                 return None;
             }
         };

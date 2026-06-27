@@ -2,10 +2,8 @@ use tetra_config::bluestation::SharedConfig;
 use tetra_config::bluestation::sec_cell::CfgBsServiceDetails;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity};
 use tetra_pdus::mle::{
-    enums::mle_protocol_discriminator::MleProtocolDiscriminator,
-    fields::bs_service_details::BsServiceDetails,
-    fields::neighbour_cell_information_for_ca::NeighbourCellInformationForCa,
-    pdus::d_nwrk_broadcast::DNwrkBroadcast,
+    enums::mle_protocol_discriminator::MleProtocolDiscriminator, fields::bs_service_details::BsServiceDetails,
+    fields::neighbour_cell_information_for_ca::NeighbourCellInformationForCa, pdus::d_nwrk_broadcast::DNwrkBroadcast,
 };
 use tetra_saps::{SapMsg, SapMsgInner, tla::TlaTlUnitdataReqBl};
 
@@ -102,8 +100,7 @@ impl MleBroadcast {
                     minimum_rx_access_level: c.minimum_rx_access_level,
                     subscriber_class: c.subscriber_class,
                     bs_service_details: c.bs_service_details.as_ref().map(cfg_to_bs_service_details),
-                    timeshare_cell_information_or_security_parameters: c
-                        .timeshare_cell_information_or_security_parameters,
+                    timeshare_cell_information_or_security_parameters: c.timeshare_cell_information_or_security_parameters,
                     tdma_frame_offset: c.tdma_frame_offset,
                 })
                 .collect();
@@ -116,11 +113,7 @@ impl MleBroadcast {
                 number_of_ca_neighbour_cells: Some(neighbour_count),
                 neighbour_cell_information_for_ca: neighbour_cells,
             };
-            self.transmit_pdu(
-                queue,
-                pdu_with_neighbours,
-                &format!("time+{} neighbours", neighbour_count),
-            );
+            self.transmit_pdu(queue, pdu_with_neighbours, &format!("time+{} neighbours", neighbour_count));
         } else if let Some(time_value) = time_value {
             // Time only, no neighbours — keep the field semantics identical to BlueStation
             // for maximum MS compatibility: number_of_ca_neighbour_cells = Some(0).
