@@ -403,8 +403,21 @@ impl TxDsp {
             modulators.push(ModulatorChannel::new(fft_planner, fcfb_params, *dl_freq, modulator::Mode::Dl));
         }
 
-        let monitor = telemetry
-            .map(|sink| TxSignalMonitor::new(fft_planner, sink, sdr_sample_rate as RealSample, sdr.tx_center_frequency().unwrap()));
+        let carriers = phy_config
+            .bs_carrier_numbers
+            .iter()
+            .copied()
+            .zip(phy_config.bs_dl_frequencies.iter().copied())
+            .collect::<Vec<_>>();
+        let monitor = telemetry.map(|sink| {
+            TxSignalMonitor::new(
+                fft_planner,
+                sink,
+                sdr_sample_rate as RealSample,
+                sdr.tx_center_frequency().unwrap(),
+                carriers,
+            )
+        });
 
         Self {
             fcfb,
@@ -633,10 +646,12 @@ struct TxSignalMonitor {
     sink: TelemetrySink,
     sample_rate: RealSample,
     center_frequency: f64,
+    carriers: Vec<(u16, f64)>,
     fft: std::sync::Arc<dyn rustfft::Fft<RealSample>>,
     fft_buffer: Vec<ComplexSample>,
     window: Vec<RealSample>,
     constellation_history: Vec<ComplexSample>,
+    last_constellation_carrier: Option<u16>,
     /// Wall-clock time of the next allowed *visual* emission (spectrum + IQ).
     /// Rate-limiting on block_count is brittle because block size varies with
     /// sample rate (at 600 kHz one block is ~1.5 ms, at 2 MHz it's ~0.45 ms).
@@ -659,7 +674,13 @@ impl TxSignalMonitor {
     const CONSTELLATION_POINTS: usize = 192;
     const CONSTELLATION_ENCODE_SCALE: RealSample = 32767.0 / 1.5;
 
-    fn new(fft_planner: &mut FftPlanner, sink: TelemetrySink, sample_rate: RealSample, center_frequency: f64) -> Self {
+    fn new(
+        fft_planner: &mut FftPlanner,
+        sink: TelemetrySink,
+        sample_rate: RealSample,
+        center_frequency: f64,
+        carriers: Vec<(u16, f64)>,
+    ) -> Self {
         let fft = fft_planner.plan_fft_forward(Self::FFT_LEN);
         let window = (0..Self::FFT_LEN)
             .map(|i| {
@@ -671,10 +692,12 @@ impl TxSignalMonitor {
             sink,
             sample_rate,
             center_frequency,
+            carriers,
             fft,
             fft_buffer: vec![ComplexSample::ZERO; Self::FFT_LEN],
             window,
             constellation_history: Vec::with_capacity(Self::CONSTELLATION_POINTS),
+            last_constellation_carrier: None,
             next_visual_emit: std::time::Instant::now(),
             next_quality_emit: std::time::Instant::now(),
             visual_interval: std::time::Duration::from_millis(200),
@@ -756,8 +779,25 @@ impl TxSignalMonitor {
             .collect();
 
         // Constellation recovery is also needed for the visual path AND for EVM.
-        // We compute it once and reuse.
-        let (constellation_iq, evm_pct) = self.measured_constellation_with_evm(samples);
+        // In multi-carrier mode the monitor sees the aggregate SDR-centered signal,
+        // so a configured carrier at e.g. -25 kHz would otherwise rotate into a
+        // ring and produce bogus EVM. Pick the strongest configured carrier and
+        // mix it down before doing symbol-rate IQ/EVM.
+        let constellation_carrier = self.select_constellation_carrier(&mag2);
+        let mixed_samples;
+        let constellation_samples = if let Some((_, carrier_freq_hz)) = constellation_carrier {
+            let offset_hz = (carrier_freq_hz - self.center_frequency) as RealSample;
+            if offset_hz.abs() > 1.0 {
+                mixed_samples = self.downconvert_samples(samples, offset_hz);
+                mixed_samples.as_slice()
+            } else {
+                samples
+            }
+        } else {
+            samples
+        };
+        self.reset_constellation_history_if_needed(constellation_carrier.map(|(carrier_num, _)| carrier_num));
+        let (constellation_iq, evm_pct) = self.measured_constellation_with_evm(constellation_samples);
 
         // ── Fast visual emit ─────────────────────────────────────────────
         if need_visual {
@@ -765,6 +805,8 @@ impl TxSignalMonitor {
             self.sink.send(TelemetryEvent::TxVisual {
                 sample_rate: self.sample_rate,
                 center_freq_hz: self.center_frequency,
+                carriers: self.carriers.clone(),
+                constellation_carrier,
                 rms_dbfs,
                 peak_dbfs,
                 spectrum_db_tenths,
@@ -812,6 +854,7 @@ impl TxSignalMonitor {
             self.sink.send(TelemetryEvent::TxQuality {
                 papr_db,
                 evm_pct,
+                evm_carrier: constellation_carrier,
                 dc_offset_i,
                 dc_offset_q,
                 iq_amplitude_imbalance_db,
@@ -820,6 +863,62 @@ impl TxSignalMonitor {
                 occupied_bandwidth_hz,
             });
         }
+    }
+
+    fn reset_constellation_history_if_needed(&mut self, carrier_num: Option<u16>) {
+        if self.last_constellation_carrier != carrier_num {
+            self.constellation_history.clear();
+            self.last_constellation_carrier = carrier_num;
+        }
+    }
+
+    fn select_constellation_carrier(&self, mag2_unshifted: &[RealSample]) -> Option<(u16, f64)> {
+        if self.carriers.is_empty() || mag2_unshifted.len() < 8 {
+            return None;
+        }
+        let mut best = None;
+        let mut best_power = 0.0;
+        for &(carrier_num, carrier_freq_hz) in &self.carriers {
+            let bin = self.carrier_fft_bin(carrier_freq_hz, mag2_unshifted.len());
+            let power = self.carrier_band_power(mag2_unshifted, bin, 4);
+            if best.is_none() || power > best_power {
+                best = Some((carrier_num, carrier_freq_hz));
+                best_power = power;
+            }
+        }
+        best
+    }
+
+    fn carrier_fft_bin(&self, carrier_freq_hz: f64, bins: usize) -> usize {
+        let offset_hz = (carrier_freq_hz - self.center_frequency) as RealSample;
+        let raw_bin = (offset_hz / self.sample_rate * bins as RealSample).round() as isize;
+        raw_bin.rem_euclid(bins as isize) as usize
+    }
+
+    fn carrier_band_power(&self, mag2_unshifted: &[RealSample], center_bin: usize, radius_bins: isize) -> RealSample {
+        let bins = mag2_unshifted.len() as isize;
+        let mut power = 0.0;
+        for delta in -radius_bins..=radius_bins {
+            let idx = (center_bin as isize + delta).rem_euclid(bins) as usize;
+            power += mag2_unshifted[idx];
+        }
+        power
+    }
+
+    fn downconvert_samples(&self, samples: &[ComplexSample], offset_hz: RealSample) -> Vec<ComplexSample> {
+        let phase_step = -std::f32::consts::TAU * offset_hz / self.sample_rate;
+        let (step_sin, step_cos) = phase_step.sin_cos();
+        let step = ComplexSample {
+            re: step_cos,
+            im: step_sin,
+        };
+        let mut osc = ComplexSample { re: 1.0, im: 0.0 };
+        let mut mixed = Vec::with_capacity(samples.len());
+        for sample in samples {
+            mixed.push(*sample * osc);
+            osc *= step;
+        }
+        mixed
     }
 
     /// Recover symbol-rate IQ samples AND compute RMS-normalized EVM in one pass.

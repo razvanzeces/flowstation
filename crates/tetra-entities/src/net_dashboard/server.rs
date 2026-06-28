@@ -1012,6 +1012,8 @@ impl DashboardServer {
                 TelemetryEvent::TxVisual {
                     sample_rate,
                     center_freq_hz,
+                    carriers,
+                    constellation_carrier,
                     rms_dbfs,
                     peak_dbfs,
                     spectrum_db_tenths,
@@ -1022,6 +1024,8 @@ impl DashboardServer {
                     s.last_tx_visual = Some(crate::net_dashboard::state::TxVisualSnapshot {
                         sample_rate: *sample_rate,
                         center_freq_hz: *center_freq_hz,
+                        carriers: carriers.clone(),
+                        constellation_carrier: *constellation_carrier,
                         rms_dbfs: *rms_dbfs,
                         peak_dbfs: *peak_dbfs,
                         spectrum_db_tenths: spectrum_db_tenths.clone(),
@@ -1031,6 +1035,7 @@ impl DashboardServer {
                 TelemetryEvent::TxQuality {
                     papr_db,
                     evm_pct,
+                    evm_carrier,
                     dc_offset_i,
                     dc_offset_q,
                     iq_amplitude_imbalance_db,
@@ -1043,6 +1048,7 @@ impl DashboardServer {
                     s.last_tx_quality = Some(crate::net_dashboard::state::TxQualitySnapshot {
                         papr_db: *papr_db,
                         evm_pct: *evm_pct,
+                        evm_carrier: *evm_carrier,
                         dc_offset_i: *dc_offset_i,
                         dc_offset_q: *dc_offset_q,
                         iq_amplitude_imbalance_db: *iq_amplitude_imbalance_db,
@@ -1222,6 +1228,8 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
         TelemetryEvent::TxVisual {
             sample_rate,
             center_freq_hz,
+            carriers,
+            constellation_carrier,
             rms_dbfs,
             peak_dbfs,
             spectrum_db_tenths,
@@ -1230,6 +1238,8 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             "type": "tx_visual",
             "sample_rate": sample_rate,
             "center_freq_hz": center_freq_hz,
+            "carriers": carriers,
+            "constellation_carrier": constellation_carrier,
             "rms_dbfs": rms_dbfs,
             "peak_dbfs": peak_dbfs,
             "spectrum_db_tenths": spectrum_db_tenths,
@@ -1238,6 +1248,7 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
         TelemetryEvent::TxQuality {
             papr_db,
             evm_pct,
+            evm_carrier,
             dc_offset_i,
             dc_offset_q,
             iq_amplitude_imbalance_db,
@@ -1248,6 +1259,7 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             "type": "tx_quality",
             "papr_db": papr_db,
             "evm_pct": evm_pct,
+            "evm_carrier": evm_carrier,
             "dc_offset_i": dc_offset_i,
             "dc_offset_q": dc_offset_q,
             "iq_amplitude_imbalance_db": iq_amplitude_imbalance_db,

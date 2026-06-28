@@ -112,6 +112,14 @@ pub enum TelemetryEvent {
         spectrum_db_tenths: Vec<i16>,
         /// Recovered symbol-rate IQ samples, interleaved I,Q,I,Q,... scaled to fit i16.
         constellation_iq: Vec<i16>,
+        /// Configured BS downlink carriers as (carrier number, absolute frequency Hz).
+        /// The RF page uses these to place carrier-aware markers over the aggregate
+        /// pre-PA spectrum/waterfall.
+        carriers: Vec<(u16, f64)>,
+        /// Carrier selected for constellation recovery, as (carrier number, absolute
+        /// frequency Hz). In multi-carrier mode the aggregate SDR-centered samples
+        /// must be mixed down before IQ/EVM is meaningful.
+        constellation_carrier: Option<(u16, f64)>,
     },
     /// Slow, expensive signal-quality metrics. Emitted once per second so the
     /// numbers on the RF dashboard sit still instead of flickering. The values
@@ -139,6 +147,9 @@ pub enum TelemetryEvent {
         carrier_leakage_db: f32,
         /// Occupied bandwidth in Hz — width containing 99% of total power.
         occupied_bandwidth_hz: f32,
+        /// Carrier used for the EVM calculation, as (carrier number, absolute
+        /// frequency Hz). None means the aggregate/DC signal was used.
+        evm_carrier: Option<(u16, f64)>,
     },
     /// SDR hardware health snapshot. Emitted every ~5 seconds. Some fields may be
     /// absent (None) depending on what the radio exposes via Soapy.
