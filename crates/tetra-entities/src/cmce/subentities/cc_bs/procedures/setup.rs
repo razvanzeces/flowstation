@@ -69,6 +69,226 @@ impl CcBsSubentity {
         }
     }
 
+    fn fsm_on_u_setup_p2p_local_echo(
+        &mut self,
+        queue: &mut MessageQueue,
+        message: &SapMsg,
+        pdu: &USetup,
+        calling_party: TetraAddress,
+        called_addr: TetraAddress,
+    ) {
+        let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
+            tracing::warn!("CMCE: cannot create local echo call from non-LCMC message");
+            return;
+        };
+
+        if let Some((active_call_id, state, cause)) = self.setup_collision_cause(calling_party.ssi, None) {
+            tracing::info!(
+                "CMCE: rejecting local echo U-SETUP from ISSI {} (collision call_id={} state={:?} cause={})",
+                calling_party.ssi,
+                active_call_id,
+                state,
+                cause
+            );
+            self.reject_setup_request(queue, message, calling_party, cause, "local echo setup collision");
+            return;
+        }
+
+        if is_emergency_priority(pdu.call_priority) {
+            tracing::info!(
+                "CMCE: EMERGENCY local echo call set-up from ISSI {} (priority {})",
+                calling_party.ssi,
+                pdu.call_priority
+            );
+        }
+
+        // Local echo has no second MS leg. One bidirectional traffic slot is enough, regardless
+        // of whether the requesting terminal marks the P2P call as simplex or duplex.
+        self.ensure_timeslots_for_priority(queue, 1, pdu.call_priority);
+        let circuit = {
+            let mut state = self.config.state_write();
+            match self.circuits.allocate_circuit_with_allocator(
+                Direction::Both,
+                pdu.basic_service_information.communication_type,
+                pdu.simplex_duplex_selection,
+                &mut state.timeslot_alloc,
+                TimeslotOwner::Cmce,
+            ) {
+                Ok(circuit) => circuit.clone(),
+                Err(e) => {
+                    tracing::info!(
+                        "CMCE: rejecting local echo U-SETUP from ISSI {} (no free channel: {:?})",
+                        calling_party.ssi,
+                        e
+                    );
+                    drop(state);
+                    self.reject_setup_request(
+                        queue,
+                        message,
+                        calling_party,
+                        DisconnectCause::CongestionInInfrastructure,
+                        "failed to allocate local echo circuit",
+                    );
+                    return;
+                }
+            }
+        };
+
+        let call_id = circuit.call_id;
+        let carrier_num = circuit.carrier_num;
+        let ts = circuit.ts;
+        let usage = circuit.usage;
+        let call_timeout = Self::p2p_call_timeout(pdu.simplex_duplex_selection);
+
+        tracing::info!(
+            "CMCE: local echo U-SETUP from ISSI {} to ISSI {} -> call_id={} carrier={} ts={} usage={} duplex={}",
+            calling_party.ssi,
+            called_addr.ssi,
+            call_id,
+            carrier_num,
+            ts,
+            usage,
+            pdu.simplex_duplex_selection
+        );
+
+        let call = IndividualCall {
+            calling_addr: calling_party,
+            called_addr,
+            calling_handle: prim.handle,
+            calling_link_id: prim.link_id,
+            calling_endpoint_id: prim.endpoint_id,
+            called_handle: None,
+            called_link_id: None,
+            called_endpoint_id: None,
+            calling_carrier_num: carrier_num,
+            calling_ts: ts,
+            called_carrier_num: carrier_num,
+            called_ts: ts,
+            calling_usage: usage,
+            called_usage: usage,
+            simplex_duplex: pdu.simplex_duplex_selection,
+            priority: pdu.call_priority,
+            state: IndividualCallState::CallSetupPending,
+            formal_state: CcFormalState::Idle.after(CcFormalEvent::SetupRequest),
+            setup_timer_started: Some(self.dltime),
+            setup_timeout: Some(CallTimeoutSetupPhase::T10s),
+            active_timer_started: None,
+            call_timeout,
+            called_over_brew: false,
+            calling_over_brew: false,
+            network_entity: TetraEntity::Brew,
+            brew_uuid: None,
+            network_call: None,
+            connect_request_sent: false,
+            floor_holder: None,
+            queued_tx_demand: None,
+        };
+
+        if let Err(err) = self.fsm_individual_create_setup_call(call_id, call) {
+            tracing::warn!("CMCE: local echo call_id={} creation failed: {:?}", call_id, err);
+            self.abort_individual_setup(
+                queue,
+                call_id,
+                calling_party,
+                prim.handle,
+                prim.link_id,
+                prim.endpoint_id,
+                &[CarrierSlot { carrier_num, ts }],
+                DisconnectCause::NoIdleCcEntity,
+            );
+            return;
+        }
+
+        if let Err(err) = self.fsm_individual_transition_to_active(call_id) {
+            tracing::warn!("CMCE: local echo call_id={} activation failed: {:?}", call_id, err);
+            self.abort_individual_setup(
+                queue,
+                call_id,
+                calling_party,
+                prim.handle,
+                prim.link_id,
+                prim.endpoint_id,
+                &[CarrierSlot { carrier_num, ts }],
+                DisconnectCause::IncompatibleTrafficCase,
+            );
+            return;
+        }
+
+        Self::signal_umac_circuit_open(queue, &circuit, self.dltime, None, None, CircuitDlMediaSource::LocalLoopback);
+
+        self.send_d_call_proceeding(queue, message, pdu, call_id, CallTimeoutSetupPhase::T10s, pdu.hook_method_selection);
+
+        let mut timeslots = [false; 4];
+        timeslots[ts as usize - 1] = true;
+        let chan_alloc = CmceChanAllocReq {
+            usage: Some(usage),
+            alloc_type: ChanAllocType::Replace,
+            carrier: Some(carrier_num),
+            timeslots,
+            ul_dl_assigned: UlDlAssignment::Both,
+        };
+
+        let d_connect = DConnect {
+            call_identifier: call_id,
+            call_time_out: call_timeout,
+            hook_method_selection: pdu.hook_method_selection,
+            simplex_duplex_selection: pdu.simplex_duplex_selection,
+            transmission_grant: TransmissionGrant::Granted,
+            transmission_request_permission: false,
+            call_ownership: true,
+            call_priority: None,
+            basic_service_information: None,
+            temporary_address: None,
+            notification_indicator: None,
+            facility: None,
+            proprietary: None,
+        };
+
+        tracing::info!("-> {:?}", d_connect);
+        let mut connect_sdu = BitBuffer::new_autoexpand(30);
+        d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
+        connect_sdu.seek(0);
+
+        queue.push_back(SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu: connect_sdu,
+                handle: prim.handle,
+                endpoint_id: prim.endpoint_id,
+                link_id: prim.link_id,
+                layer2service: Layer2Service::Unacknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                chan_alloc: Some(chan_alloc),
+                main_address: calling_party,
+                tx_reporter: None,
+            }),
+        });
+
+        if !pdu.simplex_duplex_selection {
+            if let Some(call) = self.individual_calls.get_mut(&call_id) {
+                call.grant_floor(calling_party);
+            }
+            self.notify_floor_granted(
+                queue,
+                GroupFloorGrant {
+                    call_id,
+                    source_issi: calling_party.ssi,
+                    dest_gssi: LOCAL_ECHO_ISSI,
+                    carrier_num,
+                    ts,
+                    is_group: false,
+                },
+                true,
+                BrewNotification::Never,
+            );
+        }
+    }
+
     /// Handle U-SETUP for group calls (non-P2P communication types).
     pub(in crate::cmce::subentities::cc_bs) fn fsm_on_u_setup_group(
         &mut self,
@@ -375,6 +595,11 @@ impl CcBsSubentity {
         }
 
         let called_addr = TetraAddress::new(called_ssi, SsiType::Issi);
+
+        if called_addr.ssi == LOCAL_ECHO_ISSI {
+            self.fsm_on_u_setup_p2p_local_echo(queue, message, pdu, calling_party, called_addr);
+            return;
+        }
 
         // PBX/phone calls (no concrete local ISSI) always go through Brew.
         if called_ssi == 0 {

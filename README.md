@@ -142,6 +142,17 @@ colour_code = 1
 | `ul_inactivity_secs` | `3` | UL silence before forced TX-CEASED (1–30s) |
 | `periodic_registration_secs` | `3600` | T351 interval; `0` = disabled |
 
+### Internal service ISSIs
+
+FlowStation reserves a few short ISSIs for services that terminate inside the
+base station instead of being routed to another radio or network bridge:
+
+| ISSI | Service | Notes |
+|---:|---|---|
+| `999` | Local voice echo / loopback | P2P calls to `999` are intercepted before the local registration check and before Brew/Asterisk routing. FlowStation allocates one bidirectional traffic slot, sends `D-CALL-PROCEEDING` and `D-CONNECT` with channel allocation to the caller, opens UMAC with `LocalLoopback`, and reflects the caller's own uplink audio back to the same terminal. The virtual `999` party does not need to be registered. |
+| `9998` | WX/METAR SDS service | Optional weather SDS service when `[wx_service]` is enabled. |
+| `9999` | BS control/source ISSI | Used by SDS command control, local control messages, and as the default source ISSI for injected SDS, DAPNET, MeshCom, GeoAlarm, Snom, and TPG2200 actions. SDS ACKs for `9999` are absorbed locally and are not forwarded to Brew. |
+
 ### Brew interconnect (BrandMeister / TetraPack)
 
 ```toml
@@ -546,7 +557,12 @@ Available at `http://<bts-ip>:8080` when `[dashboard]` is configured.
 
 **SDS ACK for ISSI 9999** — SDS ACK for the local BS control ISSI was being forwarded to Brew, generating spurious traffic. Now absorbed locally.
 
-**Chan_alloc in DConnect for echo service 999** — echo service calls were allocated without a traffic channel, causing audio to fail.
+**Local echo service 999** — P2P calls to ISSI `999` bypass normal
+local-registration and network-bridge checks. FlowStation creates an explicit
+local loopback call for the caller, sends `D-CONNECT` with channel allocation,
+opens a same-slot `LocalLoopback` traffic circuit, and skips the virtual `999`
+leg during release/floor signalling. This fixes the regression where `999`
+could be treated as an unregistered ISSI and routed to Brew.
 
 ---
 

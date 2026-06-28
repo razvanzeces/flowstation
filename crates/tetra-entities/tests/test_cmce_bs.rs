@@ -17,7 +17,7 @@ use tetra_pdus::cmce::pdus::{
     u_tx_demand::UTxDemand,
 };
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
-use tetra_saps::control::call_control::{CallControl, NetworkCircuitCall};
+use tetra_saps::control::call_control::{CallControl, CircuitDlMediaSource, NetworkCircuitCall};
 use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 use tetra_saps::control::enums::communication_type::CommunicationType;
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
@@ -496,6 +496,96 @@ fn count_d_setups(msgs: &[SapMsg]) -> usize {
                     if dl_pdu_type(&prim.sdu) == Some(CmcePduTypeDl::DSetup))
         })
         .count()
+}
+
+#[test]
+fn test_local_echo_999_bypasses_registration_and_brew() {
+    debug::setup_logging_verbose();
+
+    const LOCAL_ECHO_ISSI: u32 = 999;
+    let calling_issi = 1000001;
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+
+    // The virtual echo party is deliberately not registered.
+    test.submit_message(build_individual_u_setup_msg_with_mode(calling_issi, LOCAL_ECHO_ISSI, true));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+
+    let (mut connect_sdu, connect_alloc) =
+        find_lcmc_req(&msgs, calling_issi, CmcePduTypeDl::DConnect).expect("local echo must answer the caller immediately");
+    let d_connect = DConnect::from_bitbuf(&mut connect_sdu).expect("local echo D-CONNECT must parse");
+    assert_eq!(d_connect.transmission_grant, TransmissionGrant::Granted);
+    assert_eq!(connect_alloc, Some(UlDlAssignment::Both));
+
+    assert!(
+        find_lcmc_req(&msgs, LOCAL_ECHO_ISSI, CmcePduTypeDl::DSetup).is_none(),
+        "the virtual echo party must not receive a radio-side D-SETUP"
+    );
+    assert!(
+        !msgs.iter().any(|msg| matches!(
+            &msg.msg,
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest { .. })
+        )),
+        "ISSI 999 must never be routed to Brew"
+    );
+
+    let open_circuits: Vec<_> = msgs
+        .iter()
+        .filter_map(|msg| match &msg.msg {
+            SapMsgInner::CmceCallControl(CallControl::Open(circuit)) => Some(circuit),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(open_circuits.len(), 1, "local echo must use exactly one traffic circuit");
+    assert_eq!(open_circuits[0].direction, Direction::Both);
+    assert_eq!(open_circuits[0].dl_media_source, CircuitDlMediaSource::LocalLoopback);
+    assert_eq!(open_circuits[0].peer_ts, None);
+}
+
+#[test]
+fn test_local_echo_999_release_skips_virtual_radio_leg() {
+    debug::setup_logging_verbose();
+
+    const LOCAL_ECHO_ISSI: u32 = 999;
+    let calling_issi = 1000001;
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+
+    test.submit_message(build_individual_u_setup_msg_with_mode(calling_issi, LOCAL_ECHO_ISSI, true));
+    test.run_stack(Some(1));
+    let setup_msgs = test.dump_sinks();
+    let (mut connect_sdu, _) = find_lcmc_req(&setup_msgs, calling_issi, CmcePduTypeDl::DConnect).expect("expected local echo D-CONNECT");
+    let call_id = DConnect::from_bitbuf(&mut connect_sdu)
+        .expect("local echo D-CONNECT must parse")
+        .call_identifier;
+
+    test.submit_message(build_u_disconnect_msg(calling_issi, call_id));
+    test.run_stack(Some(1));
+    let release_msgs = test.dump_sinks();
+
+    assert!(
+        find_lcmc_req(&release_msgs, calling_issi, CmcePduTypeDl::DRelease).is_some(),
+        "the caller must receive D-RELEASE"
+    );
+    assert!(
+        find_lcmc_req(&release_msgs, LOCAL_ECHO_ISSI, CmcePduTypeDl::DRelease).is_none(),
+        "the virtual echo party must not receive a radio-side D-RELEASE"
+    );
+    assert!(
+        release_msgs
+            .iter()
+            .any(|msg| matches!(&msg.msg, SapMsgInner::CmceCallControl(CallControl::CloseSlot { .. }))),
+        "the local echo traffic circuit must be closed"
+    );
 }
 
 #[test]
