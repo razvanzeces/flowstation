@@ -5,6 +5,7 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use crate::cmce::ss_dgna::enums::ss_dgna_pdu_type::SsDgnaPduType;
 use crate::cmce::ss_dgna::enums::ss_type::SsType;
 use crate::cmce::ss_dgna::fields::group_deassignment_ack::GroupDeassignmentAck;
+use crate::cmce::ss_dgna::{read_terminating_obit, write_terminating_obit};
 
 /// DEASSIGN ACK PDU, TS 100 392-12-22 V1.5.1 Table 21 (uplink, carried in
 /// U-FACILITY).
@@ -19,6 +20,8 @@ use crate::cmce::ss_dgna::fields::group_deassignment_ack::GroupDeassignmentAck;
 ///   Number of groups in deassign ack 5b = acks.len()
 ///   Group deassignment Ack IE     var  repeated, that many times  [Table 48]
 ///   Acknowledgement complete       1b  once, at the end
+///   O-bit                          1b  = 0, terminates the SS PDU (EN 300 392-2
+///                                       annex E; see table E.4)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeassignAck {
@@ -42,6 +45,7 @@ impl DeassignAck {
         }
 
         let ack_complete = buf.read_field(1, "ack_complete")? == 1;
+        read_terminating_obit(buf)?;
 
         Ok(DeassignAck { acks, ack_complete })
     }
@@ -61,6 +65,7 @@ impl DeassignAck {
             ack.to_bitbuf(buf)?;
         }
         buf.write_bits(self.ack_complete as u64, 1);
+        write_terminating_obit(buf);
         Ok(())
     }
 }

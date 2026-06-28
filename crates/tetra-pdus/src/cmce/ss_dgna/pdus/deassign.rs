@@ -5,6 +5,7 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use crate::cmce::ss_dgna::enums::ss_dgna_pdu_type::SsDgnaPduType;
 use crate::cmce::ss_dgna::enums::ss_type::SsType;
 use crate::cmce::ss_dgna::fields::group_deassignment::GroupDeassignment;
+use crate::cmce::ss_dgna::{read_terminating_obit, write_terminating_obit};
 
 /// DEASSIGN PDU, TS 100 392-12-22 V1.5.1 Table 20 (downlink, carried in
 /// D-FACILITY).
@@ -20,6 +21,8 @@ use crate::cmce::ss_dgna::fields::group_deassignment::GroupDeassignment;
 ///   Number of groups in deassign request    5b  = groups.len() (00000 = ALL)
 ///   Group deassignment IE                  var  repeated, that many times  [Table 47]
 ///   Acknowledgement requested               1b  once, at the end
+///   O-bit                                   1b  = 0, terminates the SS PDU
+///                                                (EN 300 392-2 annex E; see table E.4)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Deassign {
@@ -44,6 +47,7 @@ impl Deassign {
         }
 
         let ack_requested = buf.read_field(1, "ack_requested")? == 1;
+        read_terminating_obit(buf)?;
 
         Ok(Deassign { groups, ack_requested })
     }
@@ -63,6 +67,7 @@ impl Deassign {
             group.to_bitbuf(buf)?;
         }
         buf.write_bits(self.ack_requested as u64, 1);
+        write_terminating_obit(buf);
         Ok(())
     }
 }
@@ -104,8 +109,8 @@ mod tests {
 
         let mut buf = BitBuffer::new_autoexpand(32);
         pdu.to_bitbuf(&mut buf).expect("serialize");
-        // SS type 6 + PDU type 5 + number of groups 5 + ack 1 = 17 bits.
-        assert_eq!(buf.get_pos(), 17);
+        // SS type 6 + PDU type 5 + number of groups 5 + ack 1 + terminating O-bit 1 = 18 bits.
+        assert_eq!(buf.get_pos(), 18);
         buf.seek(0);
         let parsed = Deassign::from_bitbuf(&mut buf).expect("parse");
         assert_eq!(parsed, pdu);

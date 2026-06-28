@@ -5,6 +5,7 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use crate::cmce::ss_dgna::enums::ss_dgna_pdu_type::SsDgnaPduType;
 use crate::cmce::ss_dgna::enums::ss_type::SsType;
 use crate::cmce::ss_dgna::fields::group_assignment::GroupAssignment;
+use crate::cmce::ss_dgna::{read_terminating_obit, write_terminating_obit};
 
 /// ASSIGN PDU, TS 100 392-12-22 V1.5.1 Table 18 (downlink, carried in
 /// D-FACILITY).
@@ -20,6 +21,8 @@ use crate::cmce::ss_dgna::fields::group_assignment::GroupAssignment;
 ///   Number of groups           5b  = groups.len() (1..31)
 ///   Group assignment IE       var  repeated, Number of groups times  [Table 45]
 ///   Acknowledgement requested  1b  once, at the end
+///   O-bit                      1b  = 0, terminates the SS PDU (EN 300 392-2
+///                                   annex E; see table E.4)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assign {
@@ -44,6 +47,7 @@ impl Assign {
         }
 
         let ack_requested = buf.read_field(1, "ack_requested")? == 1;
+        read_terminating_obit(buf)?;
 
         Ok(Assign { groups, ack_requested })
     }
@@ -63,6 +67,7 @@ impl Assign {
             group.to_bitbuf(buf)?;
         }
         buf.write_bits(self.ack_requested as u64, 1);
+        write_terminating_obit(buf);
         Ok(())
     }
 }
@@ -111,7 +116,8 @@ mod tests {
     /// (00001), then the single Group assignment IE and the trailing ack bit.
     ///
     /// IE: Group SSI = 1 (24b), ext present = 0, attachment mode = 000, O-bit = 0.
-    /// Trailing "Acknowledgement requested" = 1.
+    /// Trailing "Acknowledgement requested" = 1, then the SS PDU terminating
+    /// O-bit = 0 (EN 300 392-2 annex E table E.4).
     #[test]
     fn assign_exact_bits() {
         let pdu = Assign {
@@ -141,6 +147,7 @@ mod tests {
             "000",                      // Group identity attachment mode = 000
             "0",                        // O-bit (no type-2 optionals)
             "1",                        // Acknowledgement requested = 1
+            "0",                        // SS PDU terminating O-bit
         );
         assert_eq!(buf.to_bitstr(), expected);
     }

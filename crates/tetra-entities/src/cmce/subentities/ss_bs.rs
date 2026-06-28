@@ -80,7 +80,7 @@ impl SsBsSubentity {
         };
 
         let pdu = DFacility {
-            facility: Some(DFacilitySsBody { routeing: 0, ss_pdu }),
+            facility: Some(DFacilitySsBody { ss_pdu }),
         };
 
         let mut sdu = BitBuffer::new_autoexpand(32);
