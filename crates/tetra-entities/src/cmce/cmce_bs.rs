@@ -4,6 +4,7 @@ use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{Sap, TdmaTime, unimplemented_log};
+use tetra_saps::control::brew::BrewSubscriberAction;
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use super::components::pc_bs::{ControlRoute, LcmcRoute, PcBs};
@@ -236,7 +237,7 @@ impl TetraEntityTrait for CmceBs {
     }
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
-        tracing::debug!("rx_prim: {:?}", message);
+        tracing::trace!("rx_prim: {:?}", message);
         // tracing::debug!(ts=%message.dltime, "rx_prim: {:?}", message);
 
         match message.sap {
@@ -253,9 +254,24 @@ impl TetraEntityTrait for CmceBs {
                     self.cc.rx_call_control(queue, message);
                 }
                 ControlRoute::CcSubscriberUpdate => {
+                    let source = message.src;
                     let SapMsgInner::MmSubscriberUpdate(update) = message.msg else {
                         unreachable!();
                     };
+                    if source == TetraEntity::Brew {
+                        if !crate::net_brew::is_brew_external_subscriber_allowed(&self.config, update.issi) {
+                            tracing::trace!(
+                                "CMCE: ignoring Brew subscriber update issi={} action={:?}",
+                                update.issi,
+                                update.action
+                            );
+                            return;
+                        }
+                        if update.action == BrewSubscriberAction::Register && update.groups.is_empty() {
+                            tracing::trace!("CMCE: ignoring Brew presence-only register issi={}", update.issi);
+                            return;
+                        }
+                    }
                     self.cc.handle_subscriber_update(queue, update);
                 }
                 ControlRoute::SdsRc => {

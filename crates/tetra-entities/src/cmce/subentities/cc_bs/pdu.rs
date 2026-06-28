@@ -418,8 +418,10 @@ impl CcBsSubentity {
                         self.dec_group_listener(gssi);
                         self.drop_group_calls_if_unlistened(queue, gssi);
                     }
+                    tracing::debug!("CMCE: subscriber deregister issi={}", issi);
+                } else {
+                    tracing::trace!("CMCE: subscriber deregister ignored unknown issi={}", issi);
                 }
-                tracing::info!("CMCE: subscriber deregister issi={}", issi);
             }
             BrewSubscriberAction::Affiliate => {
                 let mut new_groups = Vec::new();
