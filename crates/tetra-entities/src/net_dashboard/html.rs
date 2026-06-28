@@ -7218,6 +7218,8 @@ const rfState = {
   sampleRate: 0,
   centerFreq: 0,
   carriers: [],
+  constellationCarrier: null,
+  evmCarrier: null,
   // Waterfall ring buffer — rows × FFT bins. Newest row at index 0; we shift on push.
   // Each row stores normalized [0..1] magnitudes so we can recolour on theme change.
   waterfall: [],
@@ -7291,21 +7293,25 @@ function rfNormalizeCarriers(raw){
   const carriers = [];
   if(Array.isArray(raw)){
     for(const item of raw){
-      let num = 0, freq = 0;
-      if(Array.isArray(item)){
-        num = Number(item[0] || 0);
-        freq = Number(item[1] || 0);
-      }else if(item && typeof item === 'object'){
-        num = Number(item.carrier_num || item.num || item[0] || 0);
-        freq = Number(item.freq_hz || item.frequency_hz || item.freq || item[1] || 0);
-      }
-      if(isFinite(freq) && freq > 0){
-        carriers.push({ num: isFinite(num) ? num : 0, freq });
-      }
+      const carrier = rfNormalizeCarrier(item);
+      if(carrier) carriers.push(carrier);
     }
   }
   carriers.sort((a,b)=>a.freq-b.freq);
   return carriers;
+}
+
+function rfNormalizeCarrier(item){
+  if(!item) return null;
+  let num = 0, freq = 0;
+  if(Array.isArray(item)){
+    num = Number(item[0] || 0);
+    freq = Number(item[1] || 0);
+  }else if(typeof item === 'object'){
+    num = Number(item.carrier_num || item.num || item[0] || 0);
+    freq = Number(item.freq_hz || item.frequency_hz || item.freq || item[1] || 0);
+  }
+  return isFinite(freq) && freq > 0 ? { num: isFinite(num) ? num : 0, freq } : null;
 }
 
 function rfCarrierName(carrier){
@@ -7331,10 +7337,12 @@ function rfCarrierSummary(){
 function updateRfCarrierHints(){
   const summary = rfCarrierSummary();
   const multi = (rfState.carriers || []).length > 1;
+  const iqCarrier = rfState.constellationCarrier;
+  const evmCarrier = rfState.evmCarrier || iqCarrier;
   setText('rf-spectrum-hint', (t('rf_live')||'live') + ' · 512-bin FFT' + (summary ? ' · ' + summary : ''));
   setText('rf-waterfall-hint', 'rolling · viridis' + (summary ? ' · ' + summary : ''));
-  setText('rf-constellation-hint', multi ? 'aggregate IQ · not per-carrier' : 'π/4-DQPSK');
-  setText('rf-quality-hint', multi ? 'aggregate pre-PA · EVM/OBW are not per-carrier' : 'measured pre-PA · derived from same DSP snapshot');
+  setText('rf-constellation-hint', iqCarrier ? rfCarrierName(iqCarrier)+' IQ · mixed to baseband' : (multi ? 'aggregate IQ · no carrier lock' : 'π/4-DQPSK'));
+  setText('rf-quality-hint', evmCarrier ? 'EVM '+rfCarrierName(evmCarrier)+' · OBW aggregate pre-PA' : (multi ? 'aggregate pre-PA · EVM/OBW are not per-carrier' : 'measured pre-PA · derived from same DSP snapshot'));
 }
 
 function drawRfCarrierMarkers(ctx, w, h, sampleRate, centerFreq, carriers, opts){
@@ -7379,6 +7387,7 @@ function handleTxVisual(msg){
   rfState.sampleRate = msg.sample_rate || 0;
   rfState.centerFreq = msg.center_freq_hz || 0;
   rfState.carriers = rfNormalizeCarriers(msg.carriers || []);
+  rfState.constellationCarrier = rfNormalizeCarrier(msg.constellation_carrier);
 
   // RMS/Peak in the top strip — these come in at the fast cadence so we
   // smooth them before painting (otherwise the dB number jumps a couple of
@@ -7414,12 +7423,15 @@ function handleTxQuality(msg){
   const papr = rfPushAvg('papr_db',                   msg.papr_db);
   const cl   = rfPushAvg('carrier_leakage_db',        msg.carrier_leakage_db);
   const obw  = rfPushAvg('occupied_bandwidth_hz',     msg.occupied_bandwidth_hz);
+  rfState.evmCarrier = rfNormalizeCarrier(msg.evm_carrier) || rfState.constellationCarrier;
   const multi = (rfState.carriers || []).length > 1;
+  const evmSuffix = rfState.evmCarrier ? ' '+rfCarrierName(rfState.evmCarrier) : (multi ? ' agg' : '');
+  updateRfCarrierHints();
 
   // Show only the operationally-relevant TX metrics. DC offset + IQ amplitude/phase
   // imbalance are modulator-calibration diagnostics and were trimmed from the UI.
-  paintQuality('rf-evm',     'rf-q-evm-wrap',  fmtPct(evm, 2) + (multi ? ' agg' : ''), evalEvm(evm));
-  setText('rf-hero-evm', fmtPct(evm, 2) + (multi ? ' agg' : ''));
+  paintQuality('rf-evm',     'rf-q-evm-wrap',  fmtPct(evm, 2) + evmSuffix, evalEvm(evm));
+  setText('rf-hero-evm', fmtPct(evm, 2) + evmSuffix);
   paintQuality('rf-papr',    'rf-q-papr-wrap', fmtDb(papr, 1),       evalPapr(papr));
   paintQuality('rf-carrier', 'rf-q-cl-wrap',   fmtDb(cl, 1, true),   evalCarrierLeakage(cl));
   paintQuality('rf-obw',     'rf-q-obw-wrap',  fmtKhz(obw) + (multi ? ' agg' : ''), evalObw(obw));

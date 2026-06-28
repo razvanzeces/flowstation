@@ -135,6 +135,7 @@ pub struct TxVisualSnapshot {
     pub sample_rate: f32,
     pub center_freq_hz: f64,
     pub carriers: Vec<(u16, f64)>,
+    pub constellation_carrier: Option<(u16, f64)>,
     pub rms_dbfs: f32,
     pub peak_dbfs: f32,
     pub spectrum_db_tenths: Vec<i16>,
@@ -147,6 +148,7 @@ pub struct TxVisualSnapshot {
 pub struct TxQualitySnapshot {
     pub papr_db: f32,
     pub evm_pct: f32,
+    pub evm_carrier: Option<(u16, f64)>,
     pub dc_offset_i: f32,
     pub dc_offset_q: f32,
     pub iq_amplitude_imbalance_db: f32,
