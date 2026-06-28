@@ -566,7 +566,7 @@ fn parse_rwth_message(line: &str) -> Result<DapnetMessage, String> {
         }
         _ => parts[2].to_string(),
     };
-    let callsign = extract_callsign(&text).unwrap_or_else(|| recipient.clone());
+    let callsign = extract_callsign(&text).unwrap_or_default();
     let id = format!("rwth:{msg_id:02X}:{}", stable_hash_hex(body));
     Ok(DapnetMessage {
         id,
@@ -620,6 +620,18 @@ fn strip_skyper_rubric_prefix(text: &str) -> Option<&str> {
     let (_, first) = chars.next()?;
     let (_, second) = chars.next()?;
     let (third_idx, third) = chars.next()?;
+    let after_third_idx = third_idx + third.len_utf8();
+
+    if first.is_ascii_digit() && third == ')' {
+        let rest = &text[after_third_idx..];
+        if rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '[' | '\\' | ']' | '{' | '|' | '}' | '~'))
+        {
+            return Some(rest);
+        }
+    }
 
     if !third.is_ascii_alphanumeric() {
         return None;
@@ -655,6 +667,9 @@ fn skyper_charset_to_unicode(text: &str) -> String {
 fn should_decode_rot1(raw: &str, decoded: &str) -> bool {
     if raw.is_empty() {
         return false;
+    }
+    if strip_skyper_rubric_prefix(decoded).is_some() {
+        return true;
     }
     let raw_spaces = raw.chars().filter(|&c| c == ' ').count();
     let encoded_spaces = raw.chars().filter(|&c| c == '!').count();
@@ -743,6 +758,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_rwth_message_does_not_copy_recipient_into_callsign() {
+        let msg = parse_rwth_message("#02 6:1:E0:3:YYYYMMDDHHMMSS260626185400").unwrap();
+        assert_eq!(msg.recipient, "RIC 0000224 / func 3");
+        assert_eq!(msg.callsign, "");
+    }
+
+    #[test]
     fn dapnet_text_decodes_skyper_rot1_but_keeps_plain_text() {
         let darc_70mhz = ";#EBSD;!Cvoeftsbut.Esvdltbdif!efgjojfsu!jo!Gvopuf!Sfdiutsbinfo!g~s!81.NI{.Cfusjfc";
         let nordsee = "\\&Opsetff;!33/17/37!27;41!Ifmhpmboe!Cjoofoibgfo!679/1dn!NOX;vocflboou";
@@ -758,6 +780,12 @@ mod tests {
             decode_dapnet_text(nordsee),
             "Nordsee: 22.06.26 16:30 Helgoland Binnenhafen 568.0cm MNW:unbekannt"
         );
+        assert_eq!(decode_dapnet_text("1r*Gfjotubvc"), "Feinstaub");
+        assert_eq!(decode_dapnet_text("1R*Tbufmmjufo"), "Satelliten");
+        assert_eq!(decode_dapnet_text("1K*IBNOFU"), "HAMNET");
+        assert_eq!(decode_dapnet_text("1_*XY.Mplbm"), "WX-Lokal");
+        assert_eq!(decode_dapnet_text("1J*HPF!Opugvol"), "GOE Notfunk");
+        assert_eq!(decode_dapnet_text("1D*Hf{fjufo"), "Gezeiten");
         assert_eq!(
             decode_dapnet_text("5357.0 EA5FIV von DL4MFF um 1933z"),
             "5357.0 EA5FIV von DL4MFF um 1933z"

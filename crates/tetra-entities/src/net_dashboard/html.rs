@@ -6185,8 +6185,15 @@ function dapPaths(paths){
   if(!p.length)return '<span class="sds-empty">—</span>';
   return p.map(x=>`<span class="badge badge-blue" style="font-size:10px">${escHtml(x)}</span>`).join(' ');
 }
+function dapnetLogCallsign(e){
+  const callsign=String(e?.callsign||'').trim();
+  const recipient=String(e?.recipient||'').trim();
+  if(callsign&&recipient&&callsign===recipient&&/^RIC\s+\d+/i.test(callsign))return '';
+  return callsign;
+}
 function dapnetRow(e){
-  return `<tr><td class="sds-time">${escHtml(e.ts||'')}</td><td>${dirBadge(e.direction)}</td><td>${escHtml(e.callsign||'')}</td><td>${escHtml(e.recipient||'')}</td><td>${dapPaths(e.paths)}</td><td class="sds-msg">${escHtml(e.text||'')}</td></tr>`;
+  const callsign=dapnetLogCallsign(e);
+  return `<tr><td class="sds-time">${escHtml(e.ts||'')}</td><td>${dirBadge(e.direction)}</td><td>${callsign?escHtml(callsign):'<span class="sds-empty">—</span>'}</td><td>${escHtml(e.recipient||'')}</td><td>${dapPaths(e.paths)}</td><td class="sds-msg">${escHtml(e.text||'')}</td></tr>`;
 }
 function renderDapnetLog(){
   const tb=document.getElementById('dapnetlog-tbody');if(!tb)return;
@@ -6214,7 +6221,7 @@ function exportDapnetLog(){
     lines.push([
       e.ts||'',
       (e.direction||'').toUpperCase(),
-      e.callsign||'',
+      dapnetLogCallsign(e),
       e.recipient||'',
       (e.paths||[]).join(','),
       e.text||''
@@ -8019,7 +8026,6 @@ function classifyDapnetHealth(data){
   } else {
     notes.push('RWTH receive feed disabled');
   }
-  if(!paths.length)notes.push('no forwarding path enabled');
   if(notes.length)level='degraded';
   const status=rt.rwth_core_status||(data.rwth_core_enabled?'enabled':'disabled');
   const detail='RWTH '+status+' · '+(paths.length?paths.join(', '):'no forwarding');
