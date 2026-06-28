@@ -3,6 +3,7 @@ pub mod dapnet;
 pub mod dual_carrier;
 pub mod geoalarm;
 pub mod html;
+pub mod meshcom;
 pub mod radioid;
 pub mod server;
 pub mod snom_notify;

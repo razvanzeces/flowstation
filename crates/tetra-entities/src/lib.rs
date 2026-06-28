@@ -20,6 +20,7 @@ pub mod net_control;
 pub mod net_dapnet;
 pub mod net_dashboard;
 pub mod net_geoalarm;
+pub mod net_meshcom;
 pub mod net_snom;
 pub mod net_telegram;
 pub mod net_telemetry;

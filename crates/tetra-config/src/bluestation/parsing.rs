@@ -17,6 +17,7 @@ use super::sec_dashboard::{CfgDashboardDto, apply_dashboard_patch};
 use super::sec_emergency::{CfgEmergencyDto, apply_emergency_patch};
 use super::sec_geoalarm::{CfgGeoalarmDto, apply_geoalarm_patch};
 use super::sec_health::{CfgHealthDto, apply_health_patch};
+use super::sec_meshcom::{CfgMeshcomDto, apply_meshcom_patch};
 use super::sec_recovery::{CfgRecoveryDto, apply_recovery_patch};
 use super::sec_security::{CfgSecurityDto, apply_security_patch};
 use super::sec_snom_notify::{CfgSnomNotifyDto, apply_snom_notify_patch};
@@ -143,6 +144,13 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         return Err(format!("Unrecognized fields in geoalarm config: {:?}", sorted_keys(&geoalarm.extra)).into());
     }
 
+    // Optional meshcom section
+    if let Some(ref meshcom) = root.meshcom
+        && !meshcom.extra.is_empty()
+    {
+        return Err(format!("Unrecognized fields in meshcom config: {:?}", sorted_keys(&meshcom.extra)).into());
+    }
+
     // Optional tpg2200_action section
     if let Some(ref action) = root.tpg2200_action
         && !action.extra.is_empty()
@@ -232,6 +240,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         asterisk: apply_asterisk_patch(root.asterisk.unwrap_or_default())?,
         dapnet: apply_dapnet_patch(root.dapnet.unwrap_or_default())?,
         geoalarm: apply_geoalarm_patch(root.geoalarm.unwrap_or_default())?,
+        meshcom: apply_meshcom_patch(root.meshcom.unwrap_or_default())?,
         tpg2200_action: apply_tpg2200_action_patch(root.tpg2200_action.unwrap_or_default())?,
         snom_notify: apply_snom_notify_patch(root.snom_notify.unwrap_or_default())?,
         dashboard: None,
@@ -308,6 +317,7 @@ struct TomlConfigRoot {
     asterisk: Option<CfgAsteriskDto>,
     dapnet: Option<CfgDapnetDto>,
     geoalarm: Option<CfgGeoalarmDto>,
+    meshcom: Option<CfgMeshcomDto>,
     tpg2200_action: Option<CfgTpg2200ActionDto>,
     snom_notify: Option<CfgSnomNotifyDto>,
     dashboard: Option<CfgDashboardDto>,
@@ -472,6 +482,27 @@ rwth_messages_limit = 100
 [geoalarm]
 enabled = true
 
+[meshcom]
+enabled = true
+bind_addr = "0.0.0.0"
+bind_port = 1799
+tx_host = "255.255.255.255"
+tx_port = 1799
+allow_broadcast = true
+max_messages = 500
+max_nodes = 1000
+forward_sds = true
+forward_sip = true
+forward_telegram = true
+sds_source_issi = 9999
+sds_dest_issi = 2632585
+sds_dest_is_group = false
+sds_allowed_sources = ["DJ2TH", "OE1ABC-12"]
+sip_title_prefix = "MeshCom"
+sip_allowed_sources = ["DJ2TH"]
+telegram_prefix = "MeshCom"
+telegram_allowed_sources = ["OE1ABC-12"]
+
 [tpg2200_action]
 enabled = true
 token = "example-token"
@@ -550,6 +581,16 @@ sds_queue_critical = 128
         assert!(cfg.dapnet.telegram_allowed_rics.contains(&200));
         assert!(cfg.dapnet.telegram_allowed_rics.contains(&0x1C40));
         assert!(cfg.geoalarm.enabled);
+        assert!(cfg.meshcom.enabled);
+        assert_eq!(cfg.meshcom.bind_port, 1799);
+        assert_eq!(cfg.meshcom.tx_host, "255.255.255.255");
+        assert!(cfg.meshcom.forward_sds);
+        assert!(cfg.meshcom.forward_sip);
+        assert!(cfg.meshcom.forward_telegram);
+        assert_eq!(cfg.meshcom.sds_dest_issi, 2632585);
+        assert!(cfg.meshcom.sds_allowed_sources.contains("DJ2TH"));
+        assert!(cfg.meshcom.sip_allowed_sources.contains("DJ2TH"));
+        assert!(cfg.meshcom.telegram_allowed_sources.contains("OE1ABC-12"));
     }
 
     fn minimal_toml(extra_cell: &str) -> String {

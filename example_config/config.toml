@@ -508,6 +508,41 @@ voice_service = true
 
 ###############################################################################
 
+# OPTIONAL: MeshCom external UDP bridge
+#
+# FlowStation can listen for MeshCom extUDP JSON packets (msg/pos/tele) and send
+# text messages back to a MeshCom node. On the node side, point extUDP to the
+# FlowStation host and enable it, for example:
+#   --extudpip <flowstation-ip>
+#   --extudp on
+#
+# [meshcom]
+# enabled = false
+# bind_addr = "127.0.0.1"              # loopback by default; set a LAN address (or 0.0.0.0) if the node is on another host
+# bind_port = 1799
+# tx_host = "255.255.255.255"          # node address for outbound sends; the broadcast address needs allow_broadcast = true
+# tx_port = 1799
+# allow_broadcast = false              # set true to send to a broadcast tx_host like 255.255.255.255
+# max_messages = 500
+# max_nodes = 1000
+#
+# forward_sds = false
+# forward_sip = false                  # sends SnomIPPhoneText via the existing [snom_notify] AMI setup
+# forward_telegram = false
+#
+# sds_source_issi = 9999
+# sds_dest_issi = 0                    # 0 = not configured
+# sds_dest_is_group = false
+# sds_allowed_sources = []             # empty = every MeshCom source; examples: ["DJ2TH", "OE1ABC-12"]
+#
+# sip_title_prefix = "MeshCom"
+# sip_allowed_sources = []             # empty = every MeshCom source
+#
+# telegram_prefix = "MeshCom"
+# telegram_allowed_sources = []        # empty = every MeshCom source
+
+###############################################################################
+
 # OPTIONAL: Emergency-state handling (FlowStation)
 #
 # A radio signals emergency with a U-STATUS PDU (pre_coded_status = Emergency, status 0,
