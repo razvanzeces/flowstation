@@ -532,7 +532,10 @@ impl CcBsSubentity {
                 is_group: true,
             },
             false,
-            BrewNotification::IfGroupRoutable(dest_gssi),
+            BrewNotification::ForLocalSource {
+                source_issi: calling_party.ssi,
+                dest_gssi,
+            },
         );
     }
 
@@ -893,40 +896,54 @@ impl CcBsSubentity {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
             panic!()
         };
-        #[cfg_attr(not(feature = "asterisk"), allow(unused_mut))]
         let mut network_call = Self::build_network_circuit_call_from_u_setup(pdu, calling_party.ssi);
 
-        // Decide whether this dialed (non-ISSI) number routes to the Asterisk SIP/RTP bridge
-        // instead of Brew. Asterisk takes precedence; otherwise the call falls through to Brew.
-        // Without the asterisk feature there is no SIP bridge, so every call falls through to Brew.
-        #[cfg(feature = "asterisk")]
-        let network_entity = {
-            let asterisk_number = self.asterisk_route_number(&network_call);
-            let entity = if asterisk_number.is_some() {
-                TetraEntity::Asterisk
-            } else {
-                TetraEntity::Brew
-            };
-            if let Some(number) = asterisk_number {
-                tracing::info!(
-                    "CMCE: routing U-SETUP src={} dialed='{}' to Asterisk SIP number='{}'",
-                    calling_party.ssi,
-                    network_call.number,
-                    number
-                );
-                network_call.number = number;
-                network_call.destination = 0;
-                network_call.duplex = 1;
-            }
-            entity
-        };
-        #[cfg(not(feature = "asterisk"))]
-        let network_entity = TetraEntity::Brew;
+        // Treat short service ISSIs as dial strings before choosing a network bridge.
+        if network_call.destination > 0 && network_call.destination < 1_000_000 && network_call.number.is_empty() {
+            network_call.number = network_call.destination.to_string();
+            network_call.destination = 0;
+            network_call.duplex = 0;
+        }
 
-        if network_entity == TetraEntity::Brew && !brew::is_active(&self.config) {
+        #[cfg(feature = "asterisk")]
+        let asterisk_number = self.asterisk_route_number(&network_call);
+        #[cfg(not(feature = "asterisk"))]
+        let asterisk_number: Option<String> = None;
+
+        let network_entity = if asterisk_number.is_some() {
+            TetraEntity::Asterisk
+        } else if let Some(entity) = brew::route_entity_for_local_issi(&self.config, calling_party.ssi) {
+            entity
+        } else {
             tracing::info!(
-                "CMCE: rejecting U-SETUP P2P from ISSI {} (Brew disabled, called_ssi={})",
+                "CMCE: rejecting U-SETUP P2P from ISSI {} (no unique Brew route for local source)",
+                calling_party.ssi
+            );
+            self.reject_setup_request(
+                queue,
+                message,
+                calling_party,
+                DisconnectCause::CalledPartyNotReachable,
+                "source ISSI is not assigned to a Brew server",
+            );
+            return;
+        };
+
+        if let Some(number) = asterisk_number {
+            tracing::info!(
+                "CMCE: routing U-SETUP src={} dialed='{}' to Asterisk SIP number='{}'",
                 calling_party.ssi,
+                network_call.number,
+                number
+            );
+            network_call.number = number;
+            network_call.destination = 0;
+            network_call.duplex = 1;
+        } else if !brew::is_active_for_entity(&self.config, network_entity) {
+            tracing::info!(
+                "CMCE: rejecting U-SETUP P2P from ISSI {} ({:?} disabled, called_ssi={})",
+                calling_party.ssi,
+                network_entity,
                 called_addr.ssi
             );
             self.reject_setup_request(
@@ -937,6 +954,47 @@ impl CcBsSubentity {
                 "Brew disabled",
             );
             return;
+        } else {
+            let selected_connected = self
+                .config
+                .state_read()
+                .brew_entity_connected
+                .get(&network_entity)
+                .copied()
+                .unwrap_or(false);
+            if !selected_connected {
+                tracing::info!(
+                    "CMCE: rejecting U-SETUP over {:?} src={} dst={} (selected backhaul disconnected)",
+                    network_entity,
+                    calling_party.ssi,
+                    called_addr.ssi
+                );
+                self.reject_setup_request(
+                    queue,
+                    message,
+                    calling_party,
+                    DisconnectCause::RequestedServiceNotAvailable,
+                    "backhaul disconnected",
+                );
+                return;
+            }
+
+            if !brew::is_brew_issi_routable_for_entity(&self.config, network_entity, calling_party.ssi) {
+                tracing::info!(
+                    "CMCE: rejecting U-SETUP P2P over {:?} src={} dst={} (source ISSI not routable)",
+                    network_entity,
+                    calling_party.ssi,
+                    called_addr.ssi
+                );
+                self.reject_setup_request(
+                    queue,
+                    message,
+                    calling_party,
+                    DisconnectCause::CalledPartyNotReachable,
+                    "source ISSI not Brew-routable",
+                );
+                return;
+            }
         }
 
         if let Some((active_call_id, state, cause)) = self.setup_collision_cause(calling_party.ssi, None) {
@@ -951,46 +1009,12 @@ impl CcBsSubentity {
             return;
         }
 
-        // The backhaul-connected and ISSI-routability gates are Brew-specific (they check the
-        // Brew websocket state and the Brew ISSI whitelist). Asterisk-bridged calls bypass them.
-        if network_entity == TetraEntity::Brew && !self.config.state_read().network_connected {
-            tracing::info!(
-                "CMCE: rejecting U-SETUP over Brew src={} dst={} (backhaul disconnected)",
-                calling_party.ssi,
-                called_addr.ssi
-            );
-            self.reject_setup_request(
-                queue,
-                message,
-                calling_party,
-                DisconnectCause::RequestedServiceNotAvailable,
-                "backhaul disconnected",
-            );
-            return;
-        }
-
-        if network_entity == TetraEntity::Brew && !brew::is_brew_issi_routable(&self.config, calling_party.ssi) {
-            tracing::info!(
-                "CMCE: rejecting U-SETUP P2P over Brew src={} dst={} (source ISSI not routable)",
-                calling_party.ssi,
-                called_addr.ssi
-            );
-            self.reject_setup_request(
-                queue,
-                message,
-                calling_party,
-                DisconnectCause::CalledPartyNotReachable,
-                "source ISSI not Brew-routable",
-            );
-            return;
-        }
-
         let has_external_called_party = Self::has_external_called_party(pdu, &network_call);
         let destination_routable = network_entity == TetraEntity::Asterisk
             || network_call.destination == 0
-            || brew::is_brew_issi_routable(&self.config, network_call.destination);
+            || brew::is_brew_issi_routable_for_entity(&self.config, network_entity, network_call.destination);
 
-        if !has_external_called_party && !destination_routable {
+        if brew::is_brew_entity(network_entity) && !has_external_called_party && !destination_routable {
             tracing::info!(
                 "CMCE: rejecting U-SETUP P2P over Brew src={} dst={} (destination ISSI not routable)",
                 calling_party.ssi,
@@ -1006,7 +1030,7 @@ impl CcBsSubentity {
             return;
         }
 
-        if has_external_called_party && !destination_routable && network_call.destination != 0 {
+        if brew::is_brew_entity(network_entity) && has_external_called_party && !destination_routable && network_call.destination != 0 {
             tracing::debug!(
                 "CMCE: overriding non-routable destination SSI {} with 0 for external-number call src={} number='{}'",
                 network_call.destination,

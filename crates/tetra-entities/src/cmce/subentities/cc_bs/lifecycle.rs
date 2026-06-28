@@ -20,19 +20,47 @@ pub(super) struct CallTimeslot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BrewNotification {
     Never,
-    IfGroupRoutable(u32),
+    ToEntityForLocalSource { entity: TetraEntity, source_issi: u32 },
+    ForLocalSource { source_issi: u32, dest_gssi: u32 },
 }
 
 impl BrewNotification {
-    fn enabled(self, config: &SharedConfig) -> bool {
+    fn destination(self, config: &SharedConfig) -> Option<TetraEntity> {
         match self {
-            BrewNotification::Never => false,
-            BrewNotification::IfGroupRoutable(gssi) => brew::is_brew_gssi_routable(config, gssi),
+            BrewNotification::Never => None,
+            BrewNotification::ToEntityForLocalSource { entity, source_issi } => {
+                if brew::is_active_for_entity(config, entity) && brew::is_brew_local_issi_allowed_for_entity(config, entity, source_issi) {
+                    Some(entity)
+                } else {
+                    None
+                }
+            }
+            BrewNotification::ForLocalSource { source_issi, dest_gssi } => {
+                let entity = brew::route_entity_for_local_issi(config, source_issi)?;
+                if brew::is_brew_gssi_routable_for_entity(config, entity, dest_gssi) {
+                    Some(entity)
+                } else {
+                    None
+                }
+            }
         }
     }
 }
 
 impl CcBsSubentity {
+    pub(super) fn brew_notification_for_group_call(call: &ActiveCall, local_source_issi: u32) -> BrewNotification {
+        match &call.origin {
+            CallOrigin::Network { network_entity, .. } => BrewNotification::ToEntityForLocalSource {
+                entity: *network_entity,
+                source_issi: local_source_issi,
+            },
+            CallOrigin::Local { .. } => BrewNotification::ForLocalSource {
+                source_issi: local_source_issi,
+                dest_gssi: call.dest_gssi,
+            },
+        }
+    }
+
     fn push_control(queue: &mut MessageQueue, dest: TetraEntity, control: CallControl) {
         queue.push_back(SapMsg {
             sap: Sap::Control,
@@ -72,10 +100,10 @@ impl CcBsSubentity {
             );
         }
 
-        if notify_brew.enabled(&self.config) {
+        if let Some(brew_entity) = notify_brew.destination(&self.config) {
             Self::push_control(
                 queue,
-                TetraEntity::Brew,
+                brew_entity,
                 CallControl::FloorGranted {
                     call_id: grant.call_id,
                     source_issi: grant.source_issi,
@@ -118,10 +146,10 @@ impl CcBsSubentity {
             );
         }
 
-        if notify_brew.enabled(&self.config) {
+        if let Some(brew_entity) = notify_brew.destination(&self.config) {
             Self::push_control(
                 queue,
-                TetraEntity::Brew,
+                brew_entity,
                 CallControl::FloorReleased {
                     call_id: slot.call_id,
                     carrier_num: slot.carrier_num,
@@ -144,10 +172,10 @@ impl CcBsSubentity {
             );
         }
 
-        if notify_brew.enabled(&self.config) {
+        if let Some(brew_entity) = notify_brew.destination(&self.config) {
             Self::push_control(
                 queue,
-                TetraEntity::Brew,
+                brew_entity,
                 CallControl::CallEnded {
                     call_id: slot.call_id,
                     carrier_num: slot.carrier_num,
@@ -157,8 +185,8 @@ impl CcBsSubentity {
         }
     }
 
-    pub(super) fn notify_network_call_end(&self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid) {
-        Self::push_control(queue, TetraEntity::Brew, CallControl::NetworkCallEnd { brew_uuid });
+    pub(super) fn notify_network_call_end(&self, queue: &mut MessageQueue, network_entity: TetraEntity, brew_uuid: uuid::Uuid) {
+        Self::push_control(queue, network_entity, CallControl::NetworkCallEnd { brew_uuid });
     }
 
     pub(super) fn notify_network_circuit_release(

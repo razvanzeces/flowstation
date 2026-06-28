@@ -76,6 +76,28 @@ impl CcBsSubentity {
             return;
         }
 
+        if brew::is_brew_entity(network_entity)
+            && !brew::is_brew_local_issi_allowed_for_entity(&self.config, network_entity, called_addr.ssi)
+        {
+            tracing::info!(
+                "CMCE: rejecting {:?} setup request uuid={} src={} dst={} (called ISSI not allowed on this Brew backhaul)",
+                network_entity,
+                brew_uuid,
+                call.source_issi,
+                call.destination
+            );
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: network_entity,
+                msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupReject {
+                    brew_uuid,
+                    cause: DisconnectCause::CalledPartyNotReachable.into_raw() as u8,
+                }),
+            });
+            return;
+        }
+
         if let Some((active_call_id, state)) = self.find_individual_call_by_issi(called_addr.ssi) {
             tracing::info!(
                 "CMCE: rejecting Brew setup request uuid={} src={} dst={} number='{}' (called ISSI busy in call_id={} state={:?})",
@@ -262,7 +284,11 @@ impl CcBsSubentity {
         ) {
             match err {
                 IndividualTransitionError::DuplicateCall(_) => {
-                    tracing::warn!("CMCE: duplicate call_id={} while creating inbound Brew setup", call_id);
+                    tracing::warn!(
+                        "CMCE: duplicate call_id={} while creating inbound {:?} setup",
+                        call_id,
+                        network_entity
+                    );
                 }
                 IndividualTransitionError::InvalidTransition { state, .. } => {
                     tracing::warn!(
@@ -713,6 +739,7 @@ impl CcBsSubentity {
     pub(in crate::cmce::subentities::cc_bs) fn fsm_on_network_call_start(
         &mut self,
         queue: &mut MessageQueue,
+        network_entity: TetraEntity,
         brew_uuid: uuid::Uuid,
         source_issi: u32,
         dest_gssi: u32,
@@ -722,13 +749,14 @@ impl CcBsSubentity {
         // inbound predicate which — unlike is_brew_gssi_routable — must NOT apply the
         // outbound whitelist (see brew_routable::is_brew_inbound_allowed). A GSSI that
         // is not admissible is dropped gracefully instead of crashing the base station.
-        if !brew::is_brew_inbound_allowed(&self.config, dest_gssi) {
+        if !brew::is_brew_inbound_allowed_for_entity(&self.config, network_entity, dest_gssi) {
             tracing::info!(
-                "CMCE: ignoring network call start uuid={} gssi={} (inbound not allowed)",
+                "CMCE: ignoring {:?} network call start uuid={} gssi={} (inbound not allowed)",
+                network_entity,
                 brew_uuid,
                 dest_gssi
             );
-            self.notify_network_call_end(queue, brew_uuid);
+            self.notify_network_call_end(queue, network_entity, brew_uuid);
             return;
         }
 
@@ -740,7 +768,7 @@ impl CcBsSubentity {
             );
             self.drop_group_calls_if_unlistened(queue, dest_gssi);
 
-            self.notify_network_call_end(queue, brew_uuid);
+            self.notify_network_call_end(queue, network_entity, brew_uuid);
             return;
         }
 
@@ -758,7 +786,7 @@ impl CcBsSubentity {
                 old_speaker
             );
 
-            if let Err(err) = self.fsm_group_on_network_call_start(queue, call_id, brew_uuid, source_issi) {
+            if let Err(err) = self.fsm_group_on_network_call_start(queue, call_id, network_entity, brew_uuid, source_issi) {
                 match err {
                     GroupTransitionError::UnknownCall(_) => {
                         tracing::warn!(
@@ -914,6 +942,7 @@ impl CcBsSubentity {
         self.active_calls.insert(
             call_id,
             ActiveCall::new_network(
+                network_entity,
                 brew_uuid,
                 dest_gssi,
                 source_issi,
@@ -939,7 +968,7 @@ impl CcBsSubentity {
         queue.push_back(SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
-            dest: TetraEntity::Brew,
+            dest: network_entity,
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
                 brew_uuid,
                 call_id,

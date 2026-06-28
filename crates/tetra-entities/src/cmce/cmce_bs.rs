@@ -258,8 +258,8 @@ impl TetraEntityTrait for CmceBs {
                     let SapMsgInner::MmSubscriberUpdate(update) = message.msg else {
                         unreachable!();
                     };
-                    if source == TetraEntity::Brew {
-                        if !crate::net_brew::is_brew_external_subscriber_allowed(&self.config, update.issi) {
+                    if crate::net_brew::is_brew_entity(source) {
+                        if !crate::net_brew::is_brew_external_subscriber_allowed_for_entity(&self.config, source, update.issi) {
                             tracing::trace!(
                                 "CMCE: ignoring Brew subscriber update issi={} action={:?}",
                                 update.issi,

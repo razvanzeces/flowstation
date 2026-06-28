@@ -609,6 +609,7 @@ impl CcBsSubentity {
             call_id
         );
         let dest_gssi = call.dest_gssi;
+        let brew_notification = Self::brew_notification_for_group_call(call, call.source_issi);
         call.enter_hangtime(self.dltime);
 
         self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, carrier_num, ts);
@@ -617,7 +618,7 @@ impl CcBsSubentity {
             queue,
             CallTimeslot { call_id, carrier_num, ts },
             true,
-            BrewNotification::IfGroupRoutable(dest_gssi),
+            brew_notification,
         );
     }
 

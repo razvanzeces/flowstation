@@ -393,10 +393,8 @@ impl CcBsSubentity {
 
         for (call_id, origin) in to_drop {
             tracing::info!("CMCE: dropping call_id={} gssi={} (no listeners)", call_id, gssi);
-            if let CallOrigin::Network { brew_uuid } = origin {
-                if brew::is_brew_gssi_routable(&self.config, gssi) {
-                    self.notify_network_call_end(queue, brew_uuid);
-                };
+            if let CallOrigin::Network { network_entity, brew_uuid } = origin {
+                self.notify_network_call_end(queue, network_entity, brew_uuid);
             };
             self.release_group_call(queue, call_id, DisconnectCause::SwmiRequestedDisconnection);
         }
@@ -893,7 +891,14 @@ impl CcBsSubentity {
         if let Some(call) = self.active_calls.get(&call_id) {
             let ts = call.ts;
             let dest_ssi = call.dest_gssi;
-            let is_local = matches!(call.origin, CallOrigin::Local { .. });
+            let brew_notification = if matches!(&call.origin, CallOrigin::Local { .. }) {
+                BrewNotification::ForLocalSource {
+                    source_issi: call.source_issi,
+                    dest_gssi: dest_ssi,
+                }
+            } else {
+                BrewNotification::Never
+            };
 
             let carrier_num = call.carrier_num;
             if let Ok(circuit) = self.circuits.close_circuit_slot(Direction::Both, carrier_num, ts) {
@@ -901,16 +906,7 @@ impl CcBsSubentity {
             }
 
             // Ensure UMAC clears any hangtime override for this slot even if the circuit close is delayed.
-            self.notify_call_ended(
-                queue,
-                CallTimeslot { call_id, carrier_num, ts },
-                true,
-                if is_local {
-                    BrewNotification::IfGroupRoutable(dest_ssi)
-                } else {
-                    BrewNotification::Never
-                },
-            );
+            self.notify_call_ended(queue, CallTimeslot { call_id, carrier_num, ts }, true, brew_notification);
 
             self.release_timeslot_slot(CarrierSlot { carrier_num, ts });
         }

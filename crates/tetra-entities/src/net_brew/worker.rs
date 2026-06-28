@@ -217,8 +217,13 @@ pub struct BrewWorker<T: NetworkTransport> {
 }
 
 impl<T: NetworkTransport> BrewWorker<T> {
-    pub fn new(config: SharedConfig, event_sender: Sender<BrewEvent>, command_receiver: Receiver<BrewCommand>, transport: T) -> Self {
-        let brew_config = config.config().brew.clone().unwrap(); // Never fails
+    pub fn new(
+        config: SharedConfig,
+        brew_config: CfgBrew,
+        event_sender: Sender<BrewEvent>,
+        command_receiver: Receiver<BrewCommand>,
+        transport: T,
+    ) -> Self {
         Self {
             config,
             brew_config,
@@ -425,7 +430,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         data,
                         length_bits,
                     } => {
-                        if !net_brew::feature_sds_enabled(&self.config) {
+                        if !self.brew_config.feature_sds_enabled {
                             tracing::warn!("BrewWorker: ignoring SendSds command because SDS over Brew is disabled in config");
                             continue;
                         }
@@ -446,7 +451,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         }
                     }
                     BrewCommand::SendSdsReport { uuid, status } => {
-                        if !net_brew::feature_sds_enabled(&self.config) {
+                        if !self.brew_config.feature_sds_enabled {
                             tracing::warn!("BrewWorker: ignoring SendSdsReport command because SDS over Brew is disabled in config");
                             continue;
                         }
@@ -779,7 +784,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 });
             }
             FRAME_TYPE_SDS_TRANSFER => {
-                if !net_brew::feature_sds_enabled(&self.config) {
+                if !self.brew_config.feature_sds_enabled {
                     tracing::warn!("BrewWorker: ignoring incoming SDS_TRANSFER because SDS over Brew is disabled in config");
                     return;
                 }

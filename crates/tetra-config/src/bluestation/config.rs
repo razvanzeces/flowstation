@@ -75,6 +75,9 @@ pub struct StackConfig {
     /// Brew protocol (TetraPack/BrandMeister) configuration
     pub brew: Option<CfgBrew>,
 
+    /// Optional secondary Brew protocol bridge.
+    pub brew2: Option<CfgBrew>,
+
     /// Asterisk SIP/RTP bridge configuration.
     pub asterisk: CfgAsterisk,
 
@@ -308,6 +311,28 @@ impl StackConfig {
             && self.recovery.issi_allowlist.len() as u32 > self.recovery.max_cached_issis
         {
             return Err("recovery.issi_allowlist has more entries than recovery.max_cached_issis");
+        }
+
+        if self.brew.is_some() && self.brew2.is_some() {
+            let brew = self.brew.as_ref().expect("checked");
+            let brew2 = self.brew2.as_ref().expect("checked");
+            if !brew.has_local_issi_allowlist() || !brew2.has_local_issi_allowlist() {
+                return Err("brew and brew2 require non-empty local_issi_allowlist when both are configured");
+            }
+
+            let Some(brew_allowlist) = brew.effective_local_issi_allowlist() else {
+                return Err("brew local_issi_allowlist is required when brew2 is configured");
+            };
+            let Some(brew2_allowlist) = brew2.effective_local_issi_allowlist() else {
+                return Err("brew2 local_issi_allowlist is required when brew is configured");
+            };
+            if brew_allowlist.is_empty() || brew2_allowlist.is_empty() {
+                return Err("brew and brew2 effective local_issi_allowlist must not be empty");
+            }
+            let brew_set: std::collections::HashSet<u32> = brew_allowlist.into_iter().collect();
+            if brew2_allowlist.into_iter().any(|issi| brew_set.contains(&issi)) {
+                return Err("brew and brew2 local_issi_allowlist must not overlap");
+            }
         }
 
         Ok(())

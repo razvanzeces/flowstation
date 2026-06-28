@@ -1191,6 +1191,13 @@ fn test_network_group_speaker_change_uses_remote_floor_grant() {
         whitelisted_ssis: None,
         feature_rssi_export: false,
         pbx_gateway_issis: None,
+        local_issi_allowlist: None,
+        local_issi_blocklist: Vec::new(),
+        subscriber_type_deregister: 0,
+        subscriber_type_register: 1,
+        subscriber_type_reregister: 2,
+        subscriber_type_affiliate: 8,
+        subscriber_type_deaffiliate: 9,
     });
     let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
     test.populate_entities(

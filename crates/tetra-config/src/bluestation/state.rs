@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use tetra_core::TimeslotAllocator;
+use tetra_core::tetra_entities::TetraEntity;
 
 /// A one-shot or repeating SDS broadcast message injected at runtime via the dashboard.
 ///
@@ -485,6 +486,8 @@ pub struct StackState {
     pub timeslot_alloc: TimeslotAllocator,
     /// Backhaul/network connection to SwMI (e.g., Brew/TetraPack). False -> fallback mode.
     pub network_connected: bool,
+    /// Per Brew entity connection state. `network_connected` is the aggregate over this map.
+    pub brew_entity_connected: HashMap<TetraEntity, bool>,
     /// Centralized subscriber registry for local-first routing decisions.
     pub subscribers: SubscriberRegistry,
     /// Queue of live SDS messages injected at runtime via the dashboard.
@@ -630,6 +633,7 @@ impl Default for StackState {
         Self {
             timeslot_alloc: TimeslotAllocator::default(),
             network_connected: false,
+            brew_entity_connected: HashMap::new(),
             subscribers: SubscriberRegistry::new(),
             live_sds_queue: VecDeque::new(),
             next_live_sds_id: 1,

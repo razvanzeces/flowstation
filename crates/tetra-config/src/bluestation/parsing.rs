@@ -122,6 +122,11 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
     {
         return Err(format!("Unrecognized fields in brew config: {:?}", sorted_keys(&brew.extra)).into());
     }
+    if let Some(ref brew2) = root.brew2
+        && !brew2.extra.is_empty()
+    {
+        return Err(format!("Unrecognized fields in brew2 config: {:?}", sorted_keys(&brew2.extra)).into());
+    }
 
     // Optional asterisk section
     if let Some(ref asterisk) = root.asterisk
@@ -136,14 +141,12 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
     {
         return Err(format!("Unrecognized fields in dapnet config: {:?}", sorted_keys(&dapnet.extra)).into());
     }
-
     // Optional geoalarm section
     if let Some(ref geoalarm) = root.geoalarm
         && !geoalarm.extra.is_empty()
     {
         return Err(format!("Unrecognized fields in geoalarm config: {:?}", sorted_keys(&geoalarm.extra)).into());
     }
-
     // Optional meshcom section
     if let Some(ref meshcom) = root.meshcom
         && !meshcom.extra.is_empty()
@@ -237,6 +240,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         net: net_dto_to_cfg(root.net_info),
         cell: cell_cfg,
         brew: None,
+        brew2: None,
         asterisk: apply_asterisk_patch(root.asterisk.unwrap_or_default())?,
         dapnet: apply_dapnet_patch(root.dapnet.unwrap_or_default())?,
         geoalarm: apply_geoalarm_patch(root.geoalarm.unwrap_or_default())?,
@@ -256,6 +260,9 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
 
     if let Some(brew) = root.brew {
         cfg.brew = Some(apply_brew_patch(brew));
+    }
+    if let Some(brew2) = root.brew2 {
+        cfg.brew2 = Some(apply_brew_patch(brew2));
     }
 
     if let Some(dashboard) = root.dashboard {
@@ -314,6 +321,7 @@ struct TomlConfigRoot {
     cell_info: CellInfoDto,
 
     brew: Option<CfgBrewDto>,
+    brew2: Option<CfgBrewDto>,
     asterisk: Option<CfgAsteriskDto>,
     dapnet: Option<CfgDapnetDto>,
     geoalarm: Option<CfgGeoalarmDto>,

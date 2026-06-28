@@ -423,12 +423,14 @@ impl SdsBsSubentity {
                 source_issi: source_ssi,
                 dest_issi: dest_ssi,
             });
-        } else if net_brew::feature_sds_enabled(&self.config) {
-            tracing::info!("SDS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
+        } else if let Some(brew_entity) = net_brew::route_entity_for_local_issi(&self.config, source_ssi)
+            && net_brew::feature_sds_enabled_for_entity(&self.config, brew_entity)
+        {
+            tracing::info!("SDS: forwarding to {:?}: {} -> {}", brew_entity, source_ssi, dest_ssi);
             queue.push_back(SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
-                dest: TetraEntity::Brew,
+                dest: brew_entity,
                 msg: SapMsgInner::CmceSdsData(CmceSdsData {
                     source_issi: source_ssi,
                     dest_issi: dest_ssi,
@@ -726,7 +728,9 @@ impl SdsBsSubentity {
         // Emergency status is LOCAL-only by design — never forwarded to Brew unless the operator
         // opts in via [emergency] forward_to_brew. Non-emergency statuses keep their normal routing.
         let is_emergency = matches!(pdu.pre_coded_status, PreCodedStatus::Emergency);
-        let brew_ok = net_brew::is_active(&self.config) && (!is_emergency || self.config.config().emergency.forward_to_brew);
+        let brew_entity = net_brew::route_entity_for_local_issi(&self.config, source_ssi);
+        let brew_ok = brew_entity.is_some_and(|entity| net_brew::feature_sds_enabled_for_entity(&self.config, entity))
+            && (!is_emergency || self.config.config().emergency.forward_to_brew);
 
         // Route: local delivery, Brew forward, or drop
         if self.config.state_read().subscribers.is_registered(dest_ssi) {
@@ -760,11 +764,12 @@ impl SdsBsSubentity {
                 SdsUserData::Type1(pdu.pre_coded_status.into_raw())
             };
 
-            tracing::info!("SDS-STATUS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
+            let brew_entity = brew_entity.expect("checked by brew_ok");
+            tracing::info!("SDS-STATUS: forwarding to {:?}: {} -> {}", brew_entity, source_ssi, dest_ssi);
             queue.push_back(SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
-                dest: TetraEntity::Brew,
+                dest: brew_entity,
                 msg: SapMsgInner::CmceSdsData(CmceSdsData {
                     source_issi: source_ssi,
                     dest_issi: dest_ssi,

@@ -134,12 +134,13 @@ impl CcBsSubentity {
     pub(super) fn rx_network_call_start(
         &mut self,
         queue: &mut MessageQueue,
+        network_entity: TetraEntity,
         brew_uuid: uuid::Uuid,
         source_issi: u32,
         dest_gssi: u32,
         priority: u8,
     ) {
-        self.fsm_on_network_call_start(queue, brew_uuid, source_issi, dest_gssi, priority);
+        self.fsm_on_network_call_start(queue, network_entity, brew_uuid, source_issi, dest_gssi, priority);
     }
 
     /// Handle network call end request

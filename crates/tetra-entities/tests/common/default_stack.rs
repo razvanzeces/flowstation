@@ -21,6 +21,7 @@ pub fn default_test_config_bs() -> StackConfig {
         net: net_info,
         cell: cell_info,
         brew: None,
+        brew2: None,
         asterisk: CfgAsterisk::default(),
         dapnet: CfgDapnet::default(),
         geoalarm: CfgGeoalarm::default(),
