@@ -959,7 +959,7 @@ impl CcBsSubentity {
         };
 
         let send_calling_leg = !call.calling_over_brew;
-        let send_called_leg = !call.called_over_brew;
+        let send_called_leg = !call.called_over_brew && !call.is_local_echo_call();
 
         const SETUP_RELEASE_REPEATS: usize = 3;
 

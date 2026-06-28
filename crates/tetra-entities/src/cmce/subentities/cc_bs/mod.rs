@@ -55,7 +55,7 @@ use pdu::is_emergency_priority;
 use procedures::{GroupTransitionError, IndividualTransitionError};
 use state::{
     ActiveCall, CachedSetup, CallOrigin, CcFormalEvent, CcFormalState, GroupCallState, IndividualCall, IndividualCallState,
-    TxDemandQueueResult,
+    LOCAL_ECHO_ISSI, TxDemandQueueResult,
 };
 
 /// Clause 11 Call Control CMCE sub-entity
