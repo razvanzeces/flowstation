@@ -676,22 +676,102 @@ After installation, confirm both TETRA ACELP -> PCM decoding and PCM -> TETRA
 ACELP encoding work before enabling the bridge (follow the codec project's
 README for the exact verification commands).
 
-### Asterisk packages and modules
+### Asterisk packages, source build, and modules
 
-Install Asterisk when using the SIP bridge or Snom display notifications:
+Asterisk is required for the SIP/RTP bridge and for Snom XML display
+notifications via AMI `PJSIPNotify`.
+
+On Debian GNU/Linux 13, build Asterisk from source. The distribution package may
+not provide the module set FlowStation needs, especially `res_pjsip_notify.so`.
+The commands below use Asterisk 22 LTS/current; use a pinned tarball if you need
+reproducible builds.
+
+Install build dependencies:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential pkg-config wget tar git subversion \
+  autoconf automake libtool bison flex \
+  libedit-dev libjansson-dev libxml2-dev libsqlite3-dev uuid-dev \
+  libssl-dev libsrtp2-dev libspeexdsp-dev libgsm1-dev libopus-dev \
+  libcurl4-openssl-dev libnewt-dev libncurses-dev
+```
+
+Download and build Asterisk:
+
+```bash
+cd /usr/src
+sudo wget -O asterisk-22-current.tar.gz \
+  https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-22-current.tar.gz
+sudo tar xzf asterisk-22-current.tar.gz
+cd asterisk-22*/
+
+sudo ./configure --with-jansson-bundled --with-pjproject-bundled
+sudo make menuselect.makeopts
+sudo menuselect/menuselect \
+  --enable chan_pjsip \
+  --enable res_pjsip \
+  --enable res_pjsip_session \
+  --enable res_pjsip_pubsub \
+  --enable res_pjsip_notify \
+  --enable res_pjsip_outbound_registration \
+  --enable res_pjsip_registrar \
+  --enable res_pjsip_authenticator_digest \
+  --enable res_pjsip_endpoint_identifier_user \
+  --enable res_pjsip_endpoint_identifier_ip \
+  --enable res_rtp_asterisk \
+  --enable codec_ulaw \
+  --enable app_dial \
+  --enable app_playback \
+  --enable app_stack \
+  --enable pbx_config \
+  menuselect.makeopts
+
+sudo make -j"$(nproc)"
+sudo make install
+```
+
+For a first-time install, install sample configs and the systemd service. Do not
+run `make samples` on a production Asterisk host without backing up
+`/etc/asterisk` first, because it can overwrite local config files.
+
+```bash
+sudo make samples
+sudo make config
+sudo ldconfig
+sudo systemctl enable --now asterisk
+```
+
+If you prefer running Asterisk as the dedicated `asterisk` user, create it and set
+ownership before starting the service:
+
+```bash
+sudo useradd --system --user-group --home-dir /var/lib/asterisk \
+  --shell /usr/sbin/nologin asterisk || true
+sudo chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk \
+  /var/log/asterisk /var/spool/asterisk /usr/lib/asterisk
+sudo sed -i 's/^;\?runuser = .*/runuser = asterisk/' /etc/asterisk/asterisk.conf
+sudo sed -i 's/^;\?rungroup = .*/rungroup = asterisk/' /etc/asterisk/asterisk.conf
+sudo systemctl restart asterisk
+```
+
+On Debian/Ubuntu systems where the packaged Asterisk is known to include the
+required modules, this shorter path may still be sufficient:
 
 ```bash
 sudo apt install -y asterisk
 sudo systemctl enable --now asterisk
 ```
 
-For Snom XML display notifications, Asterisk must be able to load
-`res_pjsip_notify.so`. Some distributions refuse to load it if
-`pjsip_notify.conf` is missing, so create the file:
+Verify the PJSIP and NOTIFY modules. Some builds refuse to load
+`res_pjsip_notify.so` if `pjsip_notify.conf` is missing, so create the file:
 
 ```bash
 sudo touch /etc/asterisk/pjsip_notify.conf
 sudo asterisk -rx "module load res_pjsip_notify.so"
+sudo asterisk -rx "module load chan_pjsip.so"
+sudo asterisk -rx "module show like pjsip"
 sudo asterisk -rx "module show like pjsip_notify"
 ```
 
@@ -743,6 +823,7 @@ enabled = true
 outbound_prefix = "91"          # TETRA -> SIP: 91385 calls SIP user 385
 strip_outbound_prefix = true
 inbound_prefix = "T"            # SIP -> TETRA: Dial PJSIP/T2632585@flowstation
+inbound_setup_timeout_secs = 20  # no TETRA alert before this -> SIP 404 Not Found
 register = true
 codec = "PCMU"                  # currently the only supported SIP codec
 service_numbers = ["385", "600", "601"]
@@ -802,6 +883,20 @@ qualify_frequency=30
 
 `service_numbers` is deliberately an allowlist. If a TETRA user dials `91385`,
 FlowStation strips `91`, checks that `385` is listed, then calls SIP user `385`.
+To route every `91...` dial to Asterisk, set `service_numbers = ["*"]`.
+Alternatively, `outbound_prefix = "91*"` makes the prefix itself a wildcard. More
+specific prefix wildcards are also allowed inside `service_numbers`, for example
+`["38*"]` routes `9138...` to Asterisk after stripping `91`. Exact entries still
+work as before, so `service_numbers = ["385"]` permits `91385` and direct `385`,
+but not `91600`.
+
+For Asterisk-originated calls, FlowStation answers the initial SIP `INVITE` with
+`100 Trying`, sends TETRA `D-SETUP` to the target ISSI, and only sends SIP
+`180 Ringing` after the radio answers with TETRA alerting. If the ISSI is still
+listed in the local registry but does not answer the RF setup, FlowStation waits
+for `inbound_setup_timeout_secs` and then returns SIP `404 Not Found` before any
+ringing was sent. The value is clamped to 1-60 seconds and mapped to the nearest
+supported TETRA setup timer.
 
 ### DAPNET integration
 

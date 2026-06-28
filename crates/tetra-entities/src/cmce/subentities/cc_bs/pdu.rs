@@ -709,10 +709,6 @@ impl CcBsSubentity {
     #[cfg(feature = "asterisk")]
     pub(super) fn asterisk_route_number(&self, network_call: &NetworkCircuitCall) -> Option<String> {
         let cfg = &self.config.config().asterisk;
-        if !cfg.enabled {
-            return None;
-        }
-
         let raw = if !network_call.number.trim().is_empty() {
             network_call.number.trim().to_string()
         } else if network_call.destination != 0 {
@@ -721,28 +717,7 @@ impl CcBsSubentity {
             return None;
         };
 
-        let mut routed = raw.as_str();
-        if !cfg.outbound_prefix.is_empty() && raw.starts_with(&cfg.outbound_prefix) && cfg.strip_outbound_prefix {
-            routed = &raw[cfg.outbound_prefix.len()..];
-        }
-
-        let routed = routed.trim();
-        if routed.is_empty() {
-            return None;
-        }
-
-        if cfg.service_numbers.is_empty() {
-            if !cfg.outbound_prefix.is_empty() && raw.starts_with(&cfg.outbound_prefix) {
-                return Some(routed.to_string());
-            }
-            return None;
-        }
-
-        if cfg.service_numbers.iter().any(|n| n == routed) {
-            Some(routed.to_string())
-        } else {
-            None
-        }
+        cfg.route_outbound_raw(&raw)
     }
 
     pub(super) fn signal_umac_circuit_open(

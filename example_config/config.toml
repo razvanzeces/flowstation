@@ -844,7 +844,8 @@ voice_service = true
 
 # OPTIONAL: Asterisk SIP/RTP bridge — parallel to Brew, not a replacement.
 # Only destinations listed in service_numbers are routed to Asterisk; everything else
-# stays on the normal local/Brew path.
+# stays on the normal local/Brew path. Use ["*"] to route every dial behind
+# outbound_prefix to Asterisk.
 #
 # Example: a TETRA dial string 91600 with outbound_prefix="91" and strip=true becomes
 # SIP user 600, but only because "600" is listed below.
@@ -860,9 +861,12 @@ voice_service = true
 # outbound_prefix = "91"
 # strip_outbound_prefix = true
 # inbound_prefix = "T"
+# inbound_setup_timeout_secs = 20 # SIP -> TETRA no-alert timeout; returns 404 before ringing
 # register = true
 # codec = "PCMU"
 # service_numbers = ["600", "601"]
+# service_numbers = ["*"]       # wildcard: 91... -> Asterisk for every suffix
+# outbound_prefix = "91*"       # alternative wildcard prefix spelling
 # rtp_port_min = 30000
 # rtp_port_max = 30100
 # bind_addr = "0.0.0.0"
