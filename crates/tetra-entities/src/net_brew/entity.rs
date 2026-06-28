@@ -281,7 +281,7 @@ impl BrewEntity {
                     tracing::debug!("BrewEntity: SDS report uuid={} status={}", uuid, status);
                 }
                 BrewEvent::SubscriberEvent { msg_type, issi, groups } => {
-                    tracing::debug!("BrewEntity: subscriber event type={} issi={} groups={:?}", msg_type, issi, groups);
+                    tracing::trace!("BrewEntity: subscriber event type={} issi={} groups={:?}", msg_type, issi, groups);
                     // External subscriber (e.g. SvxLink gateway) affiliated/deaffiliated on Brew server.
                     // Notify CMCE so it updates group_listeners — without this, has_listener()
                     // returns false for GSSIs where only external subscribers are present,
@@ -289,46 +289,28 @@ impl BrewEntity {
                     match msg_type {
                         crate::net_brew::protocol::BREW_SUBSCRIBER_AFFILIATE => {
                             if !groups.is_empty() {
-                                tracing::info!("BrewEntity: external subscriber issi={} → AFFILIATE groups={:?}", issi, groups);
-                                queue.push_back(SapMsg {
-                                    sap: tetra_core::Sap::Control,
-                                    src: TetraEntity::Brew,
-                                    dest: TetraEntity::Cmce,
-                                    msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
-                                        issi,
-                                        groups: groups.clone(),
-                                        action: BrewSubscriberAction::Affiliate,
-                                    }),
-                                });
+                                self.queue_external_subscriber_update(
+                                    queue,
+                                    issi,
+                                    groups.clone(),
+                                    BrewSubscriberAction::Affiliate,
+                                    "AFFILIATE",
+                                );
                             }
                         }
                         crate::net_brew::protocol::BREW_SUBSCRIBER_DEAFFILIATE => {
                             if !groups.is_empty() {
-                                tracing::info!("BrewEntity: external subscriber issi={} → DEAFFILIATE groups={:?}", issi, groups);
-                                queue.push_back(SapMsg {
-                                    sap: tetra_core::Sap::Control,
-                                    src: TetraEntity::Brew,
-                                    dest: TetraEntity::Cmce,
-                                    msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
-                                        issi,
-                                        groups: groups.clone(),
-                                        action: BrewSubscriberAction::Deaffiliate,
-                                    }),
-                                });
+                                self.queue_external_subscriber_update(
+                                    queue,
+                                    issi,
+                                    groups.clone(),
+                                    BrewSubscriberAction::Deaffiliate,
+                                    "DEAFFILIATE",
+                                );
                             }
                         }
                         crate::net_brew::protocol::BREW_SUBSCRIBER_DEREGISTER => {
-                            tracing::info!("BrewEntity: external subscriber issi={} → DEREGISTER", issi);
-                            queue.push_back(SapMsg {
-                                sap: tetra_core::Sap::Control,
-                                src: TetraEntity::Brew,
-                                dest: TetraEntity::Cmce,
-                                msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
-                                    issi,
-                                    groups: Vec::new(),
-                                    action: BrewSubscriberAction::Deregister,
-                                }),
-                            });
+                            self.queue_external_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister, "DEREGISTER");
                         }
                         _ => {}
                     }
@@ -484,6 +466,37 @@ impl BrewEntity {
                 }
             }
         }
+    }
+
+    fn queue_external_subscriber_update(
+        &self,
+        queue: &mut MessageQueue,
+        issi: u32,
+        groups: Vec<u32>,
+        action: BrewSubscriberAction,
+        action_label: &str,
+    ) {
+        if !super::is_brew_external_subscriber_allowed(&self.config, issi) {
+            tracing::trace!(
+                "BrewEntity: external subscriber issi={} → {} ignored (local SSI range)",
+                issi,
+                action_label
+            );
+            return;
+        }
+
+        tracing::trace!(
+            "BrewEntity: external subscriber issi={} → {} groups={:?}",
+            issi,
+            action_label,
+            groups
+        );
+        queue.push_back(SapMsg {
+            sap: tetra_core::Sap::Control,
+            src: TetraEntity::Brew,
+            dest: TetraEntity::Cmce,
+            msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate { issi, groups, action }),
+        });
     }
 
     /// Handle RSSI update from MM. Forwards to Brew server if feature_rssi_export is enabled,
