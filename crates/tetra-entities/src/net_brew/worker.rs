@@ -294,7 +294,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
             if !groups.is_empty() {
                 let mut group_list: Vec<u32> = groups.iter().copied().collect();
                 group_list.sort_unstable();
-                let deaff_msg = build_subscriber_deaffiliate(*issi, &group_list);
+                let deaff_msg = build_subscriber_deaffiliate_with_type(*issi, &group_list, self.brew_config.subscriber_type_deaffiliate);
                 if let Err(e) = self.transport.send_reliable(&deaff_msg) {
                     tracing::error!("[{}] BrewWorker: failed to send deaffiliation: {}", self.log_label(), e);
                 } else {
@@ -307,7 +307,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 }
             }
 
-            let dereg_msg = build_subscriber_deregister(*issi);
+            let dereg_msg = build_subscriber_deregister_with_type(*issi, self.brew_config.subscriber_type_deregister);
             if let Err(e) = self.transport.send_reliable(&dereg_msg) {
                 tracing::error!("[{}] BrewWorker: failed to send deregistration: {}", self.log_label(), e);
             } else {
@@ -323,10 +323,11 @@ impl<T: NetworkTransport> BrewWorker<T> {
             let now = Instant::now();
 
             // Expire stale pending SDS entries (SHORT_TRANSFER without matching SDS_TRANSFER)
+            let log_label = self.log_label().to_string();
             self.pending_sds.retain(|uuid, pending| {
                 let age = now.duration_since(pending.received_at);
                 if age > Duration::from_secs(30) {
-                    tracing::warn!("[{}] BrewWorker: expiring stale pending SDS uuid={}", self.log_label(), uuid);
+                    tracing::warn!("[{}] BrewWorker: expiring stale pending SDS uuid={}", log_label, uuid);
                     false
                 } else {
                     true
@@ -364,9 +365,9 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         let already_registered = self.subscriber_groups.contains_key(&issi);
                         self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
                         let msg = if already_registered {
-                            build_subscriber_reregister(issi)
+                            build_subscriber_reregister_with_type(issi, self.brew_config.subscriber_type_reregister)
                         } else {
-                            build_subscriber_register(issi, &[])
+                            build_subscriber_register_with_type(issi, &[], self.brew_config.subscriber_type_register)
                         };
                         if let Err(e) = self.transport.send_reliable(&msg) {
                             tracing::error!("[{}] BrewWorker: failed to send registration: {}", self.log_label(), e);
@@ -381,7 +382,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                     }
                     BrewCommand::DeregisterSubscriber { issi } => {
                         self.subscriber_groups.remove(&issi);
-                        let msg = build_subscriber_deregister(issi);
+                        let msg = build_subscriber_deregister_with_type(issi, self.brew_config.subscriber_type_deregister);
                         if let Err(e) = self.transport.send_reliable(&msg) {
                             tracing::error!("[{}] BrewWorker: failed to send deregistration: {}", self.log_label(), e);
                         } else {
@@ -393,7 +394,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         for gssi in &groups {
                             entry.insert(*gssi);
                         }
-                        let msg = build_subscriber_affiliate(issi, &groups);
+                        let msg = build_subscriber_affiliate_with_type(issi, &groups, self.brew_config.subscriber_type_affiliate);
                         if let Err(e) = self.transport.send_reliable(&msg) {
                             tracing::error!("[{}] BrewWorker: failed to send affiliation: {}", self.log_label(), e);
                         } else {
@@ -411,7 +412,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                                 entry.remove(gssi);
                             }
                         }
-                        let msg = build_subscriber_deaffiliate(issi, &groups);
+                        let msg = build_subscriber_deaffiliate_with_type(issi, &groups, self.brew_config.subscriber_type_deaffiliate);
                         if let Err(e) = self.transport.send_reliable(&msg) {
                             tracing::error!("[{}] BrewWorker: failed to send deaffiliation: {}", self.log_label(), e);
                         } else {

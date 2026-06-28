@@ -685,8 +685,18 @@ voice_service = true
 # is configured too, both [brew] and [brew2] MUST set a non-empty local_issi_allowlist,
 # and the two lists must not overlap. This prevents the same radio from registering
 # or forwarding traffic through both Brew servers.
-# local_issi_allowlist = [2632585, 2635411]
+# Include the source ISSI used by dashboard/integration SDS (normally 9999) on
+# exactly one server when those messages should leave through Brew.
+# local_issi_allowlist = [2632585, 2635411, 9999]
 # local_issi_blocklist = []
+#
+# Subscriber message type mapping. These TetraPack defaults can be overridden
+# independently for Brew servers that use another mapping.
+# subscriber_type_deregister = 0
+# subscriber_type_register = 1
+# subscriber_type_reregister = 2
+# subscriber_type_affiliate = 8
+# subscriber_type_deaffiliate = 9
 #
 # OPTIONAL: second Brew server. Same keys as [brew]. Use non-overlapping
 # local_issi_allowlist entries so every local ISSI belongs to exactly one server.
@@ -703,6 +713,11 @@ voice_service = true
 # pbx_gateway_issis = []
 # local_issi_allowlist = [2636000, 2636001]
 # local_issi_blocklist = []
+# subscriber_type_deregister = 0
+# subscriber_type_register = 1
+# subscriber_type_reregister = 2
+# subscriber_type_affiliate = 8
+# subscriber_type_deaffiliate = 9
 
 ###############################################################################
 

@@ -30,6 +30,31 @@ const TEST_GSSI: u32 = 91;
 const TEST_ISSI: u32 = 1000001;
 const SECONDARY_CARRIER: u16 = 1522;
 
+fn brew_test_config() -> tetra_config::bluestation::StackConfig {
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.brew = Some(CfgBrew {
+        host: "test.local".into(),
+        port: 3000,
+        tls: false,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_secs(1),
+        jitter_initial_latency_frames: 0,
+        feature_sds_enabled: true,
+        feature_rssi_export: false,
+        whitelisted_ssis: None,
+        pbx_gateway_issis: None,
+        local_issi_allowlist: None,
+        local_issi_blocklist: Vec::new(),
+        subscriber_type_deregister: 0,
+        subscriber_type_register: 1,
+        subscriber_type_reregister: 2,
+        subscriber_type_affiliate: 8,
+        subscriber_type_deaffiliate: 9,
+    });
+    config
+}
+
 /// Helper: register a subscriber on a GSSI so CMCE accepts calls for that group.
 fn register_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
     let register = SapMsg {
@@ -413,7 +438,7 @@ fn connected_duplex_individual_call(calling_issi: u32, called_issi: u32) -> (Com
 
 fn connected_brew_originated_simplex_call(remote_issi: u32, local_issi: u32) -> (ComponentTest, u16, uuid::Uuid) {
     let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
-    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    let mut test = ComponentTest::from_config(brew_test_config(), Some(dltime));
 
     let components = vec![TetraEntity::Cmce];
     let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
@@ -570,8 +595,7 @@ fn test_local_echo_999_duplex_call_is_capped_to_finite_timeout() {
     test.run_stack(Some(1));
     let msgs = test.dump_sinks();
 
-    let (mut connect_sdu, _) =
-        find_lcmc_req(&msgs, calling_issi, CmcePduTypeDl::DConnect).expect("local echo must answer the caller");
+    let (mut connect_sdu, _) = find_lcmc_req(&msgs, calling_issi, CmcePduTypeDl::DConnect).expect("local echo must answer the caller");
     let d_connect = DConnect::from_bitbuf(&mut connect_sdu).expect("local echo D-CONNECT must parse");
     assert!(d_connect.simplex_duplex_selection, "this test exercises the duplex path");
     assert_eq!(
@@ -832,7 +856,7 @@ fn test_brew_originated_simplex_connect_confirm_makes_local_ms_listener() {
     debug::setup_logging_verbose();
 
     let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
-    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    let mut test = ComponentTest::from_config(brew_test_config(), Some(dltime));
 
     let components = vec![TetraEntity::Cmce];
     let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
@@ -949,7 +973,7 @@ fn test_brew_connect_confirm_mcch_fallback_uses_linkless_delivery() {
     debug::setup_logging_verbose();
 
     let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
-    let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
+    let mut test = ComponentTest::from_config(brew_test_config(), Some(dltime));
 
     let components = vec![TetraEntity::Cmce];
     let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
@@ -2180,8 +2204,8 @@ mod ss_dgna_tests {
         debug::setup_logging_verbose();
         let (test, msgs) = run_dgna(false);
 
-        let (addr_ssi, facility) = find_d_facility(&msgs)
-            .unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA deassign, got {} msgs", msgs.len()));
+        let (addr_ssi, facility) =
+            find_d_facility(&msgs).unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA deassign, got {} msgs", msgs.len()));
         assert_eq!(addr_ssi, DGNA_ISSI);
 
         let body = facility.facility.expect("D-FACILITY must carry an SS-DGNA body");
@@ -2237,7 +2261,10 @@ mod ss_dgna_tests {
         debug::setup_logging_verbose();
 
         let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
-        test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
+        test.populate_entities(
+            vec![TetraEntity::Cmce],
+            vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+        );
 
         // Build a U-FACILITY{ASSIGN ACK} as the affected MS would send back.
         let ack = AssignAck {

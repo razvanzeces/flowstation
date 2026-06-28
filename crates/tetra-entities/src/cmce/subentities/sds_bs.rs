@@ -545,28 +545,26 @@ impl SdsBsSubentity {
         // an on-air requester that may legitimately be absent from the static registry, and those
         // must keep going out over RF — so they are intentionally excluded here.
         const DASHBOARD_ISSI: u32 = 9999;
-        let is_local_issi =
-            !dest_is_group && self.config.state_read().subscribers.is_registered(dest_ssi);
-        let is_local_group =
-            dest_is_group && self.config.state_read().subscribers.has_group_members(dest_ssi);
+        let is_local_issi = !dest_is_group && self.config.state_read().subscribers.is_registered(dest_ssi);
+        let is_local_group = dest_is_group && self.config.state_read().subscribers.has_group_members(dest_ssi);
 
-        if source_ssi == DASHBOARD_ISSI
-            && !is_local_issi
-            && !is_local_group
-            && net_brew::feature_sds_enabled(&self.config)
-        {
-            tracing::info!("SDS: forwarding dashboard SDS to Brew: {} -> {}", source_ssi, dest_ssi);
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Brew,
-                msg: SapMsgInner::CmceSdsData(CmceSdsData {
-                    source_issi: source_ssi,
-                    dest_issi: dest_ssi,
-                    user_defined_data: sds_data,
-                }),
-            });
-            return true;
+        if source_ssi == DASHBOARD_ISSI && !is_local_issi && !is_local_group {
+            if let Some(brew_entity) = net_brew::route_entity_for_local_issi(&self.config, source_ssi)
+                .filter(|entity| net_brew::feature_sds_enabled_for_entity(&self.config, *entity))
+            {
+                tracing::info!("SDS: forwarding dashboard SDS to {:?}: {} -> {}", brew_entity, source_ssi, dest_ssi);
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: brew_entity,
+                    msg: SapMsgInner::CmceSdsData(CmceSdsData {
+                        source_issi: source_ssi,
+                        dest_issi: dest_ssi,
+                        user_defined_data: sds_data,
+                    }),
+                });
+                return true;
+            }
         }
 
         // Deliver over RF. As before, we do NOT gate on the SDS subscriber registry: a terminal
@@ -630,19 +628,28 @@ impl SdsBsSubentity {
         let is_local_issi = !dest_is_group && self.config.state_read().subscribers.is_registered(dest_ssi);
         let is_local_group = dest_is_group && self.config.state_read().subscribers.has_group_members(dest_ssi);
 
-        if source_ssi == DASHBOARD_ISSI && !is_local_issi && !is_local_group && net_brew::feature_sds_enabled(&self.config) {
-            tracing::info!("SDS: forwarding raw Type-4 dashboard SDS to Brew: {} -> {}", source_ssi, dest_ssi);
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Brew,
-                msg: SapMsgInner::CmceSdsData(CmceSdsData {
-                    source_issi: source_ssi,
-                    dest_issi: dest_ssi,
-                    user_defined_data: sds_data,
-                }),
-            });
-            return true;
+        if source_ssi == DASHBOARD_ISSI && !is_local_issi && !is_local_group {
+            if let Some(brew_entity) = net_brew::route_entity_for_local_issi(&self.config, source_ssi)
+                .filter(|entity| net_brew::feature_sds_enabled_for_entity(&self.config, *entity))
+            {
+                tracing::info!(
+                    "SDS: forwarding raw Type-4 dashboard SDS to {:?}: {} -> {}",
+                    brew_entity,
+                    source_ssi,
+                    dest_ssi
+                );
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: brew_entity,
+                    msg: SapMsgInner::CmceSdsData(CmceSdsData {
+                        source_issi: source_ssi,
+                        dest_issi: dest_ssi,
+                        user_defined_data: sds_data,
+                    }),
+                });
+                return true;
+            }
         }
 
         if !dest_is_group && !is_local_issi {

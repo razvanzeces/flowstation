@@ -142,8 +142,7 @@ pub fn is_brew_external_subscriber_allowed_for_entity(config: &SharedConfig, ent
     }
 
     !BREW_ENTITIES.into_iter().any(|candidate| {
-        brew_config_for_entity(config, candidate)
-            .is_some_and(|brew| brew.has_local_issi_allowlist() && brew.local_issi_allowed(issi))
+        brew_config_for_entity(config, candidate).is_some_and(|brew| brew.has_local_issi_allowlist() && brew.local_issi_allowed(issi))
     })
 }
 
@@ -167,9 +166,7 @@ pub fn is_brew_issi_routable_for_entity(config: &SharedConfig, entity: TetraEnti
         // 7-digit subscriber ISSIs are always routable.
         // Short ISSIs (< 1_000_000) are service numbers handled by TetraPack Core —
         // let them through so the core can respond (echo test 600, etc.)
-        (issi >= 1_000_000 && issi <= 9_999_999)
-            || issi < 1_000_000
-            || is_pbx_gateway_issi(&brew_config, issi)
+        (issi >= 1_000_000 && issi <= 9_999_999) || issi < 1_000_000 || is_pbx_gateway_issi(&brew_config, issi)
     } else {
         true
     }
@@ -250,7 +247,8 @@ port = 443
 tls = true
 username = 0
 password = ""
-local_issi_allowlist = [2632585]
+local_issi_allowlist = [2632585, 2632586]
+local_issi_blocklist = [2632586]
 
 [brew2]
 host = "example2.invalid"
@@ -267,5 +265,9 @@ local_issi_allowlist = [2633869]
             assert!(!is_brew_external_subscriber_allowed_for_entity(&cfg, entity, 2633869));
             assert!(is_brew_external_subscriber_allowed_for_entity(&cfg, entity, 2147004));
         }
+        assert_eq!(route_entity_for_local_issi(&cfg, 2632585), Some(TetraEntity::Brew));
+        assert_eq!(route_entity_for_local_issi(&cfg, 2633869), Some(TetraEntity::Brew2));
+        assert_eq!(route_entity_for_local_issi(&cfg, 2632586), None, "blocklist must win");
+        assert_eq!(route_entity_for_local_issi(&cfg, 2147004), None, "unassigned ISSI must stay local");
     }
 }

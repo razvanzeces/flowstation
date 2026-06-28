@@ -108,6 +108,7 @@ struct UlForwardedCall {
 
 pub struct BrewEntity {
     entity: TetraEntity,
+    log_label: String,
     config: SharedConfig,
 
     /// Also contained in the SharedConfig, but kept for fast, convenient access
@@ -143,12 +144,10 @@ pub struct BrewEntity {
 
     /// Whether the worker is connected
     connected: bool,
-    /// True once we've already told MM about this connection (so it re-registers local MS exactly
-    /// ONCE per connect, not on every inbound message). The server version is detected from every
-    /// GROUP_TX with a mnemonic — many per second — so without this latch the BrewReconnected
-    /// notification (and the D-LOCATION-UPDATE-COMMAND sweep it triggers) would fire continuously
-    /// and flood every radio with re-registration commands. Reset on (re)connect and disconnect.
+    /// True once MM has been told about this transport connection.
     brew_reconnect_announced: bool,
+    /// True once the lazily detected protocol version was emitted for this connection.
+    brew_version_announced: bool,
     /// Optional telemetry sink for emitting brew status events
     telemetry_sink: Option<TelemetrySink>,
 
@@ -167,6 +166,7 @@ impl BrewEntity {
     /// implementation can be used (WebSocket, QUIC, TCP, …).
     pub fn new<T: NetworkTransport + 'static>(config: SharedConfig, entity: TetraEntity, brew_config: CfgBrew, transport: T) -> Self {
         assert!(super::is_brew_entity(entity), "BrewEntity requires a Brew router entity");
+        let log_label = Self::make_log_label(entity, &brew_config);
         // Create channels
         let (event_sender, event_receiver) = unbounded::<BrewEvent>();
         let (command_sender, command_receiver) = unbounded::<BrewCommand>();
@@ -174,10 +174,18 @@ impl BrewEntity {
         // Spawn worker thread with the provided transport
         let worker_config = config.clone();
         let worker_brew_config = brew_config.clone();
+        let worker_log_label = log_label.clone();
         let handle = thread::Builder::new()
             .name(format!("{:?}-worker", entity).to_lowercase())
             .spawn(move || {
-                let mut worker = BrewWorker::new(worker_config, worker_brew_config, event_sender, command_receiver, transport);
+                let mut worker = BrewWorker::new(
+                    worker_log_label,
+                    worker_config,
+                    worker_brew_config,
+                    event_sender,
+                    command_receiver,
+                    transport,
+                );
                 worker.run();
             })
             .expect("failed to spawn BrewWorker thread");
@@ -190,6 +198,7 @@ impl BrewEntity {
 
         Self {
             entity,
+            log_label,
             config,
             brew_config,
             dltime: TdmaTime::default(),
@@ -203,10 +212,25 @@ impl BrewEntity {
             subscriber_groups: HashMap::new(),
             connected: false,
             brew_reconnect_announced: false,
+            brew_version_announced: false,
             telemetry_sink: None,
             rssi_last_sent: HashMap::new(),
             worker_handle: Some(handle),
         }
+    }
+
+    fn make_log_label(entity: TetraEntity, brew_config: &CfgBrew) -> String {
+        let name = match entity {
+            TetraEntity::Brew => "Brew",
+            TetraEntity::Brew2 => "Brew2",
+            _ => "Brew?",
+        };
+        let scheme = if brew_config.tls { "wss" } else { "ws" };
+        format!("{name} {scheme}://{}:{}", brew_config.host, brew_config.port)
+    }
+
+    fn log_label(&self) -> &str {
+        &self.log_label
     }
 
     /// Set telemetry sink for emitting brew status events.
@@ -219,38 +243,36 @@ impl BrewEntity {
         while let Ok(event) = self.event_receiver.try_recv() {
             match event {
                 BrewEvent::Connected { server_version } => {
-                    tracing::debug!("BrewEntity: connected to TetraPack server (Brew v{})", server_version);
+                    tracing::debug!("[{}] BrewEntity: connected to server (Brew v{})", self.log_label(), server_version);
                     self.connected = true;
-                    // Re-arm the one-shot reconnect notification for this fresh connection.
                     self.brew_reconnect_announced = false;
+                    self.brew_version_announced = false;
                     self.resync_subscribers();
                     self.set_network_connected(true, server_version);
+                    self.announce_brew_reconnected(queue);
                 }
                 BrewEvent::VersionDetected { version } => {
-                    // VersionDetected fires on EVERY inbound GROUP_TX that carries a mnemonic
-                    // (many per second). Only act on the first one of each connection, or we would
-                    // flood MM with BrewReconnected — and every radio with re-registration
-                    // D-LOCATION-UPDATE-COMMANDs — continuously.
-                    if !self.brew_reconnect_announced {
-                        self.brew_reconnect_announced = true;
-                        tracing::info!("BrewEntity: server Brew version detected from message length: v{}", version);
+                    // GROUP_TX may reveal the version repeatedly. Version telemetry is one-shot,
+                    // while reconnect recovery is tied to the actual socket connection above.
+                    if !self.brew_version_announced {
+                        self.brew_version_announced = true;
+                        tracing::info!(
+                            "[{}] BrewEntity: server Brew version detected from message length: v{}",
+                            self.log_label(),
+                            version
+                        );
                         self.emit_brew_version(version);
-                        // Notify MM (once) that Brew (re)connected so it re-registers local MS.
-                        // Without this, MS that were registered before a disconnect believe they
-                        // are still affiliated and never re-register — PTT denied until power-cycle.
-                        queue.push_back(SapMsg {
-                            sap: tetra_core::Sap::Control,
-                            src: self.entity,
-                            dest: TetraEntity::Mm,
-                            msg: SapMsgInner::BrewReconnected,
-                        });
                     }
                 }
                 BrewEvent::Disconnected(reason) => {
-                    tracing::warn!("BrewEntity: Brew backhaul disconnected: {} — releasing all active calls", reason);
+                    tracing::warn!(
+                        "[{}] BrewEntity: backhaul disconnected: {} — releasing all active calls",
+                        self.log_label(),
+                        reason
+                    );
                     self.connected = false;
-                    // Re-arm so the next reconnect re-registers local MS exactly once.
                     self.brew_reconnect_announced = false;
+                    self.brew_version_announced = false;
                     self.set_network_connected(false, 0);
                     // ETSI EN 300 392-2 §14.9.4: BS must release all circuits immediately
                     // when backhaul connection is lost. MS will receive D-RELEASE.
@@ -285,13 +307,33 @@ impl BrewEntity {
                     tracing::debug!("BrewEntity: SDS report uuid={} status={}", uuid, status);
                 }
                 BrewEvent::SubscriberEvent { msg_type, issi, groups } => {
-                    tracing::trace!("BrewEntity: subscriber event type={} issi={} groups={:?}", msg_type, issi, groups);
+                    tracing::trace!(
+                        "[{}] BrewEntity: subscriber event type={} issi={} groups={:?}",
+                        self.log_label(),
+                        msg_type,
+                        issi,
+                        groups
+                    );
                     // External subscriber (e.g. SvxLink gateway) affiliated/deaffiliated on Brew server.
                     // Notify CMCE so it updates group_listeners — without this, has_listener()
                     // returns false for GSSIs where only external subscribers are present,
                     // causing BS to reject U-SETUP with "no listeners".
                     match msg_type {
-                        crate::net_brew::protocol::BREW_SUBSCRIBER_AFFILIATE => {
+                        t if t == self.brew_config.subscriber_type_register => {
+                            tracing::trace!(
+                                "[{}] BrewEntity: external subscriber issi={} -> REGISTER (presence only)",
+                                self.log_label(),
+                                issi
+                            );
+                        }
+                        t if t == self.brew_config.subscriber_type_reregister => {
+                            tracing::trace!(
+                                "[{}] BrewEntity: external subscriber issi={} -> REREGISTER (presence only)",
+                                self.log_label(),
+                                issi
+                            );
+                        }
+                        t if t == self.brew_config.subscriber_type_affiliate => {
                             if !groups.is_empty() {
                                 self.queue_external_subscriber_update(
                                     queue,
@@ -302,7 +344,7 @@ impl BrewEntity {
                                 );
                             }
                         }
-                        crate::net_brew::protocol::BREW_SUBSCRIBER_DEAFFILIATE => {
+                        t if t == self.brew_config.subscriber_type_deaffiliate => {
                             if !groups.is_empty() {
                                 self.queue_external_subscriber_update(
                                     queue,
@@ -313,10 +355,16 @@ impl BrewEntity {
                                 );
                             }
                         }
-                        crate::net_brew::protocol::BREW_SUBSCRIBER_DEREGISTER => {
+                        t if t == self.brew_config.subscriber_type_deregister => {
                             self.queue_external_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Deregister, "DEREGISTER");
                         }
-                        _ => {}
+                        _ => tracing::debug!(
+                            "[{}] BrewEntity: ignored unknown subscriber type={} issi={} groups={:?}",
+                            self.log_label(),
+                            msg_type,
+                            issi,
+                            groups
+                        ),
                     }
                 }
                 BrewEvent::ServerError { error_type, data } => {
@@ -482,7 +530,8 @@ impl BrewEntity {
     ) {
         if !super::is_brew_external_subscriber_allowed_for_entity(&self.config, self.entity, issi) {
             tracing::trace!(
-                "BrewEntity: external subscriber issi={} → {} ignored (local SSI range)",
+                "[{}] BrewEntity: external subscriber issi={} → {} ignored (local/reserved SSI)",
+                self.log_label(),
                 issi,
                 action_label
             );
@@ -490,7 +539,8 @@ impl BrewEntity {
         }
 
         tracing::trace!(
-            "BrewEntity: external subscriber issi={} → {} groups={:?}",
+            "[{}] BrewEntity: external subscriber issi={} → {} groups={:?}",
+            self.log_label(),
             issi,
             action_label,
             groups
@@ -699,6 +749,19 @@ impl BrewEntity {
                 server_version: version,
             });
         }
+    }
+
+    fn announce_brew_reconnected(&mut self, queue: &mut MessageQueue) {
+        if self.brew_reconnect_announced {
+            return;
+        }
+        self.brew_reconnect_announced = true;
+        queue.push_back(SapMsg {
+            sap: tetra_core::Sap::Control,
+            src: self.entity,
+            dest: TetraEntity::Mm,
+            msg: SapMsgInner::BrewReconnected,
+        });
     }
 
     /// Handle new group call from Brew, reusing hanging call circuits if available.

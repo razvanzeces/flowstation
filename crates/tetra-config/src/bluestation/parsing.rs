@@ -779,4 +779,90 @@ pbx_gateway_issi = [16777184, 16777186]
         let brew = cfg.brew.expect("brew config should be present");
         assert_eq!(brew.pbx_gateway_issis, Some(vec![16_777_184, 16_777_186]));
     }
+
+    fn dual_brew_toml(brew_lists: &str, brew2_lists: &str) -> String {
+        minimal_toml("")
+            + &format!(
+                r#"
+[brew]
+host = "brew-one.invalid"
+tls = false
+username = 123456700
+password = "one"
+{}
+
+[brew2]
+host = "brew-two.invalid"
+tls = false
+username = 123456701
+password = "two"
+{}
+"#,
+                brew_lists, brew2_lists
+            )
+    }
+
+    #[test]
+    fn dual_brew_requires_nonempty_disjoint_local_allowlists() {
+        let missing = from_toml_str(&dual_brew_toml("", "")).expect("dual Brew config parses");
+        assert_eq!(
+            missing.validate(),
+            Err("brew and brew2 require non-empty local_issi_allowlist when both are configured")
+        );
+
+        let overlapping = from_toml_str(&dual_brew_toml(
+            "local_issi_allowlist = [2632585, 2635411]",
+            "local_issi_allowlist = [2635411, 2636000]",
+        ))
+        .expect("dual Brew config parses");
+        assert_eq!(overlapping.validate(), Err("brew and brew2 local_issi_allowlist must not overlap"));
+
+        let valid = from_toml_str(&dual_brew_toml(
+            "local_issi_allowlist = [2632585]",
+            "local_issi_allowlist = [2636000]",
+        ))
+        .expect("dual Brew config parses");
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn dual_brew_blocklist_wins_and_must_leave_each_server_an_issi() {
+        let blocked = from_toml_str(&dual_brew_toml(
+            "local_issi_allowlist = [2632585]\nlocal_issi_blocklist = [2632585]",
+            "local_issi_allowlist = [2636000]",
+        ))
+        .expect("dual Brew config parses");
+        assert_eq!(
+            blocked.validate(),
+            Err("brew and brew2 effective local_issi_allowlist must not be empty")
+        );
+
+        let valid = from_toml_str(&dual_brew_toml(
+            "local_issi_allowlist = [2632585, 2635411]\nlocal_issi_blocklist = [2635411]",
+            "local_issi_allowlist = [2636000]",
+        ))
+        .expect("dual Brew config parses");
+        let brew = valid.brew.as_ref().expect("brew config");
+        assert!(brew.local_issi_allowed(2632585));
+        assert!(!brew.local_issi_allowed(2635411));
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn brew_list_aliases_and_subscriber_types_parse_per_server() {
+        let cfg = from_toml_str(&dual_brew_toml(
+            "local_issi_whitelist = [2632585]\nsubscriber_type_affiliate = 18",
+            "local_issi_allowlist = [2636000]\nissi_blacklist = [2636001]\nsubscriber_type_register = 11",
+        ))
+        .expect("dual Brew aliases parse");
+
+        let brew = cfg.brew.as_ref().expect("brew config");
+        let brew2 = cfg.brew2.as_ref().expect("brew2 config");
+        assert_eq!(brew.local_issi_allowlist, Some(vec![2_632_585]));
+        assert_eq!(brew.subscriber_type_affiliate, 18);
+        assert_eq!(brew2.local_issi_blocklist, vec![2_636_001]);
+        assert_eq!(brew2.subscriber_type_register, 11);
+        assert_eq!(brew2.subscriber_type_deregister, 0);
+        assert!(cfg.validate().is_ok());
+    }
 }

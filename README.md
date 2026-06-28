@@ -315,6 +315,32 @@ forwarding between Brew backhauls. `local_issi_blocklist` is applied after the
 allowlist and can be used to exclude a terminal from one Brew server without
 changing larger allowlist ranges/lists.
 
+`local_issi_whitelist` / `issi_whitelist` and
+`local_issi_blacklist` / `issi_blacklist` remain accepted aliases. The explicit
+`allowlist` and `blocklist` names above are preferred.
+
+Different Brew implementations may use different subscriber message type
+numbers. Defaults are compatible with TetraPack (`0/1/2/8/9`); override them per
+server only when its documentation requires it:
+
+```toml
+subscriber_type_deregister = 0
+subscriber_type_register = 1
+subscriber_type_reregister = 2
+subscriber_type_affiliate = 8
+subscriber_type_deaffiliate = 9
+```
+
+Loop protection also rejects Brew-originated subscriber state for
+`cell_info.local_ssi_ranges` and for every ISSI assigned to either local Brew
+allowlist. A local terminal is therefore never mirrored back from Brew into
+CMCE as an external listener.
+
+In a dual-Brew setup, assign the configured source ISSI for dashboard and
+integration-generated SDS (normally `9999`) to exactly one server's
+`local_issi_allowlist`. This selects which backhaul carries those messages; it
+does not expose Brew-originated state for that reserved local ISSI.
+
 ### Asterisk SIP/RTP bridge
 
 FlowStation can register as a PJSIP endpoint and bridge calls between TETRA

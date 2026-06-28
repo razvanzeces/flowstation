@@ -5198,7 +5198,7 @@ async function wifiCall(url, body){
 function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
 
 // ── State + WS ────────────────────────────────────────────────────────────
-let ws=null,state={ms:{},calls:{},emergencies:{},lastHeard:[],sdsLog:[],dapnetLog:[],geoalarmEvents:[],geoalarmConfig:null,meshcomNodes:[],meshcomMessages:[],brewOnline:false,brewVer:0},sdsDest=0;
+let ws=null,state={ms:{},calls:{},emergencies:{},lastHeard:[],sdsLog:[],dapnetLog:[],geoalarmEvents:[],geoalarmConfig:null,meshcomNodes:[],meshcomMessages:[],brewOnline:false,brewVer:0,brewStatus:null,brewStatusLoadedAt:0},sdsDest=0;
 
 // ── RadioID callsigns (indicativ) ──────────────────────────────────────────────
 // issi -> {cs:"CALLSIGN", fl:"🇷🇴"} (found; fl is the country flag emoji from the prefix, or "")
@@ -5265,6 +5265,58 @@ function clearEmergency(issi){if(!confirm(t('confirm_clear_emergency',{issi})))r
 
 // ── Topbar status chips (BS / Brew / Emergency) — calm always-visible state.
 // Mirrors the footer LEDs + emergency state onto the .pill chips in the header.
+let brewStatusFetchInFlight=false;
+function configuredBrewServers(){
+  const servers=(state.brewStatus&&state.brewStatus.servers)||[];
+  return servers.filter(function(server){return server&&server.configured;});
+}
+function brewUiSummary(online,version){
+  const servers=configuredBrewServers();
+  if(servers.length>1){
+    const connected=servers.filter(function(server){return !!server.connected;}).length;
+    const total=servers.length;
+    const all=connected===total;
+    const any=connected>0;
+    return {
+      online:any,
+      cardClass:all?'is-info':(any?'is-warn':'is-danger'),
+      pillClass:all?'pill-info':(any?'pill-warn':'pill-idle'),
+      value:connected+'/'+total+' '+t('brew_online'),
+      detail:servers.map(function(server){
+        return (server.title||server.entity||'Brew')+': '+(server.connected?t('brew_online'):t('brew_offline'));
+      }).join(' · '),
+      hero:connected+'/'+total,
+      chip:'Brew '+connected+'/'+total,
+      badge:connected+'/'+total,
+    };
+  }
+  return {
+    online,
+    cardClass:online?'is-info':'is-danger',
+    pillClass:online?'pill-info':'pill-idle',
+    value:online?t('brew_online'):t('brew_offline'),
+    detail:online?`Brew v${version||0}`:'—',
+    hero:online?`v${version||0}`:t('brew_offline'),
+    chip:online?('Brew v'+(version||0)):'Brew',
+    badge:online?('v'+(version||0)):'',
+  };
+}
+async function refreshBrewServerStatus(force){
+  const now=Date.now();
+  if(brewStatusFetchInFlight)return;
+  if(!force&&state.brewStatusLoadedAt&&now-state.brewStatusLoadedAt<5000)return;
+  brewStatusFetchInFlight=true;
+  try{
+    const r=await fetch('/api/brew/status');
+    if(r.ok){
+      state.brewStatus=await r.json();
+      state.brewStatusLoadedAt=Date.now();
+      renderBrewStatus();
+    }
+  }catch{}finally{
+    brewStatusFetchInFlight=false;
+  }
+}
 function syncTopbarChips(){
   const led=document.getElementById('connLed');
   const bsOn=!!(led&&led.classList.contains('on'));
@@ -5276,44 +5328,55 @@ function syncTopbarChips(){
   }
   const brew=document.getElementById('chip-brew');
   if(brew){
-    brew.className='pill '+(state.brewOnline?'pill-info':'pill-idle');
+    const summary=brewUiSummary(state.brewOnline,state.brewVer);
+    brew.className='pill '+summary.pillClass;
     const span=brew.querySelector('span');
-    if(span)span.textContent=state.brewOnline?('Brew v'+(state.brewVer||0)):'Brew';
+    if(span)span.textContent=summary.chip;
   }
   const emg=document.getElementById('chip-emergency');
   if(emg)emg.style.display=Object.keys(state.emergencies||{}).length?'inline-flex':'none';
 }
 
-function setBrewStatus(online,version){
-  state.brewOnline=online;state.brewVer=version||0;
+function renderBrewStatus(){
+  const summary=brewUiSummary(state.brewOnline,state.brewVer);
   const led=document.getElementById('brewLed');
   const txt=document.getElementById('brewText');
   const vbadge=document.getElementById('brewVerBadge');
-  if(online){
+  if(summary.online){
     led.classList.add('on');
-    txt.textContent=t('brew_online');txt.style.color='var(--accent2)';
-    if(vbadge){
-      const v=version||0;
-      vbadge.textContent='v'+v;vbadge.style.display='inline-block';
-      if(v>=1){vbadge.style.background='rgba(0,212,168,0.15)';vbadge.style.color='var(--accent)';vbadge.style.border='1px solid rgba(0,212,168,0.4)';}
-      else{vbadge.style.background='rgba(255,178,36,0.15)';vbadge.style.color='var(--warn)';vbadge.style.border='1px solid rgba(255,178,36,0.4)';}
-    }
+    txt.textContent=summary.value;txt.style.color=summary.cardClass==='is-warn'?'var(--warn)':'var(--accent2)';
   } else {
-    led.classList.remove('on');txt.textContent=t('brew_offline');txt.style.color='';
-    if(vbadge)vbadge.style.display='none';
+    led.classList.remove('on');txt.textContent=summary.value;txt.style.color='';
+  }
+  if(vbadge){
+    if(summary.badge){
+      vbadge.textContent=summary.badge;vbadge.style.display='inline-block';
+      const warn=summary.cardClass==='is-warn';
+      const ok=summary.cardClass==='is-info';
+      vbadge.style.background=ok?'rgba(0,212,168,0.15)':(warn?'rgba(255,178,36,0.15)':'rgba(255,76,76,0.15)');
+      vbadge.style.color=ok?'var(--accent)':(warn?'var(--warn)':'var(--danger)');
+      vbadge.style.border=ok?'1px solid rgba(0,212,168,0.4)':(warn?'1px solid rgba(255,178,36,0.4)':'1px solid rgba(255,76,76,0.4)');
+    } else {
+      vbadge.style.display='none';
+    }
   }
   // Update stat card — state via ONE class (kills inline color split).
   const bv=document.getElementById('stat-brew-val');
   const bs=document.getElementById('stat-brew-sub');
   const bcard=document.getElementById('stat-brew-card');
-  if(bv){bv.textContent=online?t('brew_online'):t('brew_offline');}
-  if(bcard){bcard.classList.remove('is-info','is-danger');bcard.classList.add(online?'is-info':'is-danger');}
-  if(bs)bs.textContent=online?`Brew v${version||0}`:'—';
+  if(bv){bv.textContent=summary.value;}
+  if(bcard){bcard.classList.remove('is-info','is-warn','is-danger');bcard.classList.add(summary.cardClass);}
+  if(bs)bs.textContent=summary.detail;
   const hb=document.getElementById('stations-hero-brew');
-  if(hb)hb.textContent=online?`v${version||0}`:t('brew_offline');
+  if(hb)hb.textContent=summary.hero;
   // System panel
-  updateSysBtsPanel(document.getElementById('connLed').classList.contains('on'),online,version||0);
+  updateSysBtsPanel(document.getElementById('connLed').classList.contains('on'),state.brewOnline,state.brewVer||0);
   syncTopbarChips();
+}
+function setBrewStatus(online,version){
+  state.brewOnline=online;state.brewVer=version||0;
+  renderBrewStatus();
+  refreshBrewServerStatus(false);
 }
 
 function connect(){
@@ -5325,10 +5388,12 @@ function connect(){
     updateSysBtsPanel(true,state.brewOnline,state.brewVer);
     syncTopbarChips();
     ws.send(JSON.stringify({type:'subscribe'}));
+    refreshBrewServerStatus(true);
   };
   ws.onclose=()=>{
     document.getElementById('connLed').classList.remove('on');
     const ct=document.getElementById('connText');ct.textContent=t('offline');ct.style.color='var(--danger)';
+    state.brewStatus=null;state.brewStatusLoadedAt=0;
     setBrewStatus(false,0);
     updateSysBtsPanel(false,false,0);
     syncTopbarChips();
@@ -7465,12 +7530,11 @@ function updateSysHero(){
   const tempV=document.getElementById('sysHeroTemp');
   const btsCard=document.getElementById('sysBtsCard');
   const btsOnline=btsCard&&btsCard.classList.contains('is-ok');
-  const brewCard=document.getElementById('sysBrewCard');
-  const brewOnline=brewCard&&brewCard.classList.contains('is-info');
+  const brewSummary=brewUiSummary(state.brewOnline,state.brewVer);
   if(dot) dot.className='hero-dot '+(btsOnline?'is-ok':'is-danger');
   if(sub){
     const host=(sysData&&sysData.hostname)||document.getElementById('sysHostname').textContent||'—';
-    sub.textContent=(btsOnline?t('online'):t('offline'))+' · '+(brewOnline?t('brew_online'):t('brew_offline'))+' · '+host;
+    sub.textContent=(btsOnline?t('online'):t('offline'))+' · '+brewSummary.value+' · '+host;
   }
   if(tempV){
     const tc=document.getElementById('sysCpuTemp');
@@ -7515,6 +7579,7 @@ async function activateProfile(name){
 }
 
 function updateSysBtsPanel(online,brewOnline,brewVer){
+  const summary=brewUiSummary(brewOnline,brewVer);
   const ipEl=document.getElementById('sysBtsIp');
   const stEl=document.getElementById('sysBtsStatus');
   const bsEl=document.getElementById('sysBrewStatus');
@@ -7524,9 +7589,9 @@ function updateSysBtsPanel(online,brewOnline,brewVer){
   if(ipEl)ipEl.textContent=online?location.hostname:'—';
   if(stEl)stEl.textContent=online?t('online'):t('offline');
   if(btsCard)btsCard.className='stat-card '+(online?'is-ok':'is-danger');
-  if(bsEl)bsEl.textContent=brewOnline?t('brew_online'):t('brew_offline');
-  if(brewCard)brewCard.className='stat-card '+(brewOnline?'is-info':'is-danger');
-  if(bdEl){bdEl.textContent=brewOnline?`Brew v${brewVer||0}`:'—';}
+  if(bsEl)bsEl.textContent=summary.value;
+  if(brewCard)brewCard.className='stat-card '+summary.cardClass;
+  if(bdEl){bdEl.textContent=summary.detail;}
   updateSysHero();
 }
 
@@ -8048,6 +8113,7 @@ function healthDomainSvg(d){
 function healthDomainAccent(d){ return (HEALTH_SVG[d]||{}).accent || ''; }
 // Inline SVGs for the integration cards (replace ☎ 📟 ◎).
 const INTEGRATION_SVG = {
+  brew:'<path d="M4.93 4.93a14 14 0 0 0 0 14.14M19.07 4.93a14 14 0 0 1 0 14.14M8.46 8.46a7 7 0 0 0 0 7.08M15.54 8.46a7 7 0 0 1 0 7.08"/><circle cx="12" cy="12" r="1.5"/>',
   asterisk:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
   dapnet:'<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 6h6M9 10h6M9 14h3"/>',
   geoalarm:'<path d="M12 21s-7-5.5-7-11a7 7 0 0 1 14 0c0 5.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
@@ -8107,8 +8173,8 @@ function renderHealthTab(h){
   });
 }
 
-let healthIntegrationState={asterisk:null,dapnet:null,geoalarm:null,meshcom:null,lastLoad:0};
-// title, iconKey (asterisk|dapnet|geoalarm), accent (blue|purple|''), level, detail, extra.
+let healthIntegrationState={brew:null,asterisk:null,dapnet:null,geoalarm:null,meshcom:null,lastLoad:0};
+// title, iconKey (brew|asterisk|dapnet|geoalarm), accent (blue|purple|''), level, detail, extra.
 function integrationHealthCard(title,iconKey,accent,level,detail,extra){
   const lvlCls = healthLevelClass(level);
   const icoCls = level==='ok' ? accent : lvlCls;
@@ -8125,6 +8191,21 @@ function integrationHealthCard(title,iconKey,accent,level,detail,extra){
       + (extra?'<div class="h-det">'+escHtml(extra)+'</div>':'')
     + '</div>';
   return card;
+}
+function classifyBrewHealth(server){
+  if(!server||!server.configured)return {level:'ok',detail:'not configured',extra:'No config section for this Brew server.'};
+  const allow=(server.local_issi_allowlist||[]).filter(function(v){return v!==null&&v!==undefined;});
+  const block=(server.local_issi_blocklist||[]).filter(function(v){return v!==null&&v!==undefined;});
+  let level=server.connected?'ok':'degraded';
+  const detail=(server.connected?'connected':'disconnected')+' · '+(server.endpoint||'—');
+  const parts=[server.feature_sds_enabled?'SDS on':'SDS off',server.feature_rssi_export?'RSSI on':'RSSI off'];
+  if(allow.length)parts.push('ISSI allow '+allow.join(', '));
+  if(block.length)parts.push('ISSI block '+block.join(', '));
+  if(!allow.length&&server.entity==='brew2'){
+    parts.push('missing local_issi_allowlist');
+    level='degraded';
+  }
+  return {level,detail,extra:parts.join(' · ')};
 }
 function classifyAsteriskHealth(data){
   const c=(data&&data.config)||{},rt=(data&&data.runtime)||{};
@@ -8200,6 +8281,19 @@ function renderHealthIntegrations(){
   const grid=document.getElementById('health-integrations-grid');
   if(!grid)return;
   grid.innerHTML='';
+  if(healthIntegrationState.brew){
+    const servers=(healthIntegrationState.brew.servers||[]).filter(function(server){return server.configured;});
+    if(servers.length){
+      servers.forEach(function(server){
+        const b=classifyBrewHealth(server);
+        grid.appendChild(integrationHealthCard(server.title||server.entity||'Brew','brew','blue',b.level,b.detail,b.extra));
+      });
+    } else {
+      grid.appendChild(integrationHealthCard('Brew','brew','blue','ok','not configured','No Brew backhaul section is active.'));
+    }
+  } else {
+    grid.appendChild(integrationHealthCard('Brew','brew','blue','degraded','status unavailable','Wait for the next refresh.'));
+  }
   if(healthIntegrationState.asterisk){
     const a=classifyAsteriskHealth(healthIntegrationState.asterisk);
     grid.appendChild(integrationHealthCard('Asterisk SIP','asterisk','',a.level,a.detail,a.extra));
@@ -8228,12 +8322,14 @@ function renderHealthIntegrations(){
 async function loadHealthIntegrations(){
   healthIntegrationState.lastLoad=Date.now();
   try{
-    const [ast,dap,geo,mesh]=await Promise.all([
+    const [brew,ast,dap,geo,mesh]=await Promise.all([
+      fetch('/api/brew/status').then(r=>r.ok?r.json():null).catch(()=>null),
       fetch('/api/asterisk/status').then(r=>r.ok?r.json():null).catch(()=>null),
       fetch('/api/dapnet').then(r=>r.ok?r.json():null).catch(()=>null),
       fetch('/api/geoalarm').then(r=>r.ok?r.json():null).catch(()=>null),
       fetch('/api/meshcom').then(r=>r.ok?r.json():null).catch(()=>null)
     ]);
+    healthIntegrationState.brew=brew;
     healthIntegrationState.asterisk=ast;
     healthIntegrationState.dapnet=dap;
     healthIntegrationState.geoalarm=geo;
@@ -8756,6 +8852,8 @@ async function boot(){
   loadSystemInfo();
   loadBtsInfoLegacy();  // TETRA BTS Details card on the default (Radios) page
   loadDualCarrier();    // Dual-Carrier ON/OFF toggle state
+  refreshBrewServerStatus(true);
+  setInterval(()=>refreshBrewServerStatus(true),10000);
   wifiProbeAvailable(); // toggles the WiFi nav item
   checkUpdate();
 }
