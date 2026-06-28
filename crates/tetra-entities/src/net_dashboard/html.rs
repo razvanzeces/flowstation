@@ -2930,6 +2930,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <div class="info-row"><div class="info-key" data-i18n="ast_remote">Remote Asterisk</div><div class="info-val" id="ast-remote">—</div></div>
             <div class="info-row"><div class="info-key" data-i18n="ast_rtp">RTP ports</div><div class="info-val" id="ast-rtp">—</div></div>
             <div class="info-row"><div class="info-key" data-i18n="ast_codec">Codec</div><div class="info-val" id="ast-codec">—</div></div>
+            <div class="info-row"><div class="info-key">Inbound setup timeout</div><div class="info-val" id="ast-setup-timeout">—</div></div>
             <div class="info-row"><div class="info-key" data-i18n="ast_last_rx">Last RX</div><div class="info-val" id="ast-last-rx">—</div></div>
             <div class="info-row"><div class="info-key" data-i18n="ast_last_tx">Last TX</div><div class="info-val" id="ast-last-tx">—</div></div>
             <div class="info-row"><div class="info-key" data-i18n="ast_last_error">Last error</div><div class="info-val" id="ast-last-error">—</div></div>
@@ -6318,6 +6319,7 @@ async function loadAsteriskStatus(){
     set('ast-remote', rt.remote||c.remote);
     set('ast-rtp', rt.rtp_port_range||c.rtp_port_range);
     set('ast-codec', rt.codec||c.codec);
+    set('ast-setup-timeout', (c.inbound_setup_timeout_secs??20)+'s');
     set('ast-last-rx', rt.last_rx);
     set('ast-last-tx', rt.last_tx);
     set('ast-last-error', rt.last_error);

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tetra_config::bluestation::{AsteriskRuntimeStatus, CfgAsterisk, SharedConfig};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
-use tetra_pdus::cmce::enums::call_timeout::CallTimeout;
+use tetra_pdus::cmce::enums::{call_timeout::CallTimeout, disconnect_cause::DisconnectCause};
 use tetra_saps::{
     SapMsg, SapMsgInner,
     control::call_control::{CallControl, NetworkCircuitCall},
@@ -147,7 +147,7 @@ pub struct AsteriskEntity {
     sip_socket: UdpSocket,
     remote: SocketAddr,
     dialogs: HashMap<Uuid, SipDialog>,
-    rtp_by_ts: HashMap<(u16, u8), Uuid>,
+    rtp_by_slot: HashMap<(u16, u8), Uuid>,
     next_rtp_port: u16,
     branch_counter: u64,
     register_call_id: String,
@@ -181,7 +181,7 @@ impl AsteriskEntity {
             sip_socket,
             remote,
             dialogs: HashMap::new(),
-            rtp_by_ts: HashMap::new(),
+            rtp_by_slot: HashMap::new(),
             branch_counter: 1,
             register_cseq: 1,
             register_auth: None,
@@ -853,7 +853,7 @@ impl AsteriskEntity {
             reason
         );
         self.send_invite_response(uuid, code, reason, None);
-        self.release_dialog(uuid, false);
+        self.release_dialog(uuid, false, None);
     }
 
     fn handle_inbound_alert(&mut self, uuid: Uuid) {
@@ -978,7 +978,7 @@ impl AsteriskEntity {
     fn mark_media_ready(&mut self, brew_uuid: Uuid, call_id: u16, carrier_num: u16, ts: u8) {
         if let Some(dialog) = self.dialogs.get_mut(&brew_uuid) {
             dialog.media_ready = Some((call_id, carrier_num, ts));
-            self.rtp_by_ts.insert((carrier_num, ts), brew_uuid);
+            self.rtp_by_slot.insert((carrier_num, ts), brew_uuid);
             tracing::info!(
                 "AsteriskEntity: media ready uuid={} call_id={} carrier={} ts={}",
                 brew_uuid,
@@ -989,9 +989,10 @@ impl AsteriskEntity {
         }
     }
 
-    fn release_dialog(&mut self, brew_uuid: Uuid, from_cmce: bool) {
-        let Some((cancel, media_ready, inbound)) = self.dialogs.get(&brew_uuid).map(|dialog| {
+    fn release_dialog(&mut self, brew_uuid: Uuid, from_cmce: bool, cause: Option<u8>) {
+        let Some((state, cancel, media_ready, inbound)) = self.dialogs.get(&brew_uuid).map(|dialog| {
             (
+                dialog.state,
                 !matches!(dialog.state, DialogState::Established),
                 dialog.media_ready,
                 dialog.inbound,
@@ -1001,13 +1002,22 @@ impl AsteriskEntity {
         };
         if from_cmce {
             if inbound && cancel {
-                self.send_invite_response(brew_uuid, 480, "Temporarily Unavailable", None);
+                let setup_timed_out = cause == Some(DisconnectCause::ExpiryOfTimer.into_raw() as u8);
+                if state == DialogState::Inviting && setup_timed_out {
+                    tracing::info!(
+                        "AsteriskEntity: inbound setup timed out before alert uuid={} -> SIP 404 Not Found",
+                        brew_uuid
+                    );
+                    self.send_invite_response(brew_uuid, 404, "Not Found", None);
+                } else {
+                    self.send_invite_response(brew_uuid, 480, "Temporarily Unavailable", None);
+                }
             } else {
                 self.send_bye_or_cancel(brew_uuid, cancel);
             }
         }
         if let Some((_, carrier_num, ts)) = media_ready {
-            self.rtp_by_ts.remove(&(carrier_num, ts));
+            self.rtp_by_slot.remove(&(carrier_num, ts));
         }
         if let Some(dialog) = self.dialogs.get_mut(&brew_uuid) {
             dialog.state = DialogState::Released;
@@ -1016,7 +1026,7 @@ impl AsteriskEntity {
     }
 
     fn handle_ul_voice(&mut self, prim: TmdCircuitDataInd) {
-        let Some(uuid) = self.rtp_by_ts.get(&(prim.carrier_num, prim.ts)).copied() else {
+        let Some(uuid) = self.rtp_by_slot.get(&(prim.carrier_num, prim.ts)).copied() else {
             return;
         };
         let mut send_result = None;
@@ -1138,14 +1148,14 @@ impl AsteriskEntity {
                     self.answer_request(&msg, addr, 200, "OK");
                     if let Some(uuid) = self.find_dialog_by_call_id(msg.call_id()) {
                         self.send_release_to_cmce(queue, uuid, 16);
-                        self.release_dialog(uuid, false);
+                        self.release_dialog(uuid, false, None);
                     }
                 }
                 "CANCEL" => {
                     self.answer_request(&msg, addr, 200, "OK");
                     if let Some(uuid) = self.find_dialog_by_call_id(msg.call_id()) {
                         self.send_release_to_cmce(queue, uuid, 16);
-                        self.release_dialog(uuid, false);
+                        self.release_dialog(uuid, false, None);
                     }
                 }
                 "ACK" => {}
@@ -1266,7 +1276,7 @@ impl AsteriskEntity {
                 }
                 self.set_error(format!("INVITE uuid={} failed with SIP {}", uuid, code));
                 self.send_release_to_cmce(queue, uuid, 34);
-                self.release_dialog(uuid, false);
+                self.release_dialog(uuid, false, None);
             }
             _ => {}
         }
@@ -1389,8 +1399,8 @@ impl TetraEntityTrait for AsteriskEntity {
             }) => {
                 self.mark_media_ready(brew_uuid, call_id, carrier_num, ts);
             }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitRelease { brew_uuid, .. }) => {
-                self.release_dialog(brew_uuid, true);
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitRelease { brew_uuid, cause }) => {
+                self.release_dialog(brew_uuid, true, Some(cause));
             }
             SapMsgInner::CmceCallControl(CallControl::NetworkCircuitDtmf { brew_uuid, data, .. }) => {
                 tracing::debug!("AsteriskEntity: DTMF for uuid={} bytes={} currently ignored", brew_uuid, data.len());
