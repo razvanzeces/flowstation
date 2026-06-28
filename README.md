@@ -38,6 +38,8 @@ Built in Rust on top of [tetra-bluestation](https://github.com/MidnightBlueLabs/
 | Max call duration with forced D-RELEASE | ✅ |
 | UL inactivity detection (forced TX-CEASED) | ✅ |
 | Echo service (local loopback, ISSI 999) | ✅ |
+| Asterisk SIP/RTP bridge for phone calls | ✅ |
+| EchoLink bridge with directory login and routing | ✅ |
 | Coordinated handover | 🔜 |
 | Emergency call pre-emption (priority calls pre-empt a lower-priority call when the cell is full) | ✅ |
 
@@ -49,11 +51,19 @@ Built in Rust on top of [tetra-bluestation](https://github.com/MidnightBlueLabs/
 | Home Mode Display (PID 220 callsign on radio screen) | ✅ |
 | Supplemental SDS broadcast (custom PID) | ✅ |
 | Emergency status alarm (U-STATUS) — persistent dashboard banner + Telegram alert, LOCAL-only | ✅ |
+| DAPNET receive/forward to SDS, TPG2200 Call-Out, Telegram | ✅ |
+| MeshCom extUDP messages with forwarding to SDS, SIP/Snom, Telegram | ✅ |
+| Snom XML display notifications for SDS, DAPNET, Telegram, MeshCom | ✅ |
+| SDS and DAPNET log paging, clear, text export | ✅ |
 
 ### Network & Interconnect
 | Feature | Status |
 |---|---|
 | Brew / TetraPack / BrandMeister interconnect | ✅ |
+| Asterisk PJSIP interconnect | ✅ |
+| DAPNET RWTH core receive path + Hampager API send endpoint | ✅ |
+| EchoLink directory/QSO integration | ✅ |
+| MeshCom external UDP bridge | ✅ |
 | UTC time broadcast (D-NWRK-BROADCAST) | ✅ |
 | Neighbor cell broadcast | ✅ |
 | T351 periodic re-registration | ✅ |
@@ -81,12 +91,127 @@ Built in Rust on top of [tetra-bluestation](https://github.com/MidnightBlueLabs/
 | Remote control via U-STATUS from radio (restart, shutdown, kick_all) | ✅ |
 | OTA update (pull latest, rebuild, restart — one button) | ✅ |
 | System tab: uptime, CPU, RAM, temperature, RF hardware info | ✅ |
+| Integration pages: Asterisk SIP, DAPNET, EchoLink, MeshCom, Telegram | ✅ |
+| Health view for Brew, Asterisk, DAPNET, EchoLink, MeshCom | ✅ |
+| Restart recovery cache for known radios after BS process restart | ✅ |
 
 ---
 
 ## Installation
 
 Full step-by-step installation guide (Raspberry Pi + LimeSDR): **[install.flowstation.dev](https://install.flowstation.dev)**
+
+### System dependencies
+
+FlowStation itself is a Rust application, but several integrations need native
+packages. On Debian, Ubuntu, and Raspberry Pi OS, start with:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  git curl ca-certificates build-essential pkg-config cmake clang \
+  libssl-dev \
+  soapysdr-tools libsoapysdr-dev \
+  uhd-host libuhd-dev \
+  libgsm1 libgsm1-dev
+```
+
+Install Rust if it is not present yet:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+. "$HOME/.cargo/env"
+rustup default stable
+```
+
+Optional integrations need these additional packages:
+
+```bash
+# Asterisk SIP, AMI, and Snom SIP NOTIFY support
+sudo apt install -y asterisk
+
+# EchoLink GSM-FR audio support
+sudo apt install -y libgsm1 libgsm1-dev
+```
+
+If you run FlowStation behind a firewall, open the ports that match your config:
+
+| Component | Default port(s) | Direction |
+|---|---:|---|
+| Dashboard | TCP 8080 | inbound |
+| FlowStation SIP | UDP/TCP 5062 | inbound from Asterisk |
+| FlowStation RTP | UDP 30000-30100 | inbound/outbound to Asterisk |
+| Asterisk SIP | UDP/TCP 5060 | outbound/inbound to PBX |
+| EchoLink audio/control | UDP 5198/5199 | inbound/outbound |
+| EchoLink directory | TCP 5200 | outbound |
+| MeshCom extUDP | UDP 1799 | inbound/outbound |
+| DAPNET RWTH core | TCP 43434 | outbound |
+
+### TETRA ACELP codec
+
+Voice bridges need a TETRA ACELP codec implementation so FlowStation can convert
+between TETRA ACELP and PCM audio. One tested implementation is
+`outerplane/tetra-codec`:
+
+```bash
+git clone https://github.com/outerplane/tetra-codec
+cd tetra-codec
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+sudo cmake --install build
+sudo ldconfig
+```
+
+After installation, verify both directions before enabling audio bridges:
+
+```bash
+# Exact command names depend on the codec project version.
+# Follow the codec project's README and confirm:
+# - TETRA ACELP -> PCM decoding works
+# - PCM -> TETRA ACELP encoding works
+```
+
+### Asterisk packages and modules
+
+Install Asterisk when using the SIP bridge or Snom display notifications:
+
+```bash
+sudo apt install -y asterisk
+sudo systemctl enable --now asterisk
+```
+
+For Snom XML display notifications, Asterisk must be able to load
+`res_pjsip_notify.so`. Some distributions refuse to load it if
+`pjsip_notify.conf` is missing, so create the file:
+
+```bash
+sudo touch /etc/asterisk/pjsip_notify.conf
+sudo asterisk -rx "module load res_pjsip_notify.so"
+sudo asterisk -rx "module show like pjsip_notify"
+```
+
+Enable AMI in `/etc/asterisk/manager.conf` for FlowStation's Snom notify worker:
+
+```ini
+[general]
+enabled = yes
+webenabled = no
+bindaddr = 127.0.0.1
+port = 5038
+
+[flowstation]
+secret = change-this-password
+read = system,call,log,verbose,command,agent,user
+write = system,call,command,agent,user,originate
+```
+
+Reload Asterisk after edits:
+
+```bash
+sudo asterisk -rx "manager reload"
+sudo asterisk -rx "module reload res_pjsip.so"
+sudo asterisk -rx "dialplan reload"
+```
 
 ### Quick start (from source)
 
@@ -151,6 +276,326 @@ port = 9000
 tls = true
 username = 123456700
 password = "your_password"
+```
+
+### Asterisk SIP/RTP bridge
+
+FlowStation can register as a PJSIP endpoint and bridge calls between TETRA
+terminals and Asterisk phones. Brew remains available in parallel; only configured
+service numbers are routed to Asterisk.
+
+```toml
+[asterisk]
+enabled = true
+outbound_prefix = "91"          # TETRA -> SIP: 91385 calls SIP user 385
+strip_outbound_prefix = true
+inbound_prefix = "T"            # SIP -> TETRA: Dial PJSIP/T2632585@flowstation
+register = true
+codec = "PCMU"                  # currently the only supported SIP codec
+service_numbers = ["385", "600", "601"]
+rtp_port_min = 30000
+rtp_port_max = 30100
+bind_addr = "0.0.0.0"
+bind_port = 5062
+remote_host = "127.0.0.1"
+remote_port = 5060
+contact_host = "127.0.0.1"
+from_domain = "127.0.0.1"
+local_user = "flowstation"
+auth_user = "flowstation"
+password = "change-me"
+realm = "asterisk"
+```
+
+Minimal Asterisk dialplan shape:
+
+```ini
+[intern]
+; Snom/internal phone -> TETRA
+_91X. => 1,Dial(PJSIP/T${EXTEN:2}@flowstation,60)
+ same => n,Hangup()
+
+[tetra]
+; TETRA -> Snom/internal phone
+385 => 1,Dial(PJSIP/snom385,30)
+ same => n,Hangup()
+```
+
+Minimal PJSIP endpoint shape for FlowStation:
+
+```ini
+; /etc/asterisk/pjsip.conf
+[flowstation]
+type=endpoint
+transport=transport-udp
+context=tetra
+disallow=all
+allow=ulaw
+aors=flowstation
+auth=flowstation
+
+[flowstation]
+type=auth
+auth_type=userpass
+username=flowstation
+password=change-me
+
+[flowstation]
+type=aor
+max_contacts=1
+remove_existing=yes
+qualify_frequency=30
+```
+
+`service_numbers` is deliberately an allowlist. If a TETRA user dials `91385`,
+FlowStation strips `91`, checks that `385` is listed, then calls SIP user `385`.
+
+### Telegram alerts
+
+Telegram is used both for station alerts and as a forwarding target for DAPNET
+and MeshCom. Create a bot with BotFather, send it one message, then detect or
+enter the chat ID in the dashboard.
+
+```toml
+[telegram]
+enabled = true
+bot_token = "123456789:AAExampleBotTokenStringFromBotFather"
+chat_ids = [123456789]
+alert_connect = true
+alert_disconnect = true
+alert_t351 = true
+alert_lip = true
+alert_backhaul = true
+alert_critical_logs = true
+alert_health = true
+```
+
+### DAPNET integration
+
+DAPNET receive uses the RWTH core feed. Messages can be routed independently to:
+
+- normal TETRA SDS
+- Motorola TPG2200 Call-Out / Type-4 SDS
+- Telegram
+
+RIC routing is important: a DAPNET RIC may be a single-user RIC or a group RIC.
+Use the route maps and allowlists to decide which RICs are forwarded and where.
+
+```toml
+[dapnet]
+enabled = true
+api_url = "https://hampager.de/api/calls"
+username = "YOURCALL"
+password = "your-hampager-password"
+poll_interval_secs = 30
+
+forward_sds = true
+forward_callout = false
+forward_telegram = true
+
+sds_source_issi = 9999
+sds_dest_issi = 0
+sds_dest_is_group = false
+ric_issi_routes = { "0632585" = 2632585 }
+ric_gssi_routes = { "0004520" = 80 }
+sds_allowed_rics = ["0632585", "0004520"]
+callout_allowed_rics = []
+telegram_allowed_rics = []
+
+callout_source_issi = 9999
+callout_dest_issi = 0
+callout_incident_base = 2
+callout_text_prefix = "DAPNET"
+
+telegram_prefix = "DAPNET"
+
+rwth_core_enabled = true
+rwth_core_host = "dapnet.afu.rwth-aachen.de"
+rwth_core_port = 43434
+rwth_core_device = "FlowStation"
+rwth_core_version = "1.0"
+rwth_core_callsign = "YOURCALL"
+rwth_core_authkey = "your-rwth-core-authkey"
+rwth_messages_limit = 100
+```
+
+Keep `password` and `rwth_core_authkey` private and out of commits.
+
+### Motorola TPG2200 ActionURL trigger
+
+FlowStation can expose a token-protected HTTP endpoint so a Snom function key
+can trigger a Motorola TPG2200 Call-Out. Every accepted request increments the
+incident number in memory and wraps after 256.
+
+```toml
+[tpg2200_action]
+enabled = true
+token = "long-random-token"
+source_issi = 9999
+dest_issi = 2632585
+incident_base = 1
+default_text = "ALARM"
+max_text_chars = 80
+```
+
+Snom ActionURL examples:
+
+```text
+http://<flowstation>:8080/api/action/tpg2200?token=<token>
+http://<flowstation>:8080/api/action/tpg2200?token=<token>&text=ALARM
+```
+
+### Snom XML display notifications
+
+FlowStation can show SDS, DAPNET, Telegram, and MeshCom messages on Snom phones
+as `SnomIPPhoneText`. FlowStation does not send direct SIP NOTIFY to the phone;
+it asks Asterisk over AMI to execute `PJSIPNotify`, so Asterisk remains the SIP
+sender.
+
+```toml
+[snom_notify]
+enabled = true
+ami_host = "127.0.0.1"
+ami_port = 5038
+ami_username = "flowstation"
+ami_password = "change-me"
+endpoints = ["385"]
+notify_sds = true
+notify_dapnet = true
+notify_telegram = true
+sds_directions = ["rx", "net", "tx"]
+dapnet_allowed_rics = []       # empty = all RICs
+sds_allowed_issis = []         # empty = all source/destination ISSIs
+title_prefix = "FlowStation"
+notify_event = "xml"
+content_type = "application/snomxml"
+subscription_state = "active;expires=30000"
+max_text_chars = 240
+connect_timeout_secs = 3
+```
+
+Snom phone settings must allow XML/minibrowser notifications. In Asterisk, make
+sure AMI is enabled and `res_pjsip_notify.so` loads.
+
+### EchoLink bridge
+
+EchoLink uses the public directory servers for login/status and UDP 5198/5199
+for QSO audio/control. GSM-FR audio requires `libgsm1-dev` at build time and the
+TETRA ACELP codec for TETRA audio conversion.
+
+```toml
+[echolink]
+enabled = true
+callsign = "YOURCALL-L"
+password = "your-echolink-password"
+location = "FlowStation"
+status_text = "FlowStation EchoLink bridge"
+directory_servers = ["servers.echolink.org", "backup.echolink.org"]
+directory_port = 5200
+bind_addr = "0.0.0.0"
+audio_port = 5198
+control_port = 5199
+
+inbound_enabled = true
+outbound_enabled = true
+outbound_prefix = "92"          # TETRA dial 92700 -> EchoLink service 700
+strip_outbound_prefix = true
+service_numbers = ["700"]
+routes = { "700" = "ECHOTEST" }
+allowed_callsigns = ["ECHOTEST"]
+allowed_node_ids = []
+auto_connect = ""
+reconnect_interval_secs = 30
+max_session_secs = 3600
+
+default_tetra_source_issi = 9999
+default_tetra_dest_issi = 2632585
+default_tetra_dest_is_group = false
+```
+
+The EchoLink dashboard page shows directory status, station count, QSO status,
+current route, last TX/error, and the downloaded directory list.
+
+### MeshCom external UDP bridge
+
+MeshCom nodes can send JSON packets to FlowStation using MeshCom extUDP. The
+dashboard shows live nodes and messages. Incoming MeshCom text messages can be
+forwarded independently to normal SDS, SIP/Snom, and Telegram.
+
+```toml
+[meshcom]
+enabled = true
+bind_addr = "0.0.0.0"
+bind_port = 1799
+tx_host = "255.255.255.255"
+tx_port = 1799
+allow_broadcast = true
+max_messages = 500
+max_nodes = 1000
+
+forward_sds = true
+forward_sip = true
+forward_telegram = true
+
+sds_source_issi = 9999
+sds_dest_issi = 2632585
+sds_dest_is_group = false
+sds_allowed_sources = []        # empty = all MeshCom src values
+
+sip_title_prefix = "MeshCom"
+sip_allowed_sources = []        # empty = all MeshCom src values
+
+telegram_prefix = "MeshCom"
+telegram_allowed_sources = []   # empty = all MeshCom src values
+```
+
+On the MeshCom node, enable extUDP and point it at the FlowStation host, for
+example:
+
+```bash
+--extudpip <flowstation-ip>
+--extudp on
+```
+
+### Restart recovery
+
+After a BS process restart, radios may still be RF-camped while FlowStation's
+in-memory registry is empty. Restart recovery persists a small terminal cache
+and sends D-LOCATION-UPDATE-COMMAND on startup so radios re-register quickly.
+
+```toml
+[recovery]
+enabled = true
+issi_allowlist = []             # empty = recover every cached ISSI
+cache_path = ""                 # default: <config-dir>/recovery_cache.json
+max_replay_attempts = 150
+replay_per_frame = 1
+debounce_secs = 5
+max_cached_issis = 1024
+```
+
+Leave this disabled on very busy cells unless you want the extra startup MCCH
+load.
+
+### Health monitor
+
+The health monitor samples the core loop, Brew, radios, queues, and integrations
+and exposes the result in the dashboard. It can optionally request a service
+restart if the core loop stalls.
+
+```toml
+[health]
+enabled = true
+snapshot_interval_secs = 5
+restart_on_core_stall = false
+core_stall_secs = 10
+restart_after_critical_secs = 30
+restart_cooldown_secs = 600
+radios_silent_secs = 900
+dl_queue_degraded = 64
+dl_queue_critical = 192
+sds_queue_degraded = 32
+sds_queue_critical = 128
 ```
 
 ### Access control
@@ -468,14 +913,10 @@ Asterisk AMI; it does not require the feature-gated SIP/RTP bridge.
 
 ### GeoAlarm
 
-GeoAlarm watches decoded TETRA LIP SDS positions. When an allowed device enters
-the configured radius around FlowStation, it can trigger TPG2200 Call-Out,
-normal SDS, Snom/SIP display notification, and Telegram forwarding. Blacklists
-always win; empty whitelists mean "all".
-
-The `*_meshcom*` toggles below are accepted by the parser but inert in this
-build: FlowStation does not ship a MeshCom source, so positions come from TETRA
-LIP only. Leave the MeshCom options at their defaults.
+GeoAlarm watches decoded TETRA LIP SDS positions and MeshCom position packets.
+When an allowed device enters the configured radius around FlowStation, it can
+trigger TPG2200 Call-Out, normal SDS, Snom/SIP display notification, and
+Telegram forwarding. Blacklists always win; empty whitelists mean "all".
 
 ```toml
 [geoalarm]
@@ -495,7 +936,7 @@ forward_telegram = false
 
 tetra_issi_whitelist = []       # empty = all TETRA ISSIs
 tetra_issi_blacklist = []
-meshcom_source_whitelist = []   # inert: no MeshCom source in this build
+meshcom_source_whitelist = []   # empty = all MeshCom sources
 meshcom_source_blacklist = []
 
 sds_source_issi = 9999
@@ -524,11 +965,40 @@ Available at `http://<bts-ip>:8080` when `[dashboard]` is configured.
 
 **Last Heard** — rolling history of call starts and SDS activity.
 
+**SDS Log** — received, transmitted, and network SDS history with paging, clear,
+and text export. LIP position entries are rendered as map links when coordinates
+are available.
+
 **Log** — live log stream with level filter and autoscroll.
+
+**DAPNET** — incoming DAPNET log, outgoing DAPNET send form, RIC routing, and
+per-target forwarding toggles for SDS, TPG2200 Call-Out, and Telegram. Includes
+paging, clear, and text export.
+
+**Asterisk SIP** — SIP account, RTP range, service-number routing, and Snom XML
+notification settings.
+
+**EchoLink** — directory login/status, QSO state, route configuration, directory
+station list, connect/disconnect controls, and last error.
+
+**MeshCom** — extUDP receive/transmit settings, live MeshCom node table, message
+log, and forwarding controls for SDS, SIP/Snom, and Telegram.
+
+**Maps** — OpenStreetMap overview combining TETRA LIP, MeshCom, GeoAlarm, and
+configured FlowStation coordinates. Position links throughout the dashboard
+open the corresponding location in this view.
+
+**Telegram** — bot token, chat detection, destination chat IDs, and alert
+category toggles.
+
+**Health** — station health plus Brew, Asterisk, DAPNET, EchoLink, and MeshCom
+integration status.
 
 **Config** — edit `config.toml` in-browser. Save, backup, restore. Edit inactive config profiles in a modal without switching them live.
 
-**System** — BTS and Brew connection status · uptime · hostname · CPU model, cores, load bar · RAM usage · CPU temperature · RF hardware info (SoapySDR probe) · SDS broadcast queue · OTA update button.
+**System** — BTS and Brew connection status · uptime · hostname · CPU model,
+cores, load bar · RAM usage · CPU temperature · RF hardware info (SoapySDR
+probe) · SDS broadcast queue · OTA update button.
 
 ---
 
