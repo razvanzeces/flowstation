@@ -4040,6 +4040,7 @@ fn serve_asterisk_status(stream: TcpStream, shared_config: &Option<tetra_config:
                     "remote": format!("{}:{}", c.asterisk.remote_host, c.asterisk.remote_port),
                     "rtp_port_range": format!("{}-{}", c.asterisk.rtp_port_min, c.asterisk.rtp_port_max),
                     "codec": c.asterisk.codec.clone(),
+                    "inbound_setup_timeout_secs": c.asterisk.inbound_setup_timeout_secs,
                     "outbound_prefix": c.asterisk.outbound_prefix.clone(),
                     "strip_outbound_prefix": c.asterisk.strip_outbound_prefix,
                     "service_numbers": c.asterisk.service_numbers.clone(),
