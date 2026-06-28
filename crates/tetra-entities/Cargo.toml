@@ -42,5 +42,9 @@ chrono-tz = { workspace = true }
 # both uses run on their own short-lived threads.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 
+# Unix-only: geteuid() for the OTA source-tree ownership check (dashboard build path).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [lints]
 workspace = true

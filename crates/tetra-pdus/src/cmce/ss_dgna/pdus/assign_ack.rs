@@ -5,6 +5,7 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use crate::cmce::ss_dgna::enums::ss_dgna_pdu_type::SsDgnaPduType;
 use crate::cmce::ss_dgna::enums::ss_type::SsType;
 use crate::cmce::ss_dgna::fields::group_assignment_ack::GroupAssignmentAck;
+use crate::cmce::ss_dgna::{read_terminating_obit, write_terminating_obit};
 
 /// ASSIGN ACK PDU, TS 100 392-12-22 V1.5.1 Table 19 (uplink, carried in
 /// U-FACILITY).
@@ -18,6 +19,8 @@ use crate::cmce::ss_dgna::fields::group_assignment_ack::GroupAssignmentAck;
 ///   SS-DGNA PDU type          5b  = 01000 (ASSIGN ACK)    [TS Table 74]
 ///   Number of groups          5b  = acks.len()
 ///   Group assignment Ack IE  var  repeated, Number of groups times  [Table 46]
+///   O-bit                     1b  = 0, terminates the SS PDU (EN 300 392-2
+///                                  annex E; see table E.4)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssignAck {
@@ -38,6 +41,7 @@ impl AssignAck {
         for _ in 0..number_of_groups {
             acks.push(GroupAssignmentAck::from_bitbuf(buf)?);
         }
+        read_terminating_obit(buf)?;
 
         Ok(AssignAck { acks })
     }
@@ -56,6 +60,7 @@ impl AssignAck {
         for ack in &self.acks {
             ack.to_bitbuf(buf)?;
         }
+        write_terminating_obit(buf);
         Ok(())
     }
 }

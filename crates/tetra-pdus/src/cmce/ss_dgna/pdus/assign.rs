@@ -5,6 +5,7 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use crate::cmce::ss_dgna::enums::ss_dgna_pdu_type::SsDgnaPduType;
 use crate::cmce::ss_dgna::enums::ss_type::SsType;
 use crate::cmce::ss_dgna::fields::group_assignment::GroupAssignment;
+use crate::cmce::ss_dgna::{read_terminating_obit, write_terminating_obit};
 
 /// ASSIGN PDU, TS 100 392-12-22 V1.5.1 Table 18 (downlink, carried in
 /// D-FACILITY).
@@ -20,6 +21,8 @@ use crate::cmce::ss_dgna::fields::group_assignment::GroupAssignment;
 ///   Number of groups           5b  = groups.len() (1..31)
 ///   Group assignment IE       var  repeated, Number of groups times  [Table 45]
 ///   Acknowledgement requested  1b  once, at the end
+///   O-bit                      1b  = 0, terminates the SS PDU (EN 300 392-2
+///                                   annex E; see table E.4)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assign {
@@ -38,12 +41,22 @@ impl Assign {
         expect_pdu_type!(pdu_type, SsDgnaPduType::Assign)?;
 
         let number_of_groups = buf.read_field(5, "number_of_groups")? as usize;
+        // An ASSIGN must carry at least one group (Table 18). 0 has no meaning and the encoder rejects
+        // it, so reject it on decode too — otherwise a parsed 0-group ASSIGN could never be
+        // re-serialized (decode-then-forward would fail).
+        if number_of_groups == 0 {
+            return Err(PduParseErr::InvalidValue {
+                field: "number_of_groups",
+                value: 0,
+            });
+        }
         let mut groups = Vec::with_capacity(number_of_groups);
         for _ in 0..number_of_groups {
             groups.push(GroupAssignment::from_bitbuf(buf)?);
         }
 
         let ack_requested = buf.read_field(1, "ack_requested")? == 1;
+        read_terminating_obit(buf)?;
 
         Ok(Assign { groups, ack_requested })
     }
@@ -63,6 +76,7 @@ impl Assign {
             group.to_bitbuf(buf)?;
         }
         buf.write_bits(self.ack_requested as u64, 1);
+        write_terminating_obit(buf);
         Ok(())
     }
 }
@@ -111,7 +125,8 @@ mod tests {
     /// (00001), then the single Group assignment IE and the trailing ack bit.
     ///
     /// IE: Group SSI = 1 (24b), ext present = 0, attachment mode = 000, O-bit = 0.
-    /// Trailing "Acknowledgement requested" = 1.
+    /// Trailing "Acknowledgement requested" = 1, then the SS PDU terminating
+    /// O-bit = 0 (EN 300 392-2 annex E table E.4).
     #[test]
     fn assign_exact_bits() {
         let pdu = Assign {
@@ -141,8 +156,28 @@ mod tests {
             "000",                      // Group identity attachment mode = 000
             "0",                        // O-bit (no type-2 optionals)
             "1",                        // Acknowledgement requested = 1
+            "0",                        // SS PDU terminating O-bit
         );
         assert_eq!(buf.to_bitstr(), expected);
+    }
+
+    /// A 0-group ASSIGN must be rejected on decode (the encoder already rejects it). Build the header
+    /// by hand with Number of groups = 0 and assert the parse fails with InvalidValue.
+    #[test]
+    fn assign_rejects_zero_groups() {
+        let mut buf = BitBuffer::new_autoexpand(8);
+        buf.write_bits(SsType::Dgna.into_raw(), 6);
+        buf.write_bits(SsDgnaPduType::Assign.into_raw(), 5);
+        buf.write_bits(0, 5); // Number of groups = 0.
+        buf.write_bits(0, 1); // ack_requested (unreached, but keep the buffer non-empty).
+        buf.seek(0);
+        match Assign::from_bitbuf(&mut buf) {
+            Err(PduParseErr::InvalidValue { field, value }) => {
+                assert_eq!(field, "number_of_groups");
+                assert_eq!(value, 0);
+            }
+            other => panic!("expected InvalidValue for 0 groups, got {other:?}"),
+        }
     }
 
     /// Type-2 framing: mnemonic present vs absent must produce the right O/P

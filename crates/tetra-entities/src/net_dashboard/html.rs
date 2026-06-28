@@ -4752,20 +4752,28 @@ async function wifiLoadSaved(){
       el.innerHTML = `<div class="wifi-list-empty">${t('wifi_no_saved')||'No saved networks.'}</div>`;
       return;
     }
-    el.innerHTML = wifiState.saved.map(p => `
-      <div class="wifi-row ${p.active?'active':''}">
-        <div class="wifi-row-main">
-          <div class="wifi-row-ssid">
-            ${escHtml(p.name)}
-            ${p.active ? `<span class="wifi-tag active">${t('wifi_connected')||'CONNECTED'}</span>` : ''}
-          </div>
-        </div>
-        <div class="wifi-row-actions">
-          ${p.active ? '' : `<button class="btn btn-sm" onclick="wifiConnectSaved('${escAttr(p.uuid)}')">${t('wifi_connect')||'Connect'}</button>`}
-          <button class="btn btn-sm btn-danger" onclick="wifiForget('${escAttr(p.uuid)}','${escAttr(p.name)}')">${t('wifi_forget')||'Forget'}</button>
-        </div>
-      </div>
-    `).join('');
+    // Build rows with the DOM so the profile name/uuid never enter an inline handler string: a saved
+    // SSID/name is raw 802.11 data set by whoever broadcast the AP, and an inline onclick would let it
+    // break out of the attribute and run as script. textContent + closures keep it inert.
+    el.innerHTML = '';
+    wifiState.saved.forEach(p => {
+      const row=document.createElement('div');
+      row.className='wifi-row'+(p.active?' active':'');
+      const main=document.createElement('div');main.className='wifi-row-main';
+      const ssid=document.createElement('div');ssid.className='wifi-row-ssid';
+      ssid.appendChild(document.createTextNode(p.name||''));
+      if(p.active){const tag=document.createElement('span');tag.className='wifi-tag active';tag.textContent=' '+(t('wifi_connected')||'CONNECTED');ssid.appendChild(tag);}
+      main.appendChild(ssid);row.appendChild(main);
+      const actions=document.createElement('div');actions.className='wifi-row-actions';
+      if(!p.active){
+        const b=document.createElement('button');b.className='btn btn-sm';b.textContent=t('wifi_connect')||'Connect';
+        b.onclick=()=>wifiConnectSaved(p.uuid);actions.appendChild(b);
+      }
+      const forget=document.createElement('button');forget.className='btn btn-sm btn-danger';forget.textContent=t('wifi_forget')||'Forget';
+      forget.onclick=()=>wifiForget(p.uuid,p.name);actions.appendChild(forget);
+      row.appendChild(actions);
+      el.appendChild(row);
+    });
   }catch(e){
     el.innerHTML = `<div class="wifi-list-empty" style="color:var(--danger)">${escHtml(String(e))}</div>`;
   }
@@ -4784,38 +4792,42 @@ async function wifiScan(){
       el.innerHTML = `<div class="wifi-list-empty">${t('wifi_no_networks')||'No networks in range.'}</div>`;
       return;
     }
-    el.innerHTML = wifiState.scan.map(n => {
-      const bars = wifiSignalBars(n.signal);
+    // Build rows with the DOM. A scanned SSID is raw 802.11 data from whoever is broadcasting in
+    // range, so it must never enter an inline handler string — textContent + onclick closures keep it
+    // inert. wifiSignalBars() is static, trusted markup, so it stays as innerHTML on its own cell.
+    el.innerHTML = '';
+    wifiState.scan.forEach(n => {
       const isOpen = !n.security || n.security === '--';
       const secCls = isOpen ? 'sec open' : 'sec';
       const secLabel = isOpen ? (t('wifi_open')||'OPEN') : n.security;
-      const tags = [];
-      if(n.active) tags.push(`<span class="wifi-tag active">${t('wifi_connected')||'CONNECTED'}</span>`);
-      else if(n.saved) tags.push(`<span class="wifi-tag saved">${t('wifi_saved_tag')||'SAVED'}</span>`);
-      // Action button differs by state: if connected, no action; if saved,
-      // quick reconnect; otherwise prompt for password.
-      let actionBtn = '';
+      const row=document.createElement('div');
+      row.className='wifi-row'+(n.active?' active':'');
+
+      const sig=document.createElement('div');sig.className='wifi-row-signal';sig.innerHTML=wifiSignalBars(n.signal);row.appendChild(sig);
+
+      const main=document.createElement('div');main.className='wifi-row-main';
+      const ssid=document.createElement('div');ssid.className='wifi-row-ssid';
+      ssid.appendChild(document.createTextNode(n.ssid||''));
+      if(n.active){const tag=document.createElement('span');tag.className='wifi-tag active';tag.textContent=' '+(t('wifi_connected')||'CONNECTED');ssid.appendChild(tag);}
+      else if(n.saved){const tag=document.createElement('span');tag.className='wifi-tag saved';tag.textContent=' '+(t('wifi_saved_tag')||'SAVED');ssid.appendChild(tag);}
+      main.appendChild(ssid);
+      const meta=document.createElement('div');meta.className='wifi-row-meta';
+      const sg=document.createElement('span');sg.textContent=n.signal+'%';meta.appendChild(sg);
+      const sec=document.createElement('span');sec.className=secCls;sec.textContent=secLabel;meta.appendChild(sec);
+      main.appendChild(meta);
+      row.appendChild(main);
+
+      // Action button differs by state: connected = none; saved = quick reconnect; else prompt for password.
+      const actions=document.createElement('div');actions.className='wifi-row-actions';
       if(!n.active){
-        if(n.saved){
-          actionBtn = `<button class="btn btn-sm" onclick="wifiConnectBySsid('${escAttr(n.ssid)}')">${t('wifi_connect')||'Connect'}</button>`;
-        } else {
-          actionBtn = `<button class="btn btn-sm btn-primary" onclick="wifiShowPasswordModal('${escAttr(n.ssid)}',${isOpen?'true':'false'})">${t('wifi_connect')||'Connect'}</button>`;
-        }
+        const b=document.createElement('button');
+        if(n.saved){b.className='btn btn-sm';b.textContent=t('wifi_connect')||'Connect';b.onclick=()=>wifiConnectBySsid(n.ssid);}
+        else{b.className='btn btn-sm btn-primary';b.textContent=t('wifi_connect')||'Connect';b.onclick=()=>wifiShowPasswordModal(n.ssid,isOpen);}
+        actions.appendChild(b);
       }
-      return `
-        <div class="wifi-row ${n.active?'active':''}">
-          <div class="wifi-row-signal">${bars}</div>
-          <div class="wifi-row-main">
-            <div class="wifi-row-ssid">${escHtml(n.ssid)} ${tags.join(' ')}</div>
-            <div class="wifi-row-meta">
-              <span>${n.signal}%</span>
-              <span class="${secCls}">${escHtml(secLabel)}</span>
-            </div>
-          </div>
-          <div class="wifi-row-actions">${actionBtn}</div>
-        </div>
-      `;
-    }).join('');
+      row.appendChild(actions);
+      el.appendChild(row);
+    });
   }catch(e){
     el.innerHTML = `<div class="wifi-list-empty" style="color:var(--danger)">${escHtml(String(e))}</div>`;
   }
@@ -5015,7 +5027,9 @@ function renderEmergencyBanner(){
     // callsigns[issi] is an object {cs, fl} (see idCell/tsIssiText), not a string.
     const c=callsigns[e.issi];
     const fl=(c&&c.fl)?c.fl+' ':'';
-    const who=(c&&c.cs)?(e.issi+' · '+fl+c.cs):(''+e.issi);
+    // Escape the callsign before it goes into innerHTML below, mirroring idCell. The issi is numeric
+    // and fl is a flag emoji derived from the prefix, so only the callsign needs escaping.
+    const who=(c&&c.cs)?(e.issi+' · '+fl+escHtml(c.cs)):(''+e.issi);
     return `<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.18);border-radius:4px;padding:2px 8px"><code style="color:#fff">${who}</code><button onclick="clearEmergency(${e.issi})" style="padding:1px 7px;background:#fff;color:var(--danger);border:none;border-radius:3px;font-weight:600;cursor:pointer;font-size:11px">${t('emg_clear')}</button></span>`;
   }).join('');
 }
@@ -5256,6 +5270,10 @@ function rssiPct(v){if(v==null)return 0;return Math.max(0,Math.min(100,(v+60)/50
 // usable=info, marginal=warn, weak/none=danger/idle.
 function rssiGaugeClass(v){if(v==null)return'is-idle';if(v>-20)return'';if(v>-30)return'is-info';if(v>-40)return'is-warn';return'is-danger';}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// Attribute-safe escape: like escHtml but also encodes the quote characters, so a value placed inside
+// a double- or single-quoted HTML attribute (e.g. title="...") cannot close the attribute and inject
+// an event handler. Use this for attribute values; escHtml is only safe in element text.
+function escHtmlAttr(s){return escHtml(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocksCarrier();}
 
 // ── TS Visualizer ─────────────────────────────────────────────────────────
@@ -7689,7 +7707,7 @@ function handleSysHealth(msg){
                : 2;
     const valColor = sensorColor(s.kind, s.value);
     return `<div class="sys-sensor-tile">
-      <div class="sys-sensor-label" title="${escHtml(s.name)}">${escHtml(s.name)}</div>
+      <div class="sys-sensor-label" title="${escHtmlAttr(s.name)}">${escHtml(s.name)}</div>
       <div class="sys-sensor-value" style="color:${valColor}">${s.value.toFixed(dp)} <span class="sys-sensor-unit">${unit}</span></div>
     </div>`;
   }).join('');

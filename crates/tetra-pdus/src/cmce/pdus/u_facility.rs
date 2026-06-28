@@ -18,12 +18,25 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 ///   Number of SS PDUs  4b  = 0001 (v1)
 ///   Length indicator  11b  = bit-length of the SS PDU
 ///   SS PDU contents    Nb  = the SS-DGNA PDU
+///   O-bit              1b  = 0  (terminates the U-FACILITY PDU)
 /// ```
 ///
 /// Empty-body back-compat works exactly as in D-FACILITY: a legacy / non-DGNA
 /// U-FACILITY carries no SS PDU and keeps the original single trailing
-/// O-bit = 0 convention; a populated container follows Table 4 with no trailing
-/// M-bit. The two are distinguished on parse by the Number-of-SS-PDUs field.
+/// O-bit = 0 convention; a populated container follows Table 4. The two are
+/// distinguished on parse by the Number-of-SS-PDUs field.
+///
+/// The container is terminated by an O-bit = 0, symmetric with D-FACILITY (Annex
+/// E Table E.4). We always emit it. On parse we stay tolerant: a real MS's
+/// ASSIGN-ACK / DEASSIGN-ACK framing of this trailing bit is not yet confirmed
+/// on-air, so the bit is consumed only when present and a peer that omits it is
+/// still accepted.
+///
+/// The empty-vs-container split is a value heuristic, not an explicit
+/// presence/length discriminator — EN 300 392-9 V1.7.1 Table 4 carries none. We
+/// support exactly two body shapes: an empty body (a single O-bit = 0) and a
+/// Table-4 container holding one SS-DGNA PDU. Any other SS body is rejected
+/// downstream by `SsType` (only 22 = DGNA is accepted).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UFacility {
     /// The SS-DGNA SS-PDU container, or `None` for a legacy empty body.
@@ -87,6 +100,12 @@ impl UFacility {
             });
         }
 
+        // O-bit terminating the U-FACILITY PDU (symmetric with D-FACILITY; EN 300 392-2 V2.4.1 Annex E
+        // Table E.4). We emit it on the write side, but stay tolerant on parse: a real MS's ASSIGN-ACK
+        // / DEASSIGN-ACK framing of this trailing bit is not yet confirmed on-air, so consume it only
+        // if a bit remains and do NOT reject a peer that omits it. A spurious set bit is ignored.
+        let _ = buffer.peek_bits(1).map(|_| delimiters::read_obit(buffer));
+
         Ok(UFacility {
             facility: Some(UFacilitySsBody { routeing, ss_pdu }),
         })
@@ -121,6 +140,11 @@ impl UFacility {
         buffer.write_bits(ss_pdu_bits as u64, 11);
         scratch.seek(0);
         buffer.copy_bits(&mut scratch, ss_pdu_bits);
+
+        // O-bit terminating the U-FACILITY PDU itself, symmetric with D-FACILITY (EN 300 392-2 V2.4.1
+        // Annex E Table E.4). The Length indicator above counts only the inner SS PDU, so this bit
+        // sits after the copied body.
+        delimiters::write_obit(buffer, 0);
 
         Ok(())
     }
@@ -190,5 +214,76 @@ mod tests {
         buf.seek(0);
         let parsed = UFacility::from_bitbuf(&mut buf).expect("parse");
         assert_eq!(parsed, pdu);
+    }
+
+    /// The container is terminated by an O-bit = 0, symmetric with D-FACILITY (Annex E Table E.4):
+    /// the serialized form is exactly one bit longer than the framing + inner SS PDU, and that bit is
+    /// 0. The PDU still round-trips.
+    #[test]
+    fn u_facility_emits_terminating_obit() {
+        let ack = AssignAck {
+            acks: vec![GroupAssignmentAck {
+                group_ssi: 91,
+                group_extension: None,
+                result_of_assignment: ResultOfAssignment::Accepted,
+                result_of_attachment: ResultOfAttachment::Attached,
+            }],
+        };
+
+        let mut inner = BitBuffer::new_autoexpand(32);
+        ack.to_bitbuf(&mut inner).expect("serialize inner");
+        let inner_bits = inner.get_pos();
+
+        let pdu = UFacility {
+            facility: Some(UFacilitySsBody {
+                routeing: 0,
+                ss_pdu: SsDgnaPdu::AssignAck(ack),
+            }),
+        };
+
+        let mut buf = BitBuffer::new_autoexpand(64);
+        pdu.to_bitbuf(&mut buf).expect("serialize");
+        // 5 (PDU type) + 2 (routeing) + 4 (num SS PDUs) + 11 (length) + inner + 1 (terminating O-bit).
+        let framed = 5 + 2 + 4 + 11 + inner_bits;
+        assert_eq!(buf.get_pos(), framed + 1, "one trailing O-bit beyond the framed body");
+        let bits = buf.to_bitstr();
+        assert_eq!(&bits[framed..], "0", "terminating O-bit is 0");
+
+        buf.seek(0);
+        assert_eq!(UFacility::from_bitbuf(&mut buf).expect("parse"), pdu);
+    }
+
+    /// Parse is tolerant of a peer that omits the trailing O-bit (the legacy 67-bit short form): the
+    /// container without the terminating bit still parses to the same value. This keeps the BS able
+    /// to read a real radio's ASSIGN-ACK whichever form it sends.
+    #[test]
+    fn u_facility_parses_without_trailing_obit() {
+        let ack = AssignAck {
+            acks: vec![GroupAssignmentAck {
+                group_ssi: 91,
+                group_extension: None,
+                result_of_assignment: ResultOfAssignment::Accepted,
+                result_of_attachment: ResultOfAttachment::Attached,
+            }],
+        };
+        let pdu = UFacility {
+            facility: Some(UFacilitySsBody {
+                routeing: 0,
+                ss_pdu: SsDgnaPdu::AssignAck(ack),
+            }),
+        };
+
+        // Serialize, then drop the final O-bit to reconstruct the short form.
+        let mut full = BitBuffer::new_autoexpand(64);
+        pdu.to_bitbuf(&mut full).expect("serialize");
+        let bits = full.to_bitstr();
+        let short = &bits[..bits.len() - 1];
+
+        let mut buf = BitBuffer::new_autoexpand(64);
+        for ch in short.chars() {
+            buf.write_bit(if ch == '1' { 1 } else { 0 });
+        }
+        buf.seek(0);
+        assert_eq!(UFacility::from_bitbuf(&mut buf).expect("parse"), pdu);
     }
 }
