@@ -141,6 +141,14 @@ impl GroupAssignment {
 
         // Type-2 elements, each preceded by its P-bit, in Table 45 order.
         typed::write_type2_generic(obit, buf, self.class_of_usage.map(|v| v as u64), 3);
+        // FIXME(C2): the mnemonic group name is framed here as P-bit + 6-bit octet count + N octets,
+        // the same opaque shape as the security / additional-group fields. A display name is really a
+        // TETRA text string (coding-scheme byte + length, like net_brew's SS-TPI mnemonic), so the
+        // octet-count framing is likely wrong and, since the mnemonic precedes the remaining type-2
+        // elements, a populated one would shift every following P-bit. This is latent: the only
+        // constructor (ss_bs.rs) hard-codes mnemonic = None, so it is never emitted on-air. Before any
+        // path populates it, give the mnemonic its own writer using the TETRA text format and verify
+        // the exact widths against TS 100 392-12-22 V1.5.1 Table 45.
         Self::write_type2_octets(obit, buf, &self.mnemonic)?;
         Self::write_type2_octets(obit, buf, &self.security_related_information)?;
         Self::write_type2_octets(obit, buf, &self.additional_group_information)?;

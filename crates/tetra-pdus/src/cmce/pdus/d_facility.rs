@@ -30,6 +30,12 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 /// Empty-body back-compat: a non-DGNA / legacy D-FACILITY carries no SS PDU and is just a single
 /// trailing O-bit = 0 (`facility = None`). On parse the two are distinguished by the 4-bit Number of
 /// SS PDUs: a populated container has it >= 1, an empty body cannot supply those 4 bits.
+///
+/// This split is a value heuristic, not an explicit presence/length discriminator — EN 300 392-9
+/// V1.7.1 Table 4 carries none. We support exactly two body shapes: an empty body (a single O-bit =
+/// 0) and a Table-4 container holding one SS-DGNA PDU. Any other SS body (a non-DGNA SS PDU) is
+/// rejected downstream by `SsType` (only 22 = DGNA is accepted), so the heuristic never has to
+/// disambiguate an SS body we don't implement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFacility {
     /// The SS-DGNA SS-PDU container, or `None` for a legacy empty body.

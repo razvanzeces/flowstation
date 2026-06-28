@@ -213,19 +213,6 @@ impl GroupIdentityAttachmentMode {
             GroupIdentityAttachmentMode::NotAttachedMayNotRequest => 5,
         }
     }
-
-    /// True for the attachment modes (0..3) that EN 300 392-2 cl.16.10.6 pairs
-    /// with a Class of usage field in the Group assignment IE (Table 45). The
-    /// "not attached" modes (4, 5) carry no class of usage.
-    pub fn carries_class_of_usage(self) -> bool {
-        matches!(
-            self,
-            GroupIdentityAttachmentMode::AttachedPermanently
-                | GroupIdentityAttachmentMode::AttachRequestedNextItsiAttach
-                | GroupIdentityAttachmentMode::AttachNotAllowedNextItsiAttach
-                | GroupIdentityAttachmentMode::AttachRequestedNextLocationUpdate
-        )
-    }
 }
 
 impl From<GroupIdentityAttachmentMode> for u64 {
