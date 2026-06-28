@@ -7,9 +7,10 @@ use toml::Value;
 pub struct CfgDashboard {
     /// Port to listen on (default: 8080)
     pub port: u16,
-    /// Bind address (default: 127.0.0.1 — loopback only).
-    /// Off-host access is opt-in: set this to an interface address (or 0.0.0.0) explicitly, and
-    /// set username/password so the dashboard is not left open on the LAN.
+    /// Bind address (default: 0.0.0.0 — all interfaces, so the dashboard is reachable from the LAN).
+    /// Off-host access without credentials is read-only: control commands are only honoured from
+    /// localhost or an authenticated session. Set username/password to allow off-host control, or set
+    /// this to 127.0.0.1 to keep the dashboard on this host only.
     pub bind: String,
     /// Optional explicit path to the FlowStation git source directory used for OTA updates.
     /// When unset, the dashboard auto-detects by:
@@ -39,7 +40,7 @@ impl Default for CfgDashboard {
     fn default() -> Self {
         Self {
             port: 8080,
-            bind: "127.0.0.1".to_string(),
+            bind: "0.0.0.0".to_string(),
             source_dir: None,
             username: None,
             password: None,
@@ -73,10 +74,12 @@ fn default_port() -> u16 {
     8080
 }
 fn default_bind() -> String {
-    // Loopback by default: a config that enables [dashboard] without an explicit bind stays
-    // localhost-only. An operator who wants LAN access sets `bind` (and credentials) deliberately.
-    // Configs that already set `bind` keep their value.
-    "127.0.0.1".to_string()
+    // All interfaces by default. The dashboard is normally opened from another machine on the LAN, so
+    // a loopback-only default locks out the common setup and breaks every box that didn't set `bind`
+    // explicitly. Control over the wire is still localhost-or-authenticated only (see the gate in
+    // net_dashboard::server), so off-host without credentials is read-only — a wide default exposes a
+    // view, not the control surface. Set `bind = "127.0.0.1"` to keep it on this host.
+    "0.0.0.0".to_string()
 }
 
 pub fn apply_dashboard_patch(src: CfgDashboardDto) -> Result<CfgDashboard, String> {

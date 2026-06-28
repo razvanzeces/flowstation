@@ -1596,30 +1596,34 @@ fn handle_connection(
         }
     }
 
-    // No-auth hard gate: when no credentials are configured the dashboard is open, so any mutating
-    // request (a POST, or the WebSocket upgrade that drives restart/shutdown/dgna/sds/kick) must come
-    // from localhost. Read-only GETs are still served so a LAN overview keeps working. This is
-    // independent of the cookie gate above (which is inert without auth) and closes the "open
-    // dashboard on the LAN can change config / restart the BS" path even if the operator binds wide.
-    if auth.is_none() && !peer_is_loopback {
-        let is_ws_upgrade = req_line.starts_with("GET ")
-            && header_str
-                .lines()
-                .any(|l| l.to_ascii_lowercase().starts_with("upgrade:") && l.to_ascii_lowercase().contains("websocket"));
-        let is_mutating = req_line.starts_with("POST ") || is_ws_upgrade;
-        if is_mutating {
-            drain_http_headers(&mut stream);
-            tracing::warn!(
-                "Dashboard: rejected unauthenticated off-host {} (mutations are localhost-only without auth)",
-                req_line
-            );
-            http_response(stream, 403, "Forbidden — set dashboard credentials for off-host control");
-            return;
-        }
+    // No-auth gate: when no credentials are configured the dashboard is open, so a mutating HTTP
+    // request (a POST that writes config, triggers an update, kicks a radio, etc.) must come from
+    // localhost. Read-only GETs are still served so a LAN overview keeps working. This is independent
+    // of the cookie gate above (which is inert without auth) and closes the "open dashboard on the
+    // LAN can change config / restart the BS" path even if the operator binds wide.
+    //
+    // The /ws WebSocket is intentionally NOT blocked here. It is the dashboard's live read-only feed
+    // (the initial snapshot plus every push: calls, traffic, registered radios, health), so 403-ing
+    // the upgrade left every off-host browser staring at an empty page with the BS shown as
+    // unavailable. We let the upgrade through and refuse the control commands that ride over it
+    // (restart/shutdown/dgna/sds/kick) inside handle_ws_command instead, so an off-host client without
+    // auth still gets a read-only view but cannot drive the stack.
+    if auth.is_none() && !peer_is_loopback && req_line.starts_with("POST ") {
+        drain_http_headers(&mut stream);
+        tracing::warn!(
+            "Dashboard: rejected unauthenticated off-host {} (mutations are localhost-only without auth)",
+            req_line
+        );
+        http_response(stream, 403, "Forbidden — set dashboard credentials for off-host control");
+        return;
     }
 
     if req_line.contains("/ws") {
-        handle_ws(stream, state, clients, cmd_tx, update_state, auth);
+        // The WS opens for everyone who reached this far (so the live read-only feed works off-host),
+        // but control commands over it are only honoured for an authenticated session or a localhost
+        // peer — same line the POST gate above draws.
+        let ws_control_allowed = auth.is_some() || peer_is_loopback;
+        handle_ws(stream, state, clients, cmd_tx, update_state, ws_control_allowed);
     } else if req_line.contains("GET /api/system/brightness") {
         // Backlight status probe (FH-FEAT-008) — lets the UI hide the slider on a panel-less host.
         drain_http_headers(&mut stream);
@@ -2256,13 +2260,13 @@ fn handle_ws(
     clients: WsClients,
     cmd_tx: Arc<Mutex<Option<CmdSender>>>,
     update_state: SharedUpdateState,
-    _auth: Option<(String, String)>,
+    control_allowed: bool,
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(50)));
 
-    // Note: cookie-based auth is checked by handle_connection BEFORE we get here,
-    // so we don't need to re-validate during the WS upgrade. The cookie travels on
-    // the Upgrade request and was already verified against the session store.
+    // Note: cookie-based auth is checked by handle_connection BEFORE we get here, so we don't
+    // re-validate during the WS upgrade. `control_allowed` carries the off-host/no-auth decision made
+    // there: when false the connection is read-only and inbound control commands are dropped.
     let callback = move |_req: &Request, res: Response| -> Result<Response, _> { Ok(res) };
 
     let mut ws = match accept_hdr(stream, callback) {
@@ -2332,7 +2336,7 @@ fn handle_ws(
         // Then check for inbound messages from browser
         match ws.read() {
             Ok(Message::Text(text)) => {
-                handle_ws_command(&text, &state, &cmd_tx, &update_state);
+                handle_ws_command(&text, &state, &cmd_tx, &update_state, control_allowed);
             }
             Ok(Message::Close(_)) => break,
             Ok(Message::Ping(data)) => {
@@ -2346,10 +2350,34 @@ fn handle_ws(
     }
 }
 
-fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Option<CmdSender>>>, update_state: &SharedUpdateState) {
+fn handle_ws_command(
+    text: &str,
+    state: &DashboardState,
+    cmd_tx: &Arc<Mutex<Option<CmdSender>>>,
+    update_state: &SharedUpdateState,
+    control_allowed: bool,
+) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
         return;
     };
+
+    let cmd_type = v.get("type").and_then(|t| t.as_str());
+
+    // A read-only connection (off-host without auth) still receives every live update, but it cannot
+    // drive the stack: drop the control commands here, mirroring the POST gate in handle_connection.
+    // `subscribe` and any unknown type are no-ops, so they fall through to the match below untouched.
+    if !control_allowed
+        && matches!(
+            cmd_type,
+            Some("kick" | "restart" | "shutdown" | "update" | "sds" | "dgna" | "emergency_clear")
+        )
+    {
+        tracing::warn!(
+            "Dashboard: ignored off-host WS '{}' command (set credentials for off-host control)",
+            cmd_type.unwrap_or("")
+        );
+        return;
+    }
 
     let send_cmd = |cmd: ControlCommand| -> bool {
         if let Ok(guard) = cmd_tx.lock() {
@@ -2360,7 +2388,7 @@ fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Opti
         false
     };
 
-    match v.get("type").and_then(|t| t.as_str()) {
+    match cmd_type {
         Some("kick") => {
             let issi = v.get("issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             if issi == 0 {
@@ -5229,6 +5257,36 @@ enabled = true
             server_version: 0,
         });
         assert_eq!(v(), 1, "reconnect reporting v0 must not downgrade a confirmed v1");
+    }
+
+    /// FH-BUG-055/056 regression: an off-host client without auth gets a read-only WS. Live data
+    /// still streams to it (the upgrade succeeds — that path is what was broken), but a control
+    /// command travelling over the socket must be dropped rather than dispatched. The same command
+    /// from a localhost or authenticated peer (control_allowed = true) reaches the dispatcher.
+    #[test]
+    fn offhost_ws_control_is_read_only() {
+        use super::{UpdateState, handle_ws_command};
+        use crate::net_control::commands::ControlCommand;
+        use std::sync::{Arc, Mutex};
+
+        let server = DashboardServer::new("/tmp/fs_ws_gate_test_config.toml".to_string());
+        let state = server.state.clone();
+        let update_state = Arc::new(Mutex::new(UpdateState::new()));
+        let (tx, rx) = crossbeam_channel::unbounded::<ControlCommand>();
+        let cmd_tx = Arc::new(Mutex::new(Some(tx)));
+
+        let kick = r#"{"type":"kick","issi":123}"#;
+
+        // Read-only peer: the kick is ignored, nothing reaches the control dispatcher.
+        handle_ws_command(kick, &state, &cmd_tx, &update_state, false);
+        assert!(rx.try_recv().is_err(), "off-host kick must not be dispatched");
+
+        // Localhost / authenticated peer: the same kick is dispatched.
+        handle_ws_command(kick, &state, &cmd_tx, &update_state, true);
+        match rx.try_recv() {
+            Ok(ControlCommand::KickMs { issi }) => assert_eq!(issi, 123),
+            other => panic!("expected KickMs dispatch, got {other:?}"),
+        }
     }
 
     #[test]
