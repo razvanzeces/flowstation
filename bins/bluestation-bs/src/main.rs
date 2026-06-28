@@ -38,6 +38,13 @@ use tetra_entities::{
     umac::umac_bs::UmacBs,
 };
 
+/// True if the dashboard bind address resolves to a loopback interface only.
+/// Used to decide whether to warn about an unauthenticated, off-host-reachable dashboard.
+/// A non-parseable / hostname bind is treated as non-loopback (warn rather than stay silent).
+fn bind_is_loopback(bind: &str) -> bool {
+    bind.parse::<std::net::IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+}
+
 /// Result of loading config — either primary or fallback.
 enum ConfigLoadResult {
     Primary(StackConfig),
@@ -433,6 +440,17 @@ fn main() {
             if let (Some(user), Some(pass)) = (dash_cfg.username.clone(), dash_cfg.password.clone()) {
                 tracing::info!("Dashboard: HTTP Basic Auth enabled (user: {})", user);
                 dashboard.set_auth(Some((user, pass)));
+            } else if !bind_is_loopback(&dash_cfg.bind) {
+                // No credentials AND a non-loopback bind: the dashboard is reachable from the
+                // network with no login. The request handler still hard-gates every mutating
+                // endpoint to localhost in this state, but read-only views are exposed, so warn
+                // loudly. Set both username and password to require login, or bind to 127.0.0.1.
+                tracing::warn!(
+                    "Dashboard is UNAUTHENTICATED and bound to {} (reachable off-host). \
+                     Set [dashboard] username+password, or bind to 127.0.0.1. \
+                     Until then, mutating requests are restricted to localhost.",
+                    dash_cfg.bind
+                );
             }
 
             // Optional anonymous read-only public overview (FH-FEAT-033). Inert unless auth is set;

@@ -18,6 +18,11 @@ const RPTR_API_URL_PREFIX: &str = "https://radioid.net/api/dmr/repeater/?id=";
 /// Politeness delay between successive API calls (each ID is fetched only once, ever).
 const FETCH_THROTTLE: Duration = Duration::from_millis(1100);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
+/// Cap on IDs queued/in-flight at once. The worker drains ~1/sec, so a client rotating distinct
+/// IDs could otherwise grow `pending` and the fetch channel without bound. Once this many are
+/// outstanding, new unseen IDs are dropped (returned as Pending, retried on a later request) instead
+/// of queued — they simply stay unresolved until the backlog clears.
+const MAX_PENDING: usize = 1024;
 
 /// Result of a callsign lookup.
 pub enum Lookup {
@@ -62,7 +67,10 @@ impl RadioIdCache {
             pending: HashSet::new(),
             path,
         }));
-        let (tx, rx) = crossbeam_channel::unbounded::<u32>();
+        // Bounded so a flood of distinct IDs can't grow the channel without bound; the matching
+        // `pending` cap keeps the set bounded too. The capacity matches MAX_PENDING so the set cap is
+        // what actually gates new work.
+        let (tx, rx) = crossbeam_channel::bounded::<u32>(MAX_PENDING);
         let worker_inner = Arc::clone(&inner);
         std::thread::Builder::new()
             .name("radioid-fetch".into())
@@ -81,8 +89,18 @@ impl RadioIdCache {
                 Entry::NotFound => Lookup::NotFound,
             };
         }
+        // Drop new work once the backlog is full, so a client rotating distinct IDs can't grow the
+        // pending set / fetch channel without bound. The ID stays unresolved and is retried on a
+        // later request once the worker has drained some of the backlog.
+        if inner.pending.len() >= MAX_PENDING {
+            return Lookup::Pending;
+        }
         if inner.pending.insert(issi) {
-            let _ = self.tx.send(issi);
+            // try_send (not send) so a momentarily-full bounded channel never blocks the request
+            // thread; on failure we back the ID out of `pending` so it can be re-queued later.
+            if self.tx.try_send(issi).is_err() {
+                inner.pending.remove(&issi);
+            }
         }
         Lookup::Pending
     }

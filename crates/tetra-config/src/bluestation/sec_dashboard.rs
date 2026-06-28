@@ -7,7 +7,9 @@ use toml::Value;
 pub struct CfgDashboard {
     /// Port to listen on (default: 8080)
     pub port: u16,
-    /// Bind address (default: 0.0.0.0)
+    /// Bind address (default: 127.0.0.1 — loopback only).
+    /// Off-host access is opt-in: set this to an interface address (or 0.0.0.0) explicitly, and
+    /// set username/password so the dashboard is not left open on the LAN.
     pub bind: String,
     /// Optional explicit path to the FlowStation git source directory used for OTA updates.
     /// When unset, the dashboard auto-detects by:
@@ -37,7 +39,7 @@ impl Default for CfgDashboard {
     fn default() -> Self {
         Self {
             port: 8080,
-            bind: "0.0.0.0".to_string(),
+            bind: "127.0.0.1".to_string(),
             source_dir: None,
             username: None,
             password: None,
@@ -71,7 +73,10 @@ fn default_port() -> u16 {
     8080
 }
 fn default_bind() -> String {
-    "0.0.0.0".to_string()
+    // Loopback by default: a config that enables [dashboard] without an explicit bind stays
+    // localhost-only. An operator who wants LAN access sets `bind` (and credentials) deliberately.
+    // Configs that already set `bind` keep their value.
+    "127.0.0.1".to_string()
 }
 
 pub fn apply_dashboard_patch(src: CfgDashboardDto) -> Result<CfgDashboard, String> {

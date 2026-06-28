@@ -22,6 +22,14 @@ type CmdSender = crossbeam_channel::Sender<ControlCommand>;
 type WsBroadcastTx = crossbeam_channel::Sender<String>;
 type WsClients = Arc<Mutex<Vec<WsBroadcastTx>>>;
 
+/// Per-client outbound queue depth. A client that stops reading its socket fills this; once full,
+/// broadcast() drops the connection (its sender errors and is pruned) rather than buffering without
+/// bound. Sized for a burst of telemetry while a browser is briefly busy.
+const WS_CLIENT_QUEUE: usize = 256;
+/// Hard cap on concurrent WS clients, so many idle/non-draining connections can't grow memory and
+/// thread count without bound. New upgrades past this are refused.
+const WS_MAX_CLIENTS: usize = 64;
+
 // ---------------------------------------------------------------------------
 // OTA update state — shared between the HTTP handler and the update thread.
 // ---------------------------------------------------------------------------
@@ -258,6 +266,44 @@ fn resolve_source_dir(override_dir: Option<&str>) -> Result<std::path::PathBuf, 
     ))
 }
 
+/// Reject an OTA source tree that is not safe to build from. `cargo build` runs any `build.rs` /
+/// proc-macro in the tree as the service identity (often root), so before building we require the
+/// tree to be owned by us (the running euid) or by root, and to be neither group- nor world-writable
+/// (`mode & 0o022 == 0`). A tree another user can write into could plant a build script that runs as
+/// us — so a directory failing this check (whether auto-detected or supplied via the dashboard
+/// `source_dir`) is refused rather than compiled. Unix-only; returns `Ok(())` on platforms without
+/// the metadata.
+#[cfg(unix)]
+fn source_tree_is_trusted(dir: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let meta = std::fs::metadata(dir).map_err(|e| format!("cannot stat source tree {}: {e}", dir.display()))?;
+    // SAFETY: geteuid() is always successful and has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    let owner = meta.uid();
+    if owner != euid && owner != 0 {
+        return Err(format!(
+            "source tree {} is owned by uid {} (we run as uid {}); refusing to build from a tree we don't own",
+            dir.display(),
+            owner,
+            euid
+        ));
+    }
+    if meta.mode() & 0o022 != 0 {
+        return Err(format!(
+            "source tree {} is group/world-writable (mode {:o}); refusing to build from a tree others can modify",
+            dir.display(),
+            meta.mode() & 0o7777
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn source_tree_is_trusted(_dir: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
+
 /// Spawn an already-configured command, streaming its stdout+stderr into the update log line by
 /// line (so a long `cargo build` shows live progress instead of looking hung — FH-BUG-035), and
 /// return the collected stdout on success. On spawn/exit failure it logs an error, marks the update
@@ -394,6 +440,16 @@ fn run_update(update: SharedUpdateState, config_path: String, source_dir_overrid
     };
 
     log!(update, "Source dir: {}", src_dir.display());
+
+    // Refuse to build from a tree we don't own or that others can write into. `cargo build` runs any
+    // build.rs / proc-macro in this tree as the service identity (often root), so an attacker-writable
+    // or attacker-owned tree would mean arbitrary code execution. This applies equally to an
+    // auto-detected clone and a dashboard-supplied source_dir.
+    if let Err(e) = source_tree_is_trusted(&src_dir) {
+        log!(update, "ERROR: {}", e);
+        update.lock().unwrap().finish(false);
+        return;
+    }
 
     /// Run a command, streaming stdout+stderr into the log; return collected stdout or None.
     fn run_cmd_output(update: &SharedUpdateState, program: &str, args: &[&str], dir: &std::path::Path) -> Option<String> {
@@ -1099,7 +1155,10 @@ impl DashboardServer {
 
     fn broadcast(&self, msg: &str) {
         let mut clients = self.clients.lock().unwrap();
-        clients.retain(|tx| tx.send(msg.to_owned()).is_ok());
+        // try_send, not send: a client whose bounded queue is full (it stopped reading its socket) is
+        // dropped here instead of letting an unbounded backlog grow. A closed receiver also errors and
+        // is pruned, same as before.
+        clients.retain(|tx| tx.try_send(msg.to_owned()).is_ok());
     }
 }
 
@@ -1363,6 +1422,11 @@ fn handle_connection(
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
 
+    // Capture the peer's loopback status before the stream is moved into any handler. When the
+    // dashboard runs with no auth, mutating requests (POST, WS upgrade) are restricted to localhost
+    // (the gate below). A failed peer lookup is treated as non-loopback (fail closed).
+    let peer_is_loopback = stream.peer_addr().map(|a| a.ip().is_loopback()).unwrap_or(false);
+
     // ── Read the first 4KB of headers into a buffer, peek first for routing ──
     // We need to both route on the request line AND read the Authorization header,
     // so we collect all headers before dispatching.
@@ -1456,11 +1520,11 @@ fn handle_connection(
             let ok = timing_safe_eq(user.as_bytes(), expected_user.as_bytes()) && timing_safe_eq(pass.as_bytes(), expected_pass.as_bytes());
 
             if ok {
-                let token = if let Ok(mut store) = sessions.lock() {
-                    store.create()
-                } else {
-                    String::new()
-                };
+                // Recover from a poisoned lock instead of issuing an empty cookie: an empty token
+                // would "log in" the browser yet store no session, so every later request would fail
+                // the gate (logged in, but bounced). Poisoning only happens after a panic elsewhere;
+                // the session store itself stays usable.
+                let token = sessions.lock().unwrap_or_else(|e| e.into_inner()).create();
                 tracing::info!("Dashboard: login OK (user: {})", user);
                 serve_login_success(buf.into_inner(), &token);
             } else {
@@ -1528,6 +1592,28 @@ fn handle_connection(
             } else {
                 http_response(inner, 401, "Unauthorized — please log in");
             }
+            return;
+        }
+    }
+
+    // No-auth hard gate: when no credentials are configured the dashboard is open, so any mutating
+    // request (a POST, or the WebSocket upgrade that drives restart/shutdown/dgna/sds/kick) must come
+    // from localhost. Read-only GETs are still served so a LAN overview keeps working. This is
+    // independent of the cookie gate above (which is inert without auth) and closes the "open
+    // dashboard on the LAN can change config / restart the BS" path even if the operator binds wide.
+    if auth.is_none() && !peer_is_loopback {
+        let is_ws_upgrade = req_line.starts_with("GET ")
+            && header_str
+                .lines()
+                .any(|l| l.to_ascii_lowercase().starts_with("upgrade:") && l.to_ascii_lowercase().contains("websocket"));
+        let is_mutating = req_line.starts_with("POST ") || is_ws_upgrade;
+        if is_mutating {
+            drain_http_headers(&mut stream);
+            tracing::warn!(
+                "Dashboard: rejected unauthenticated off-host {} (mutations are localhost-only without auth)",
+                req_line
+            );
+            http_response(stream, 403, "Forbidden — set dashboard credentials for off-host control");
             return;
         }
     }
@@ -1769,14 +1855,9 @@ fn handle_connection(
         let mut body = vec![0u8; content_length.min(512 * 1024)];
         let _ = buf.read_exact(&mut body);
         let body_str = String::from_utf8_lossy(&body);
-        // Write backup of current config before overwriting
-        let backup_path = format!("{}.bak", config_path);
-        if let Err(e) = std::fs::copy(&config_path, &backup_path) {
-            tracing::warn!("Dashboard: failed to write config backup: {}", e);
-        }
-        match std::fs::write(&config_path, body_str.as_ref()) {
-            Ok(_) => http_response(buf.into_inner(), 200, "OK"),
-            Err(e) => http_response(buf.into_inner(), 500, &e.to_string()),
+        match write_config_validated(&config_path, body_str.as_ref()) {
+            Ok(()) => http_response(buf.into_inner(), 200, "OK"),
+            Err((code, msg)) => http_response(buf.into_inner(), code, &msg),
         }
     } else if req_line.contains("GET /api/btsinfo") {
         let mut buf = BufReader::new(stream);
@@ -2192,10 +2273,17 @@ fn handle_ws(
         }
     };
 
-    // Register this connection for broadcasts
-    let (broadcast_tx, broadcast_rx) = crossbeam_channel::unbounded::<String>();
+    // Register this connection for broadcasts. The queue is bounded (a non-draining client is dropped
+    // in broadcast() rather than buffered without bound), and total clients are capped so many idle
+    // connections can't grow memory/threads without bound.
+    let (broadcast_tx, broadcast_rx) = crossbeam_channel::bounded::<String>(WS_CLIENT_QUEUE);
     {
         let mut c = clients.lock().unwrap();
+        if c.len() >= WS_MAX_CLIENTS {
+            tracing::warn!("Dashboard: WS client cap ({}) reached, refusing new connection", WS_MAX_CLIENTS);
+            let _ = ws.close(None);
+            return;
+        }
         c.push(broadcast_tx);
     }
 
@@ -3416,10 +3504,37 @@ fn serve_html(mut stream: TcpStream) {
     let _ = stream.write_all(body);
 }
 
+/// Persist a posted config.toml after a dry-run parse + validate.
+///
+/// Writing garbage here is what would brick the base station: the service restarts to apply config,
+/// the new file fails to parse, and (with no valid `.fallback`) startup aborts under systemd
+/// `Restart=` into a crash-loop. So parse + `validate()` exactly like `serve_dual_carrier_post`
+/// before touching disk — a bad body is rejected and the running config is left untouched. On
+/// success the previous config is backed up to `<path>.bak` and the new one written.
+///
+/// Returns `Ok(())` on success, or `Err((http_code, message))` for the caller to relay.
+fn write_config_validated(config_path: &str, body: &str) -> Result<(), (u16, String)> {
+    match tetra_config::bluestation::parsing::from_toml_str(body) {
+        Ok(cfg) => {
+            if let Err(e) = cfg.validate() {
+                return Err((400, format!("config is invalid: {e}")));
+            }
+        }
+        Err(e) => return Err((400, format!("config does not parse: {e}"))),
+    }
+    // Back up the current config before overwriting (best-effort; a missing source is not fatal).
+    let backup_path = format!("{}.bak", config_path);
+    if let Err(e) = std::fs::copy(config_path, &backup_path) {
+        tracing::warn!("Dashboard: failed to write config backup: {}", e);
+    }
+    std::fs::write(config_path, body).map_err(|e| (500, e.to_string()))
+}
+
 fn serve_config_get(mut stream: TcpStream, config_path: &str) {
     match std::fs::read_to_string(config_path) {
         Ok(content) => {
-            let body = content.as_bytes();
+            let masked = mask_config_secrets(&content);
+            let body = masked.as_bytes();
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
@@ -3428,6 +3543,59 @@ fn serve_config_get(mut stream: TcpStream, config_path: &str) {
             let _ = stream.write_all(body);
         }
         Err(e) => http_response(stream, 500, &e.to_string()),
+    }
+}
+
+/// Mask the secret values in a raw config.toml before it is sent to the browser.
+///
+/// The config holds plaintext credentials (Telegram bot token, DAPNET password / RWTH core authkey,
+/// Asterisk AMI password). The per-field endpoints already mask these; the raw `/api/config` read
+/// must do the same so the cleartext never leaves the host. We mask line-by-line, keying on the TOML
+/// key name, and replace only the quoted value — comments and structure are preserved so the file
+/// still reads naturally in the editor.
+fn mask_config_secrets(content: &str) -> String {
+    use crate::net_dashboard::dapnet::mask_secret;
+    use crate::net_dashboard::telegram::mask_token;
+
+    // key -> masker. `bot_token` keeps the "id:tail" shape; the rest use the generic head…tail mask.
+    fn mask_for_key(key: &str, value: &str) -> Option<String> {
+        match key {
+            "bot_token" => Some(mask_token(value)),
+            "password" | "rwth_core_authkey" | "ami_password" => Some(mask_secret(value)),
+            _ => None,
+        }
+    }
+
+    let mut out = String::with_capacity(content.len());
+    for line in content.lines() {
+        out.push_str(&mask_toml_secret_line(line, mask_for_key));
+        out.push('\n');
+    }
+    out
+}
+
+/// Mask the value of a single TOML `key = "value"` line when `key` is a known secret. Leaves
+/// comments (lines whose first non-space char is `#`) and non-secret/non-matching lines untouched.
+fn mask_toml_secret_line(line: &str, mask_for_key: fn(&str, &str) -> Option<String>) -> String {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') {
+        return line.to_string();
+    }
+    let Some(eq) = line.find('=') else {
+        return line.to_string();
+    };
+    let key = line[..eq].trim();
+    // Only touch a bare quoted-string assignment. The value must be a `"..."` literal.
+    let rhs = line[eq + 1..].trim();
+    let Some(inner) = rhs.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return line.to_string();
+    };
+    match mask_for_key(key, inner) {
+        Some(masked) => {
+            let indent_len = line.len() - line.trim_start().len();
+            format!("{}{} = \"{}\"", &line[..indent_len], key, masked)
+        }
+        None => line.to_string(),
     }
 }
 
@@ -4952,8 +5120,84 @@ fn serve_dapnet_send(
 
 #[cfg(test)]
 mod tests {
-    use super::{DashboardServer, binary_built_from};
+    use super::{DashboardServer, binary_built_from, mask_config_secrets, write_config_validated};
     use crate::net_telemetry::TelemetryEvent;
+
+    /// A minimal config.toml that parses + validates (mirrors tetra-config's own minimal fixture).
+    const MINIMAL_CONFIG: &str = r#"
+config_version = "0.6"
+stack_mode = "Bs"
+
+[phy_io]
+backend = "None"
+
+[net_info]
+mcc = 901
+mnc = 9999
+
+[cell_info]
+main_carrier = 1584
+freq_band = 4
+freq_offset = 0
+duplex_spacing = 4
+reverse_operation = false
+location_area = 1
+"#;
+
+    /// A bad config body posted to /api/config must be rejected (400) and must NOT touch the file on
+    /// disk — otherwise the next restart fails to parse it and the base station crash-loops.
+    #[test]
+    fn bad_config_post_is_rejected_and_file_untouched() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("fs_a2_config_{}.toml", std::process::id()));
+        let path_str = path.to_str().unwrap();
+        std::fs::write(&path, MINIMAL_CONFIG).expect("seed config");
+
+        // Garbage that does not parse as TOML.
+        let res = write_config_validated(path_str, "this is not = valid toml [[[");
+        match res {
+            Err((400, _)) => {}
+            other => panic!("expected 400 rejection, got {other:?}"),
+        }
+        // The on-disk config is exactly what we seeded — nothing was written, no .bak made.
+        let after = std::fs::read_to_string(&path).expect("read back");
+        assert_eq!(after, MINIMAL_CONFIG, "running config must be untouched after a rejected write");
+        assert!(
+            !std::path::Path::new(&format!("{path_str}.bak")).exists(),
+            "no backup should be written on rejection"
+        );
+
+        // A valid body is accepted and persisted.
+        let good = format!("{}\n# touched\n", MINIMAL_CONFIG);
+        write_config_validated(path_str, &good).expect("valid config accepted");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), good, "valid config is written");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{path_str}.bak"));
+    }
+
+    /// Raw config reads must mask plaintext secrets line-by-line, leaving structure/comments intact.
+    #[test]
+    fn config_get_masks_secrets() {
+        let raw = "\
+[telegram_alerts]
+bot_token = \"123456:ABCdefGHIjklMNOpqrsWXYZ\"
+# password = \"commented-should-stay\"
+
+[dapnet]
+password = \"supersecretpw\"
+rwth_core_authkey = \"another-secret-key\"
+enabled = true
+";
+        let masked = mask_config_secrets(raw);
+        assert!(!masked.contains("123456:ABCdefGHIjklMNOpqrsWXYZ"), "bot_token cleartext leaked");
+        assert!(!masked.contains("supersecretpw"), "dapnet password cleartext leaked");
+        assert!(!masked.contains("another-secret-key"), "authkey cleartext leaked");
+        // Structure / non-secret values / comments survive untouched.
+        assert!(masked.contains("[telegram_alerts]"));
+        assert!(masked.contains("enabled = true"));
+        assert!(masked.contains("# password = \"commented-should-stay\""), "comments untouched");
+    }
 
     /// FH-BUG (brew shown as v0): the transport reports version 0 ("unknown") on every (re)connect
     /// and v1 is learned lazily from a v1 group call. A confirmed v1 must never be downgraded by a
