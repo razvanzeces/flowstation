@@ -215,10 +215,11 @@ mod tests {
         assert_eq!(&s[28..29], "1", "O-bit set");
         assert_eq!(&s[29..30], "0", "P-bit for class of usage = 0 (absent)");
         assert_eq!(&s[30..31], "1", "P-bit for mnemonic = 1 (present)");
-        // 6-bit length = 2 octets.
-        assert_eq!(&s[31..37], "000010", "mnemonic length = 2");
-        assert_eq!(&s[37..45], "01000001", "first octet 'A' (0x41)");
-        assert_eq!(&s[45..53], "01000010", "second octet 'B' (0x42)");
+        // Mnemonic per EN 300 392-9 table 17: 7-bit coding scheme, 8-bit length-in-bits, then chars.
+        assert_eq!(&s[31..38], "0000001", "text coding scheme = 1 (ISO-8859-1)");
+        assert_eq!(&s[38..46], "00010000", "mnemonic length = 16 bits (2 chars)");
+        assert_eq!(&s[46..54], "01000001", "first char 'A' (0x41)");
+        assert_eq!(&s[54..62], "01000010", "second char 'B' (0x42)");
 
         // Round-trip both.
         for ga in [absent, present] {

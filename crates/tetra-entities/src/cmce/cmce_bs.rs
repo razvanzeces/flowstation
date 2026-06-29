@@ -283,7 +283,21 @@ impl TetraEntityTrait for CmceBs {
                     };
                     // MM owns the group registry/affiliation; it has already committed the change and
                     // asks CMCE only to put the SS-DGNA ASSIGN/DEASSIGN on the air as a D-FACILITY.
-                    self.ss.send_d_facility_dgna(queue, issi, gssi, attach);
+                    // A configured display name for the GSSI rides along as the mnemonic so terminals
+                    // that render it show the talkgroup name instead of the number. The name is copied
+                    // into an owned buffer so the config lock is released before the send.
+                    let group_name = if attach {
+                        self.config
+                            .config()
+                            .cell
+                            .dgna_group_names
+                            .get(&gssi)
+                            .map(|name| dgna_mnemonic_bytes(name))
+                            .filter(|b| !b.is_empty())
+                    } else {
+                        None
+                    };
+                    self.ss.send_d_facility_dgna(queue, issi, gssi, attach, group_name);
                 }
                 ControlRoute::Unsupported => {
                     panic!("Unexpected control message: {:?}", message.msg);
@@ -293,5 +307,27 @@ impl TetraEntityTrait for CmceBs {
                 panic!("Unexpected SAP: {:?}", message.sap);
             }
         }
+    }
+}
+
+/// Encode a talkgroup display name for the SS-DGNA mnemonic: ISO-8859-1 octets (non-Latin characters
+/// become '?'), truncated to the 15-character on-air limit (EN 300 392-9 V1.7.1 table 15).
+fn dgna_mnemonic_bytes(name: &str) -> Vec<u8> {
+    name.chars()
+        .take(15)
+        .map(|c| if (c as u32) <= 0xFF { c as u8 } else { b'?' })
+        .collect()
+}
+
+#[cfg(test)]
+mod dgna_mnemonic_tests {
+    use super::dgna_mnemonic_bytes;
+
+    #[test]
+    fn truncates_to_15_and_maps_non_latin() {
+        assert_eq!(dgna_mnemonic_bytes("Echo"), b"Echo");
+        assert_eq!(dgna_mnemonic_bytes("0123456789ABCDEF").len(), 15, "capped at 15 chars");
+        assert_eq!(dgna_mnemonic_bytes("café"), vec![b'c', b'a', b'f', 0xE9], "é is ISO-8859-1 0xE9");
+        assert_eq!(dgna_mnemonic_bytes("日本"), vec![b'?', b'?'], "non-Latin -> '?'");
     }
 }

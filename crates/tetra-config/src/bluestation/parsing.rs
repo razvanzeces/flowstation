@@ -706,6 +706,22 @@ main_carrier_number = 1586
     }
 
     #[test]
+    fn dgna_group_names_parse_string_keys_to_gssi() {
+        let cfg = from_toml_str(&minimal_toml(
+            r#"dgna_group_names = { "22" = "Echo", "1" = "Main", "bad" = "Dropped" }"#,
+        ))
+        .expect("parse");
+        assert_eq!(cfg.cell.dgna_group_names.get(&22).map(String::as_str), Some("Echo"));
+        assert_eq!(cfg.cell.dgna_group_names.get(&1).map(String::as_str), Some("Main"));
+        // A non-numeric GSSI key is dropped, not a parse error.
+        assert_eq!(cfg.cell.dgna_group_names.len(), 2);
+
+        // Absent => empty map (no names sent).
+        let cfg = from_toml_str(&minimal_toml("")).expect("parse");
+        assert!(cfg.cell.dgna_group_names.is_empty());
+    }
+
+    #[test]
     fn telegram_alerts_section_parses() {
         let toml = minimal_toml("")
             + r#"

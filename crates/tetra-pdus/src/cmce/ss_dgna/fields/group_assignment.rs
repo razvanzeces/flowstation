@@ -85,9 +85,9 @@ impl GroupAssignment {
         // Class of usage (type-2), 3b.
         let class_of_usage = typed::parse_type2_generic(obit, buf, 3, "class_of_usage")?.map(|v| v as u8);
 
-        // Mnemonic group name (type-2): P-bit, then 6b length (octet count),
-        // then length octets of ISO-8859-1.
-        let mnemonic = Self::parse_type2_octets(obit, buf, "mnemonic")?;
+        // Mnemonic group name (type-2): P-bit, then the EN 300 392-9 V1.7.1 table 17 character-string
+        // element (7b text coding scheme, 8b length-in-bits, then the characters).
+        let mnemonic = Self::parse_type2_mnemonic(obit, buf)?;
 
         // Security related information (type-2): same length+value shape.
         let security_related_information = Self::parse_type2_octets(obit, buf, "security_related_information")?;
@@ -141,15 +141,9 @@ impl GroupAssignment {
 
         // Type-2 elements, each preceded by its P-bit, in Table 45 order.
         typed::write_type2_generic(obit, buf, self.class_of_usage.map(|v| v as u64), 3);
-        // FIXME(C2): the mnemonic group name is framed here as P-bit + 6-bit octet count + N octets,
-        // the same opaque shape as the security / additional-group fields. A display name is really a
-        // TETRA text string (coding-scheme byte + length, like net_brew's SS-TPI mnemonic), so the
-        // octet-count framing is likely wrong and, since the mnemonic precedes the remaining type-2
-        // elements, a populated one would shift every following P-bit. This is latent: the only
-        // constructor (ss_bs.rs) hard-codes mnemonic = None, so it is never emitted on-air. Before any
-        // path populates it, give the mnemonic its own writer using the TETRA text format and verify
-        // the exact widths against TS 100 392-12-22 V1.5.1 Table 45.
-        Self::write_type2_octets(obit, buf, &self.mnemonic)?;
+        // The mnemonic group name is a TETRA character string, framed per EN 300 392-9 V1.7.1 table 17
+        // (clause 8.4.2) — NOT the 6-bit-octet-count shape the security / additional-group fields use.
+        Self::write_type2_mnemonic(obit, buf, &self.mnemonic)?;
         Self::write_type2_octets(obit, buf, &self.security_related_information)?;
         Self::write_type2_octets(obit, buf, &self.additional_group_information)?;
         typed::write_type2_generic(obit, buf, self.vgssi.map(|v| v as u64), 24);
@@ -200,6 +194,57 @@ impl GroupAssignment {
         }
         Ok(())
     }
+
+    /// Parse the mnemonic group name (type-2). Per EN 300 392-9 V1.7.1 table 17 the value is a
+    /// character-string element: 7-bit text coding scheme, 8-bit length (in *bits*), then the
+    /// characters. We return the raw character octets (`bit_len / 8`), which round-trips an 8-bit
+    /// coding scheme losslessly and keeps any other scheme's bytes intact.
+    fn parse_type2_mnemonic(obit: bool, buf: &mut BitBuffer) -> Result<Option<Vec<u8>>, PduParseErr> {
+        if !obit {
+            return Ok(None);
+        }
+        if !delimiters::read_pbit(buf)? {
+            return Ok(None);
+        }
+        let _coding_scheme = buf.read_field(7, "mnemonic_coding_scheme")?;
+        let bit_len = buf.read_field(8, "mnemonic_length")? as usize;
+        let octet_count = bit_len / 8;
+        let mut bytes = Vec::with_capacity(octet_count);
+        for _ in 0..octet_count {
+            bytes.push(buf.read_field(8, "mnemonic")? as u8);
+        }
+        Ok(Some(bytes))
+    }
+
+    /// Write the mnemonic group name (type-2) per EN 300 392-9 V1.7.1 table 17 (clause 8.4.2): P-bit,
+    /// 7-bit text coding scheme (1 = ISO-8859-1), 8-bit length in *bits*, then the characters as 8-bit
+    /// octets. The display name is at most 15 characters (table 15), so the bit length fits 8 bits.
+    fn write_type2_mnemonic(obit: bool, buf: &mut BitBuffer, value: &Option<Vec<u8>>) -> Result<(), PduParseErr> {
+        if !obit {
+            assert!(value.is_none(), "Type2 element cannot be present when obit is false");
+            return Ok(());
+        }
+        match value {
+            Some(chars) => {
+                if chars.len() > 15 {
+                    return Err(PduParseErr::InvalidValue {
+                        field: "mnemonic_length",
+                        value: chars.len() as u64,
+                    });
+                }
+                delimiters::write_pbit(buf, 1);
+                buf.write_bits(0x01, 7); // text coding scheme: ISO-8859-1 (8-bit characters)
+                buf.write_bits((chars.len() * 8) as u64, 8); // length of the mnemonic name, in bits
+                for c in chars {
+                    buf.write_bits(*c as u64, 8);
+                }
+            }
+            None => {
+                delimiters::write_pbit(buf, 0);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Display for GroupAssignment {
@@ -216,5 +261,59 @@ impl fmt::Display for GroupAssignment {
             self.additional_group_information,
             self.vgssi
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cmce::ss_dgna::enums::results::GroupIdentityAttachmentMode;
+
+    /// The mnemonic group name must be framed exactly as EN 300 392-9 V1.7.1 table 17: P-bit, 7-bit
+    /// text coding scheme (1 = ISO-8859-1), 8-bit length in bits, then the characters. A radio that
+    /// renders DGNA names relies on this layout, so pin the exact bits for "TG" on GSSI 22.
+    #[test]
+    fn mnemonic_matches_en300392_9_table_17() {
+        let ga = GroupAssignment {
+            group_ssi: 22,
+            group_extension: None,
+            attachment_mode: GroupIdentityAttachmentMode::AttachedPermanently,
+            class_of_usage: None,
+            mnemonic: Some(b"TG".to_vec()),
+            security_related_information: None,
+            additional_group_information: None,
+            vgssi: None,
+        };
+        let mut buf = BitBuffer::new_autoexpand(16);
+        ga.to_bitbuf(&mut buf).expect("serialize");
+        let total = buf.get_pos();
+        buf.seek(0);
+        let got: String = (0..total)
+            .map(|_| if buf.read_bits(1).unwrap() == 1 { '1' } else { '0' })
+            .collect();
+        assert_eq!(got, "00000000000000000001011000001010000001000100000101010001000111000");
+    }
+
+    /// A populated mnemonic round-trips: the character octets survive write -> parse unchanged, and
+    /// the surrounding type-2 elements stay aligned (security/vgssi still decode).
+    #[test]
+    fn mnemonic_round_trips_with_other_type2_fields() {
+        let ga = GroupAssignment {
+            group_ssi: 1234,
+            group_extension: None,
+            attachment_mode: GroupIdentityAttachmentMode::AttachedPermanently,
+            class_of_usage: Some(4),
+            mnemonic: Some(b"Echo-1".to_vec()),
+            security_related_information: None,
+            additional_group_information: None,
+            vgssi: Some(987654),
+        };
+        let mut buf = BitBuffer::new_autoexpand(32);
+        ga.to_bitbuf(&mut buf).expect("serialize");
+        buf.seek(0);
+        let parsed = GroupAssignment::from_bitbuf(&mut buf).expect("parse");
+        assert_eq!(parsed, ga);
+        assert_eq!(parsed.mnemonic.as_deref(), Some(&b"Echo-1"[..]));
+        assert_eq!(parsed.vgssi, Some(987654));
     }
 }

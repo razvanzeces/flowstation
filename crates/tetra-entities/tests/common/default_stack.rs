@@ -97,6 +97,7 @@ pub fn default_cell_info(freq_info: FreqInfo) -> CfgCellInfo {
         sds_command_control: None,
         release_group_on_same_speaker_retake: false,
         dgna_use_ss_facility: true,
+        dgna_group_names: std::collections::HashMap::new(),
     }
 }
 

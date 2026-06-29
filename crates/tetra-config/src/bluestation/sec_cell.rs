@@ -218,6 +218,12 @@ pub struct CfgCellInfo {
     /// IDENTITY (EN 300 392-2 V2.4.1 cl.16.8) which only toggles the L2 attachment of a group the
     /// radio already knows. Kept as a rollback switch for the SS-DGNA rollout.
     pub dgna_use_ss_facility: bool,
+
+    /// Optional display names for talkgroups, keyed by GSSI. When an operator assigns a group via
+    /// DGNA, the SS-DGNA ASSIGN carries this name as the mnemonic so a terminal that renders it shows
+    /// the name instead of the bare number. Empty = no names sent (the radio shows its own provisioned
+    /// name, or the GSSI). Names are ISO-8859-1 and truncated to 15 characters on the air.
+    pub dgna_group_names: HashMap<u32, String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -297,6 +303,10 @@ pub struct CellInfoDto {
     /// Emit operator DGNA as an SS-DGNA D-FACILITY. Absent = true (the SS-DGNA path is the
     /// default); set false to roll back to the legacy MM D-ATTACH/DETACH GROUP IDENTITY path.
     pub dgna_use_ss_facility: Option<bool>,
+
+    /// Talkgroup display names keyed by GSSI (as a string in TOML), e.g.
+    /// `dgna_group_names = { "22" = "Echo", "1" = "Main" }`. Carried as the SS-DGNA ASSIGN mnemonic.
+    pub dgna_group_names: Option<HashMap<String, String>>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -383,6 +393,13 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         }),
         release_group_on_same_speaker_retake: ci.release_group_on_same_speaker_retake.unwrap_or(false),
         dgna_use_ss_facility: ci.dgna_use_ss_facility.unwrap_or(true),
+        // GSSI keys arrive as TOML strings; drop any that don't parse as a number.
+        dgna_group_names: ci
+            .dgna_group_names
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(k, v)| k.trim().parse::<u32>().ok().map(|gssi| (gssi, v)))
+            .collect(),
     }
 }
 

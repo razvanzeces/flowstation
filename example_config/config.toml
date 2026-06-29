@@ -186,6 +186,13 @@ voice_service = true
 # Absent = true. Set false only to roll back to the legacy path.
 # dgna_use_ss_facility = true
 
+# Optional talkgroup display names, keyed by GSSI. When you assign a group via DGNA, the SS-DGNA
+# ASSIGN carries this name as the mnemonic, so a terminal that renders DGNA names shows the name
+# instead of the bare number. Names are ISO-8859-1 and truncated to 15 characters on the air.
+# NB: same codeplug caveat as above — a terminal that doesn't render the DGNA mnemonic still shows
+# its own provisioned name (or the number) regardless of what we send.
+# dgna_group_names = { "22" = "Echo", "1" = "Main" }
+
 # Maximum active call duration in seconds — ETSI EN 300 392-2 §14.9.1 T310 equivalent (FlowStation).
 # After this time the BS sends D-RELEASE regardless of call activity.
 # 0 = no limit (infinite — call runs until U-DISCONNECT or hangtime).
