@@ -94,6 +94,7 @@ impl CmceBs {
                 issi,
                 gssi,
                 mnemonic,
+                attachment_mode,
                 attach,
             } => {
                 // The dashboard control channel terminates at CMCE, but DGNA is a Mobility
@@ -114,6 +115,7 @@ impl CmceBs {
                         issi,
                         gssi,
                         mnemonic,
+                        attachment_mode,
                         attach,
                     },
                 });
@@ -293,6 +295,7 @@ impl TetraEntityTrait for CmceBs {
                         issi,
                         gssi,
                         mnemonic,
+                        attachment_mode,
                         attach,
                     } = message.msg
                     else {
@@ -300,7 +303,7 @@ impl TetraEntityTrait for CmceBs {
                     };
                     // MM owns the group registry/affiliation; it has already committed the change and
                     // asks CMCE only to put the SS-DGNA ASSIGN/DEASSIGN on the air as a D-FACILITY.
-                    self.ss.send_d_facility_dgna(queue, issi, gssi, mnemonic, attach);
+                    self.ss.send_d_facility_dgna(queue, issi, gssi, mnemonic, attachment_mode, attach);
                 }
                 ControlRoute::Unsupported => {
                     panic!("Unexpected control message: {:?}", message.msg);

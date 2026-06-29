@@ -7,6 +7,7 @@ use std::time::Instant;
 pub struct MsState {
     pub issi: u32,
     pub groups: Vec<u32>,
+    pub group_catalog: Vec<MsGroupState>,
     /// The talkgroup this MS most recently keyed up on (originated/spoke in a group call).
     /// This is the BS's best inference of the MS's actively-selected TG, as opposed to the
     /// other entries in `groups` which are merely scanned/affiliated. None until the MS is
@@ -16,6 +17,15 @@ pub struct MsState {
     pub registered_at: u64,
     pub last_seen_secs_ago: u64,
     pub energy_saving_mode: u8, // 0=StayAlive, 1=Eg1..7=Eg7
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MsGroupState {
+    pub gssi: u32,
+    pub mnemonic: Option<String>,
+    pub attachment_mode: Option<u8>,
+    pub is_dynamic: bool,
+    pub is_attached: bool,
 }
 
 /// Active call state
@@ -184,6 +194,7 @@ pub const DAPNET_LOG_MAX: usize = 500;
 pub struct MsEntry {
     pub issi: u32,
     pub groups: Vec<u32>,
+    pub group_catalog: Vec<MsGroupState>,
     /// Best inference of the actively-selected TG: the last group this MS keyed up on.
     /// See MsState::selected_group.
     pub selected_group: Option<u32>,
@@ -372,6 +383,7 @@ impl DashboardStateInner {
             .map(|e| MsState {
                 issi: e.issi,
                 groups: e.groups.clone(),
+                group_catalog: e.group_catalog.clone(),
                 selected_group: e.selected_group,
                 rssi_dbfs: e.rssi_dbfs,
                 registered_at: std::time::SystemTime::now()

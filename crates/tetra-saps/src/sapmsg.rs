@@ -89,6 +89,7 @@ pub enum SapMsgInner {
         issi: u32,
         gssi: u32,
         mnemonic: Option<String>,
+        attachment_mode: u8,
         attach: bool,
     },
 
@@ -101,6 +102,7 @@ pub enum SapMsgInner {
         issi: u32,
         gssi: u32,
         mnemonic: Option<String>,
+        attachment_mode: u8,
         attach: bool,
     },
 
@@ -157,24 +159,26 @@ impl Display for SapMsgInner {
                 issi,
                 gssi,
                 mnemonic,
+                attachment_mode,
                 attach,
             } => {
                 write!(
                     f,
-                    "MmDgnaRequest(issi={}, gssi={}, mnemonic={:?}, attach={})",
-                    issi, gssi, mnemonic, attach
+                    "MmDgnaRequest(issi={}, gssi={}, mnemonic={:?}, attachment_mode={}, attach={})",
+                    issi, gssi, mnemonic, attachment_mode, attach
                 )
             }
             SapMsgInner::CmceSsDgnaAssign {
                 issi,
                 gssi,
                 mnemonic,
+                attachment_mode,
                 attach,
             } => {
                 write!(
                     f,
-                    "CmceSsDgnaAssign(issi={}, gssi={}, mnemonic={:?}, attach={})",
-                    issi, gssi, mnemonic, attach
+                    "CmceSsDgnaAssign(issi={}, gssi={}, mnemonic={:?}, attachment_mode={}, attach={})",
+                    issi, gssi, mnemonic, attachment_mode, attach
                 )
             }
             SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => write!(f, "MsRssiUpdate(issi={}, rssi={:.1}dBFS)", issi, rssi_dbfs),

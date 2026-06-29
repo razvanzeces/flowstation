@@ -34,6 +34,9 @@ pub struct CfgDashboard {
     /// overview page instead of being bounced to /login. Admin controls and raw config stay behind
     /// login. Default false = unchanged behaviour (auth is all-or-nothing). Inert without auth.
     pub public_overview: bool,
+    /// Advanced DGNA control: when true, the dashboard shows the SS-DGNA attachment-mode picker.
+    /// When false, operators always use the cell-level default attachment mode.
+    pub show_dgna_attachment_mode_picker: bool,
 }
 
 impl Default for CfgDashboard {
@@ -45,6 +48,7 @@ impl Default for CfgDashboard {
             username: None,
             password: None,
             public_overview: false,
+            show_dgna_attachment_mode_picker: false,
         }
     }
 }
@@ -65,6 +69,8 @@ pub struct CfgDashboardDto {
     // explicit field the TOML `public_overview` would be silently ignored.
     #[serde(default)]
     pub public_overview: bool,
+    #[serde(default)]
+    pub show_dgna_attachment_mode_picker: bool,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -121,5 +127,6 @@ pub fn apply_dashboard_patch(src: CfgDashboardDto) -> Result<CfgDashboard, Strin
         // public_overview is inert unless auth is set (with no auth the dashboard is already open),
         // so we accept it silently rather than erroring — keeps config validation lenient.
         public_overview: src.public_overview,
+        show_dgna_attachment_mode_picker: src.show_dgna_attachment_mode_picker,
     })
 }

@@ -218,6 +218,11 @@ pub struct CfgCellInfo {
     /// IDENTITY (EN 300 392-2 V2.4.1 cl.16.8) which only toggles the L2 attachment of a group the
     /// radio already knows. Kept as a rollback switch for the SS-DGNA rollout.
     pub dgna_use_ss_facility: bool,
+
+    /// Default SS-DGNA attachment mode for operator regroup commands. This is intentionally a cell
+    /// config knob rather than a per-click operator choice unless the advanced dashboard picker is
+    /// enabled. Default: 0 (Attached permanently), per EN 300 392-2 Table 16.51.
+    pub dgna_attachment_mode: u8,
 }
 
 #[derive(Default, Deserialize)]
@@ -297,6 +302,10 @@ pub struct CellInfoDto {
     /// Emit operator DGNA as an SS-DGNA D-FACILITY. Absent = true (the SS-DGNA path is the
     /// default); set false to roll back to the legacy MM D-ATTACH/DETACH GROUP IDENTITY path.
     pub dgna_use_ss_facility: Option<bool>,
+
+    /// Default SS-DGNA attachment mode for operator regroup commands. Absent = 0
+    /// (Attached permanently). Values outside 0..=5 are clamped.
+    pub dgna_attachment_mode: Option<u8>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -383,6 +392,7 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         }),
         release_group_on_same_speaker_retake: ci.release_group_on_same_speaker_retake.unwrap_or(false),
         dgna_use_ss_facility: ci.dgna_use_ss_facility.unwrap_or(true),
+        dgna_attachment_mode: ci.dgna_attachment_mode.unwrap_or(0).min(5),
     }
 }
 

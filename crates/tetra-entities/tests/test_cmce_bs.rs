@@ -1380,7 +1380,7 @@ fn test_dsetup_late_entry_throttle() {
     test.submit_message(u_setup_msg);
     test.run_stack(Some(1));
 
-    // Collect initial output — should contain D-SETUP (initial send with no tracked receipt)
+    // Collect initial output â€” should contain D-SETUP (initial send with no tracked receipt)
     let initial_msgs = test.dump_sinks();
     let initial_setups = count_d_setups(&initial_msgs);
     assert!(initial_setups > 0, "Expected initial D-SETUP after U-SETUP");
@@ -1450,7 +1450,7 @@ fn test_emergency_call_preempts_when_cell_full() {
     for (i, &g) in gssis.iter().enumerate() {
         register_subscriber(&mut test, 2_000_001 + i as u32, g);
     }
-    // A fourth (emergency) talkgroup with its own listener — no free slot remains for it.
+    // A fourth (emergency) talkgroup with its own listener â€” no free slot remains for it.
     let emergency_gssi = 199u32;
     register_subscriber(&mut test, 2_000_099, emergency_gssi);
 
@@ -1467,7 +1467,7 @@ fn test_emergency_call_preempts_when_cell_full() {
         "expected the cell to be full (0 free slots) after three group calls"
     );
 
-    // Incoming EMERGENCY group call (priority 15) on the fourth GSSI — must pre-empt to proceed.
+    // Incoming EMERGENCY group call (priority 15) on the fourth GSSI â€” must pre-empt to proceed.
     test.submit_message(build_u_setup_msg_prio(3_000_099, emergency_gssi, 15));
     test.run_stack(Some(1));
     let msgs = test.dump_sinks();
@@ -1523,7 +1523,7 @@ fn test_ordinary_call_does_not_preempt_when_cell_full() {
     }
     test.dump_sinks();
 
-    // Ordinary-priority (priority 0) group call into a full cell — must NOT pre-empt anything.
+    // Ordinary-priority (priority 0) group call into a full cell â€” must NOT pre-empt anything.
     test.submit_message(build_u_setup_msg_prio(3_000_099, extra_gssi, 0));
     test.run_stack(Some(1));
     let msgs = test.dump_sinks();
@@ -1533,18 +1533,18 @@ fn test_ordinary_call_does_not_preempt_when_cell_full() {
         .filter(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::CallEnded { .. })))
         .count();
     assert_eq!(call_ended, 0, "an ordinary-priority call must not pre-empt any active call");
-    // The three original calls are untouched — still no free slot.
+    // The three original calls are untouched â€” still no free slot.
     assert_eq!(test.config.state_read().timeslot_alloc.free_count(), 0);
 }
 
 // Energy-Economy D-SETUP gate (clause 16.7): individual-call setup resends to a sleeping EE MS
 // are held for the MS's downlink monitoring window, with a bounded fallback (EE_DSETUP_FALLBACK_TS
-// ≈ 423 timeslots / ~105 frames) to the historical blind resend. The empirically-observed resend
+// â‰ˆ 423 timeslots / ~105 frames) to the historical blind resend. The empirically-observed resend
 // cadence (initial + setup-retry) fires several individual D-SETUPs to the called MS within the
 // fallback window, which the tests below rely on.
 
 /// A sleeping EE MS (monitoring window closed for the whole sub-fallback run) must NOT receive
-/// any D-SETUP resend — they are held for its window.
+/// any D-SETUP resend â€” they are held for its window.
 #[test]
 fn test_dsetup_to_ee_ms_held_outside_monitoring_window() {
     debug::setup_logging_verbose();
@@ -1564,7 +1564,7 @@ fn test_dsetup_to_ee_ms_held_outside_monitoring_window() {
     test.run_stack(Some(1));
     test.dump_sinks(); // discard the initial (ungated) D-SETUP page
 
-    // ~100 frames (400 ts) — comfortably under the ~423 ts fallback, so any resend here is held.
+    // ~100 frames (400 ts) â€” comfortably under the ~423 ts fallback, so any resend here is held.
     test.run_stack(Some(400));
     let held = count_individual_dsetup_to(&test.dump_sinks(), called);
     assert_eq!(
@@ -1573,7 +1573,7 @@ fn test_dsetup_to_ee_ms_held_outside_monitoring_window() {
     );
 }
 
-/// A non-EE MS (absent from the published window map) is always reachable — the gate must not
+/// A non-EE MS (absent from the published window map) is always reachable â€” the gate must not
 /// suppress its D-SETUP resends.
 #[test]
 fn test_dsetup_to_non_ee_ms_resends_normally() {
@@ -1600,7 +1600,7 @@ fn test_dsetup_to_non_ee_ms_resends_normally() {
 }
 
 /// Bounded-fallback safety net: even if the granted window phase is wrong (window never opens),
-/// resends must resume once the setup has been pending longer than the fallback — so call setup
+/// resends must resume once the setup has been pending longer than the fallback â€” so call setup
 /// is never worse than the historical blind resend.
 #[test]
 fn test_dsetup_ee_fallback_resends_after_timeout() {
@@ -1704,11 +1704,11 @@ fn test_group_ee_announce_excludes_speaker() {
     );
 }
 
-// ─── FH FIX 2 guard: group-addressed PDUs must use unacknowledged LLC ──────────────────────────
+// â”€â”€â”€ FH FIX 2 guard: group-addressed PDUs must use unacknowledged LLC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // D-SETUP / D-RELEASE to a GSSI have no single peer to acknowledge, so they must go out as
 // unacknowledged BL-UDATA (`Layer2Service::Unacknowledged`), not the acknowledged default. MLE
-// routes Unacknowledged → TlaTlUnitdataReqBl (BL-UDATA) and everything else → TlaTlDataReqBl
+// routes Unacknowledged â†’ TlaTlUnitdataReqBl (BL-UDATA) and everything else â†’ TlaTlDataReqBl
 // (acknowledged BL-DATA), so the LcmcMleUnitdataReq.layer2service is the load-bearing field.
 
 /// Find the LcmcMleUnitdataReq carrying `pdu_type` addressed to `address` and return its
@@ -1771,7 +1771,7 @@ fn test_group_d_release_uses_unacknowledged_llc() {
     let setup_msgs = test.dump_sinks();
     let call_id = first_d_setup_call_id(&setup_msgs, TEST_GSSI);
 
-    // The call owner (the original caller) disconnects → release_group_call sends the group
+    // The call owner (the original caller) disconnects â†’ release_group_call sends the group
     // D-RELEASE addressed to the GSSI.
     test.submit_message(build_u_disconnect_msg(TEST_ISSI, call_id));
     test.run_stack(Some(1));
@@ -1786,7 +1786,7 @@ fn test_group_d_release_uses_unacknowledged_llc() {
     );
 }
 
-// ─── FH FIX 1 guard: call-lifecycle telemetry must reach the dashboard sink ────────────────────
+// â”€â”€â”€ FH FIX 1 guard: call-lifecycle telemetry must reach the dashboard sink â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_group_call_emits_started_and_ended_telemetry() {
@@ -1797,7 +1797,7 @@ fn test_group_call_emits_started_and_ended_telemetry() {
 
     let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
     let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
-    // Build the sinks but NOT the CMCE — we register a telemetry-wired CmceBs ourselves below.
+    // Build the sinks but NOT the CMCE â€” we register a telemetry-wired CmceBs ourselves below.
     test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
 
     let (sink, source) = telemetry_channel();
@@ -1848,7 +1848,7 @@ fn test_group_call_emits_started_and_ended_telemetry() {
 }
 
 /// Regression: a U-FACILITY (supplementary service) request from an MS must be answered
-/// with D-CMCE-FUNCTION-NOT-SUPPORTED (ETSI EN 300 392-2 §14.7.2.5). The CMCE rewrite
+/// with D-CMCE-FUNCTION-NOT-SUPPORTED (ETSI EN 300 392-2 Â§14.7.2.5). The CMCE rewrite
 /// routed U-FACILITY to ss_bs::route_re_deliver which only logged and sent nothing, so the
 /// MS received no response to its SS request. The BS must reply, not stay silent (and must
 /// not crash).
@@ -1892,7 +1892,7 @@ fn test_u_facility_answered_with_function_not_supported() {
     );
 }
 
-// ── SS-DGNA over CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; EN 300 392-9 V1.7.1) ────────────────
+// â”€â”€ SS-DGNA over CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; EN 300 392-9 V1.7.1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // These exercise the full operator-DGNA path: a dashboard `ControlCommand::Dgna` reaches MM, which
 // (SS-DGNA default) affiliates the GSSI and hands the air emission to CMCE, which puts an SS-DGNA
@@ -1992,6 +1992,7 @@ mod ss_dgna_tests {
                 issi: DGNA_ISSI,
                 gssi: DGNA_GSSI,
                 mnemonic: None,
+                attachment_mode: 0,
                 attach: true,
             });
             test.run_stack(Some(6));
@@ -2002,6 +2003,7 @@ mod ss_dgna_tests {
             issi: DGNA_ISSI,
             gssi: DGNA_GSSI,
             mnemonic: mnemonic.map(str::to_string),
+            attachment_mode: 0,
             attach,
         });
         // CMCE drains control -> MmDgnaRequest -> MM affiliates + CmceSsDgnaAssign -> CMCE D-FACILITY.
@@ -2102,11 +2104,12 @@ mod ss_dgna_tests {
         let mm = MmBs::new(test.get_shared_config(), None, None);
         test.register_entity(mm);
 
-        // No registration first — MM must drop the command, so CMCE never emits a D-FACILITY.
+        // No registration first â€” MM must drop the command, so CMCE never emits a D-FACILITY.
         dispatcher.send(ControlCommand::Dgna {
             issi: 9_999_002,
             gssi: DGNA_GSSI,
             mnemonic: None,
+            attachment_mode: 0,
             attach: true,
         });
         test.run_stack(Some(6));

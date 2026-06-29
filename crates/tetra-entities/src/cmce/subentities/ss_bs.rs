@@ -39,28 +39,34 @@ impl SsBsSubentity {
     /// Table 4 SS-PDU container (Routeing = 00, one SS PDU) inside the CMCE
     /// D-FACILITY (EN 300 392-2 V2.4.1 cl.14.7.1.7).
     ///
-    /// ASSIGN uses attachment mode 000 (attached permanently, TS Table 51) so
-    /// the PDU both defines and attaches the group in one step (cl.6.5.2.1) —
-    /// the same MLE handoff the MM D-ATTACH does, but only after the radio has
-    /// the group definition. When present, the mnemonic is carried as the Table-45
-    /// "Mnemonic group name" so the terminal can label the TG directly from the
-    /// operator request.
+    /// ASSIGN carries the requested Table-51 attachment mode so the operator can
+    /// choose whether the group is attached permanently, reattached later, or just
+    /// defined without attachment. When present, the mnemonic is carried as the
+    /// Table-45 "Mnemonic group name" so the terminal can label the TG directly
+    /// from the operator request.
     ///
     /// Reliability rests on the LLC ACK of the FACILITY transport, not a
     /// DGNA-layer retransmit (cl.6.6 mandates no protocol timer), so this is sent
     /// with `Layer2Service::Acknowledged` — the same choice the MM DGNA path made
     /// for its individually-addressed D-ATTACH.
-    pub fn send_d_facility_dgna(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, mnemonic: Option<String>, attach: bool) {
+    pub fn send_d_facility_dgna(
+        &self,
+        queue: &mut MessageQueue,
+        issi: u32,
+        gssi: u32,
+        mnemonic: Option<String>,
+        attachment_mode: u8,
+        attach: bool,
+    ) {
+        let attachment_mode =
+            GroupIdentityAttachmentMode::try_from(attachment_mode as u64).unwrap_or(GroupIdentityAttachmentMode::AttachedPermanently);
         let ss_pdu = if attach {
             SsDgnaPdu::Assign(Assign {
                 groups: vec![GroupAssignment {
                     group_ssi: gssi,
                     group_extension: None,
-                    // 000 = attached permanently: no re-attach at the next ITSI attach / location
-                    // update, matching the persistent (lifetime=0) MM D-ATTACH the legacy path sent.
-                    attachment_mode: GroupIdentityAttachmentMode::AttachedPermanently,
+                    attachment_mode,
                     class_of_usage: Some(DGNA_CLASS_OF_USAGE),
-                    // No group-name config in v1 — the radio displays its own provisioned name.
                     mnemonic: mnemonic.as_deref().map(Self::encode_mnemonic),
                     security_related_information: None,
                     additional_group_information: None,

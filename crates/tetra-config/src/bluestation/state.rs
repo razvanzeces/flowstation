@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use tetra_core::TimeslotAllocator;
 
 /// A one-shot or repeating SDS broadcast message injected at runtime via the dashboard.
@@ -33,6 +33,22 @@ pub struct Subscriber {
     pub attached_groups: HashSet<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DgnaGroup {
+    pub gssi: u32,
+    pub mnemonic: Option<String>,
+    pub attachment_mode: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceGroup {
+    pub gssi: u32,
+    pub mnemonic: Option<String>,
+    pub attachment_mode: Option<u8>,
+    pub is_dynamic: bool,
+    pub is_attached: bool,
+}
+
 /// Centralized subscriber registry tracking locally registered ISSIs and their group affiliations.
 #[derive(Debug, Clone)]
 pub struct SubscriberRegistry {
@@ -40,6 +56,8 @@ pub struct SubscriberRegistry {
     subscribers: HashMap<u32, Subscriber>,
     /// Set of all GSSIs with at least one local affiliate
     all_attached_groups: HashSet<u32>,
+    /// DGNA groups remembered per device, independent of current affiliation state.
+    dgna_groups: HashMap<u32, BTreeMap<u32, DgnaGroup>>,
 }
 
 impl Default for SubscriberRegistry {
@@ -53,6 +71,7 @@ impl SubscriberRegistry {
         Self {
             subscribers: HashMap::new(),
             all_attached_groups: HashSet::new(),
+            dgna_groups: HashMap::new(),
         }
     }
 
@@ -137,6 +156,82 @@ impl SubscriberRegistry {
             .get(&issi)
             .map(|s| s.attached_groups.iter().copied().collect())
             .unwrap_or_default()
+    }
+
+    pub fn remember_dgna_group(&mut self, issi: u32, gssi: u32, mnemonic: Option<String>, attachment_mode: u8) {
+        self.dgna_groups.entry(issi).or_default().insert(
+            gssi,
+            DgnaGroup {
+                gssi,
+                mnemonic,
+                attachment_mode,
+            },
+        );
+    }
+
+    pub fn forget_dgna_group(&mut self, issi: u32, gssi: u32) -> bool {
+        let Some(groups) = self.dgna_groups.get_mut(&issi) else {
+            return false;
+        };
+        let removed = groups.remove(&gssi).is_some();
+        if groups.is_empty() {
+            self.dgna_groups.remove(&issi);
+        }
+        removed
+    }
+
+    pub fn has_dgna_group(&self, issi: u32, gssi: u32) -> bool {
+        self.dgna_groups.get(&issi).is_some_and(|groups| groups.contains_key(&gssi))
+    }
+
+    pub fn dgna_groups_of(&self, issi: u32) -> Vec<DgnaGroup> {
+        self.dgna_groups
+            .get(&issi)
+            .map(|groups| groups.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn device_groups_of(&self, issi: u32) -> Vec<DeviceGroup> {
+        let mut groups = BTreeMap::<u32, DeviceGroup>::new();
+
+        if let Some(subscriber) = self.subscribers.get(&issi) {
+            for &gssi in &subscriber.attached_groups {
+                groups.insert(
+                    gssi,
+                    DeviceGroup {
+                        gssi,
+                        mnemonic: None,
+                        attachment_mode: None,
+                        is_dynamic: false,
+                        is_attached: true,
+                    },
+                );
+            }
+        }
+
+        if let Some(dynamic_groups) = self.dgna_groups.get(&issi) {
+            for (&gssi, group) in dynamic_groups {
+                groups
+                    .entry(gssi)
+                    .and_modify(|entry| {
+                        entry.is_dynamic = true;
+                        entry.mnemonic = group.mnemonic.clone();
+                        entry.attachment_mode = Some(group.attachment_mode);
+                    })
+                    .or_insert_with(|| DeviceGroup {
+                        gssi,
+                        mnemonic: group.mnemonic.clone(),
+                        attachment_mode: Some(group.attachment_mode),
+                        is_dynamic: true,
+                        is_attached: self
+                            .subscribers
+                            .get(&issi)
+                            .is_some_and(|subscriber| subscriber.attached_groups.contains(&gssi)),
+                    });
+            }
+        }
+
+        groups.into_values().collect()
     }
 }
 
@@ -538,6 +633,66 @@ mod tests {
         let mut issis: Vec<u32> = reg.all_registered_issis().collect();
         issis.sort_unstable();
         assert_eq!(issis, vec![1001, 1003]);
+    }
+
+    #[test]
+    fn test_dgna_group_registry_survives_deaffiliate_and_deregister() {
+        let mut reg = SubscriberRegistry::new();
+        reg.register(1001);
+        reg.affiliate(1001, 91);
+        reg.remember_dgna_group(1001, 91, Some("OPS".to_string()), 3);
+
+        reg.deaffiliate(1001, 91);
+        assert_eq!(
+            reg.device_groups_of(1001),
+            vec![DeviceGroup {
+                gssi: 91,
+                mnemonic: Some("OPS".to_string()),
+                attachment_mode: Some(3),
+                is_dynamic: true,
+                is_attached: false,
+            }]
+        );
+
+        reg.deregister(1001);
+        assert!(reg.dgna_groups_of(1001).iter().any(|group| group.gssi == 91));
+    }
+
+    #[test]
+    fn test_device_groups_merge_static_and_dynamic() {
+        let mut reg = SubscriberRegistry::new();
+        reg.register(1001);
+        reg.affiliate(1001, 91);
+        reg.affiliate(1001, 92);
+        reg.remember_dgna_group(1001, 92, Some("DYN".to_string()), 1);
+        reg.remember_dgna_group(1001, 93, None, 4);
+
+        assert_eq!(
+            reg.device_groups_of(1001),
+            vec![
+                DeviceGroup {
+                    gssi: 91,
+                    mnemonic: None,
+                    attachment_mode: None,
+                    is_dynamic: false,
+                    is_attached: true,
+                },
+                DeviceGroup {
+                    gssi: 92,
+                    mnemonic: Some("DYN".to_string()),
+                    attachment_mode: Some(1),
+                    is_dynamic: true,
+                    is_attached: true,
+                },
+                DeviceGroup {
+                    gssi: 93,
+                    mnemonic: None,
+                    attachment_mode: Some(4),
+                    is_dynamic: true,
+                    is_attached: false,
+                },
+            ]
+        );
     }
 }
 
