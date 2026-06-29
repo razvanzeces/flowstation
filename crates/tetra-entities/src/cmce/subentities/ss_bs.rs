@@ -32,6 +32,12 @@ pub struct SsBsSubentity {
     telemetry: Option<TelemetrySink>,
 }
 
+enum DgnaDelivery {
+    McchOnly,
+    DirectTraffic { carrier_num: u16, ts: u8, usage: u8 },
+    AmbiguousGroupTraffic { carrier_num: u16, ts: u8, usage: u8 },
+}
+
 /// Class of usage advertised in SS-DGNA group assignments. 4 mirrors the value
 /// the MM affiliation/ACK path uses (`mm_bs.rs` `DGNA_CLASS_OF_USAGE`), so an
 /// SS-DGNA-assigned group behaves identically to one the radio affiliated
@@ -133,25 +139,15 @@ impl SsBsSubentity {
             issi,
             sdu.dump_bin()
         );
-        let traffic = self.resolve_traffic_delivery(issi);
-        let (layer2service, stealing_permission, chan_alloc, route_detail) = match traffic {
-            Some((carrier_num, ts, usage)) if (1..=4).contains(&ts) => {
-                let mut timeslots = [false; 4];
-                timeslots[(ts - 1) as usize] = true;
-                (
-                    Layer2Service::Unacknowledged,
-                    true,
-                    Some(CmceChanAllocReq {
-                        usage: Some(usage),
-                        carrier: Some(carrier_num),
-                        timeslots,
-                        alloc_type: ChanAllocType::Replace,
-                        ul_dl_assigned: UlDlAssignment::Dl,
-                    }),
-                    format!("via FACCH stealing on carrier={} ts={}", carrier_num, ts),
-                )
+        let delivery = self.resolve_traffic_delivery(issi);
+        let route_detail = match delivery {
+            DgnaDelivery::McchOnly => "via MCCH".to_string(),
+            DgnaDelivery::DirectTraffic { carrier_num, ts, .. } => {
+                format!("via FACCH stealing on carrier={} ts={}", carrier_num, ts)
             }
-            _ => (Layer2Service::Acknowledged, false, None, "via MCCH".to_string()),
+            DgnaDelivery::AmbiguousGroupTraffic { carrier_num, ts, .. } => {
+                format!("via MCCH + FACCH fallback on carrier={} ts={}", carrier_num, ts)
+            }
         };
         self.emit_dgna_status(
             issi,
@@ -166,28 +162,32 @@ impl SsBsSubentity {
             ),
         );
 
-        queue.push_back(SapMsg {
-            sap: Sap::LcmcSap,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Mle,
-            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu,
-                // Unsolicited, BS-initiated — no inbound L2 context to echo.
-                handle: 0,
-                endpoint_id: 0,
-                link_id: 0,
-                // Idle target: acknowledged BL-DATA over MCCH. In-call target: unacknowledged
-                // FACCH/STCH, because the acknowledged LLC path drops stealing traffic.
-                layer2service,
-                pdu_prio: 0,
-                layer2_qos: 0,
-                stealing_permission,
-                stealing_repeats_flag: false,
-                chan_alloc,
-                main_address: TetraAddress::new(issi, SsiType::Issi),
-                tx_reporter: None,
-            }),
-        });
+        match delivery {
+            DgnaDelivery::McchOnly => {
+                self.enqueue_dgna(queue, issi, sdu, Layer2Service::Acknowledged, false, None);
+            }
+            DgnaDelivery::DirectTraffic { carrier_num, ts, usage } => {
+                self.enqueue_dgna(
+                    queue,
+                    issi,
+                    sdu,
+                    Layer2Service::Unacknowledged,
+                    true,
+                    Some(Self::traffic_chan_alloc(carrier_num, ts, usage)),
+                );
+            }
+            DgnaDelivery::AmbiguousGroupTraffic { carrier_num, ts, usage } => {
+                self.enqueue_dgna(queue, issi, sdu.clone(), Layer2Service::Acknowledged, false, None);
+                self.enqueue_dgna(
+                    queue,
+                    issi,
+                    sdu,
+                    Layer2Service::Unacknowledged,
+                    true,
+                    Some(Self::traffic_chan_alloc(carrier_num, ts, usage)),
+                );
+            }
+        }
     }
 
     pub fn route_re_deliver(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
@@ -330,14 +330,64 @@ impl SsBsSubentity {
         out
     }
 
-    fn resolve_traffic_delivery(&self, issi: u32) -> Option<(u16, u8, u8)> {
+    fn enqueue_dgna(
+        &self,
+        queue: &mut MessageQueue,
+        issi: u32,
+        sdu: BitBuffer,
+        layer2service: Layer2Service,
+        stealing_permission: bool,
+        chan_alloc: Option<CmceChanAllocReq>,
+    ) {
+        queue.push_back(SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu,
+                handle: 0,
+                endpoint_id: 0,
+                link_id: 0,
+                layer2service,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission,
+                stealing_repeats_flag: false,
+                chan_alloc,
+                main_address: TetraAddress::new(issi, SsiType::Issi),
+                tx_reporter: None,
+            }),
+        });
+    }
+
+    fn traffic_chan_alloc(carrier_num: u16, ts: u8, usage: u8) -> CmceChanAllocReq {
+        let mut timeslots = [false; 4];
+        timeslots[(ts - 1) as usize] = true;
+        CmceChanAllocReq {
+            usage: Some(usage),
+            carrier: Some(carrier_num),
+            timeslots,
+            alloc_type: ChanAllocType::Replace,
+            ul_dl_assigned: UlDlAssignment::Dl,
+        }
+    }
+
+    fn resolve_traffic_delivery(&self, issi: u32) -> DgnaDelivery {
         let state = self.config.state_read();
-        state.active_call_ts.get(&issi).copied().or_else(|| {
-            state
-                .subscribers
-                .attached_groups_of(issi)
-                .into_iter()
-                .find_map(|gssi| state.active_call_ts.get(&gssi).copied())
-        })
+        if let Some((carrier_num, ts, usage)) = state.active_call_ts.get(&issi).copied()
+            && (1..=4).contains(&ts)
+        {
+            return DgnaDelivery::DirectTraffic { carrier_num, ts, usage };
+        }
+        if let Some((carrier_num, ts, usage)) = state
+            .subscribers
+            .attached_groups_of(issi)
+            .into_iter()
+            .find_map(|gssi| state.active_call_ts.get(&gssi).copied())
+            && (1..=4).contains(&ts)
+        {
+            return DgnaDelivery::AmbiguousGroupTraffic { carrier_num, ts, usage };
+        }
+        DgnaDelivery::McchOnly
     }
 }

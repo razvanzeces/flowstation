@@ -7145,7 +7145,7 @@ function dgnaLibraryGroups(){
     .sort((a,b)=>(a.gssi-b.gssi));
 }
 function dgnaSelectedTargets(){
-  return dgnaAllRadios().filter(ms=>dgnaUi.targetChecks[ms.issi]!==false).map(ms=>ms.issi);
+  return dgnaAllRadios().filter(ms=>dgnaUi.targetChecks[ms.issi]===true).map(ms=>ms.issi);
 }
 function setDgnaPageStatus(text,ok){
   const el=document.getElementById('dgna-page-status');
@@ -7241,7 +7241,7 @@ function renderDgnaTargetsTable(){
     return;
   }
   tb.innerHTML=radios.map(ms=>{
-    const checked=dgnaUi.targetChecks[ms.issi]!==false;
+    const checked=dgnaUi.targetChecks[ms.issi]===true;
     const st=gssi?dgnaTargetState(ms.issi,gssi):null;
     const last=dgnaUi.lastByIssi[ms.issi];
     const stateHtml=!gssi?'<span class="dgna-state-note">Choose a group</span>':st?`<span class="dgna-status-pill"><span class="badge ${st.is_dynamic?'badge-blue':'badge-dim'}">${st.is_dynamic?'dynamic':'static'}</span><span class="badge ${st.is_attached?'badge-green':'badge-dim'}">${st.is_attached?'attached':'detached'}</span>${st.mnemonic?`<span class="dgna-state-note">${escHtml(st.mnemonic)}</span>`:''}</span>`:'<span class="dgna-state-note">not present</span>';
