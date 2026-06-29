@@ -3,8 +3,8 @@ use std::sync::{Arc, RwLock};
 use tetra_core::freqs::FreqInfo;
 
 use crate::bluestation::{
-    CfgAsterisk, CfgCellInfo, CfgControl, CfgDapnet, CfgEmergency, CfgGeoalarm, CfgHealth, CfgMeshcom, CfgNetInfo, CfgPhyIo, CfgRecovery,
-    CfgSecurity, CfgSnomNotify, CfgTpg2200Action, CfgWxService, PhyBackend, StackState,
+    CfgAsterisk, CfgCellInfo, CfgControl, CfgDapnet, CfgEcholink, CfgEmergency, CfgGeoalarm, CfgHealth, CfgMeshcom, CfgNetInfo, CfgPhyIo,
+    CfgRecovery, CfgSecurity, CfgSnomNotify, CfgTpg2200Action, CfgWxService, PhyBackend, StackState,
 };
 
 use super::sec_brew::CfgBrew;
@@ -80,6 +80,9 @@ pub struct StackConfig {
 
     /// DAPNET inbound-message forwarding configuration.
     pub dapnet: CfgDapnet,
+
+    /// EchoLink directory and audio bridge configuration.
+    pub echolink: CfgEcholink,
 
     /// Geo-fence alarm configuration for TETRA/MeshCom positions.
     pub geoalarm: CfgGeoalarm,
@@ -483,6 +486,43 @@ impl SharedConfig {
                 tpg2200_max_text_chars: o.tpg2200_max_text_chars.clamp(8, 160),
                 sip_title_prefix: o.sip_title_prefix.clone(),
                 telegram_prefix: o.telegram_prefix.clone(),
+            }
+        } else {
+            base
+        }
+    }
+
+    /// Effective EchoLink settings: dashboard runtime override when present, otherwise TOML.
+    pub fn effective_echolink(&self) -> crate::bluestation::CfgEcholink {
+        let base = self.cfg.echolink.clone();
+        if let Some(o) = self.state_read().echolink_override.as_ref() {
+            crate::bluestation::CfgEcholink {
+                enabled: o.enabled,
+                callsign: o.callsign.clone(),
+                password: crate::bluestation::SecretField::from(o.password.clone()),
+                location: o.location.clone(),
+                status_text: o.status_text.clone(),
+                directory_servers: o.directory_servers.clone(),
+                directory_port: o.directory_port,
+                bind_addr: o.bind_addr.clone(),
+                audio_port: o.audio_port,
+                control_port: o.control_port,
+                inbound_enabled: o.inbound_enabled,
+                outbound_enabled: o.outbound_enabled,
+                outbound_prefix: o.outbound_prefix.clone(),
+                strip_outbound_prefix: o.strip_outbound_prefix,
+                service_numbers: o.service_numbers.clone(),
+                default_tetra_source_issi: o.default_tetra_source_issi,
+                default_tetra_dest_issi: o.default_tetra_dest_issi,
+                default_tetra_dest_is_group: o.default_tetra_dest_is_group,
+                routes: o.routes.clone(),
+                allowed_callsigns: o.allowed_callsigns.clone(),
+                allowed_node_ids: o.allowed_node_ids.clone(),
+                auto_connect: o.auto_connect.clone(),
+                reconnect_interval_secs: o.reconnect_interval_secs.max(1),
+                max_session_secs: o.max_session_secs.max(1),
+                telegram_session_alerts: o.telegram_session_alerts,
+                telegram_session_prefix: o.telegram_session_prefix.clone(),
             }
         } else {
             base

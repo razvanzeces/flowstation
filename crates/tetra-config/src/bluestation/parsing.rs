@@ -14,6 +14,7 @@ use super::sec_asterisk::{CfgAsteriskDto, apply_asterisk_patch};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
 use super::sec_dapnet::{CfgDapnetDto, apply_dapnet_patch};
 use super::sec_dashboard::{CfgDashboardDto, apply_dashboard_patch};
+use super::sec_echolink::{CfgEcholinkDto, apply_echolink_patch};
 use super::sec_emergency::{CfgEmergencyDto, apply_emergency_patch};
 use super::sec_geoalarm::{CfgGeoalarmDto, apply_geoalarm_patch};
 use super::sec_health::{CfgHealthDto, apply_health_patch};
@@ -137,6 +138,13 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         return Err(format!("Unrecognized fields in dapnet config: {:?}", sorted_keys(&dapnet.extra)).into());
     }
 
+    // Optional echolink section
+    if let Some(ref echolink) = root.echolink
+        && !echolink.extra.is_empty()
+    {
+        return Err(format!("Unrecognized fields in echolink config: {:?}", sorted_keys(&echolink.extra)).into());
+    }
+
     // Optional geoalarm section
     if let Some(ref geoalarm) = root.geoalarm
         && !geoalarm.extra.is_empty()
@@ -239,6 +247,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         brew: None,
         asterisk: apply_asterisk_patch(root.asterisk.unwrap_or_default())?,
         dapnet: apply_dapnet_patch(root.dapnet.unwrap_or_default())?,
+        echolink: apply_echolink_patch(root.echolink.unwrap_or_default())?,
         geoalarm: apply_geoalarm_patch(root.geoalarm.unwrap_or_default())?,
         meshcom: apply_meshcom_patch(root.meshcom.unwrap_or_default())?,
         tpg2200_action: apply_tpg2200_action_patch(root.tpg2200_action.unwrap_or_default())?,
@@ -316,6 +325,7 @@ struct TomlConfigRoot {
     brew: Option<CfgBrewDto>,
     asterisk: Option<CfgAsteriskDto>,
     dapnet: Option<CfgDapnetDto>,
+    echolink: Option<CfgEcholinkDto>,
     geoalarm: Option<CfgGeoalarmDto>,
     meshcom: Option<CfgMeshcomDto>,
     tpg2200_action: Option<CfgTpg2200ActionDto>,

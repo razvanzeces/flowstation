@@ -26,7 +26,14 @@ impl CcBsSubentity {
         }
     }
 
-    /// Handle network-initiated circuit setup request (Brew/Asterisk -> local called MS).
+    fn network_group_call_allowed(&self, network_entity: TetraEntity, dest_gssi: u32) -> bool {
+        match network_entity {
+            TetraEntity::Echolink => self.is_echolink_inbound_group_destination(dest_gssi),
+            _ => brew::is_brew_inbound_allowed(&self.config, dest_gssi),
+        }
+    }
+
+    /// Handle network-initiated circuit setup request (Brew/Asterisk/EchoLink -> local called MS).
     pub(in crate::cmce::subentities::cc_bs) fn fsm_on_network_circuit_setup_request(
         &mut self,
         queue: &mut MessageQueue,
@@ -140,18 +147,27 @@ impl CcBsSubentity {
         let call_timeout = CallTimeout::try_from(call.timeout as u64).unwrap_or(CallTimeout::T5m);
         let setup_timeout = self.network_setup_timeout(network_entity);
         let circuit_mode = CircuitModeType::try_from(call.mode as u64).unwrap_or(CircuitModeType::TchS);
-        let external_subscriber_number = Self::encode_external_subscriber_number(&call.number);
-        let calling_party_extension = call.number.trim().parse::<u32>().ok().filter(|value| *value <= 0x00ff_ffff);
+        let external_number = if call.number.trim().is_empty() && call.source_issi != 0 {
+            call.source_issi.to_string()
+        } else {
+            call.number.clone()
+        };
+        let external_subscriber_number = Self::encode_external_subscriber_number(&external_number);
 
         // Asterisk SIP callers often have no real TETRA ISSI; derive a display SSI from the
         // dialled external number so the local MS sees a sensible calling party. Brew keeps its
         // original behaviour (always uses source_issi, even when 0).
         let calling_party_address_ssi = if call.source_issi != 0 {
             Some(call.source_issi)
-        } else if network_entity == TetraEntity::Asterisk {
-            Self::external_number_as_ssi(&call.number)
+        } else if matches!(network_entity, TetraEntity::Asterisk | TetraEntity::Echolink) {
+            Self::external_number_as_ssi(&external_number)
         } else {
-            Some(call.source_issi)
+            None
+        };
+        let calling_party_extension = if calling_party_address_ssi.is_none() {
+            external_number.trim().parse::<u32>().ok().filter(|value| *value <= 0x00ff_ffff)
+        } else {
+            None
         };
 
         tracing::info!(
@@ -713,6 +729,7 @@ impl CcBsSubentity {
     pub(in crate::cmce::subentities::cc_bs) fn fsm_on_network_call_start(
         &mut self,
         queue: &mut MessageQueue,
+        network_entity: TetraEntity,
         brew_uuid: uuid::Uuid,
         source_issi: u32,
         dest_gssi: u32,
@@ -722,17 +739,17 @@ impl CcBsSubentity {
         // inbound predicate which — unlike is_brew_gssi_routable — must NOT apply the
         // outbound whitelist (see brew_routable::is_brew_inbound_allowed). A GSSI that
         // is not admissible is dropped gracefully instead of crashing the base station.
-        if !brew::is_brew_inbound_allowed(&self.config, dest_gssi) {
+        if !self.network_group_call_allowed(network_entity, dest_gssi) {
             tracing::info!(
                 "CMCE: ignoring network call start uuid={} gssi={} (inbound not allowed)",
                 brew_uuid,
                 dest_gssi
             );
-            self.notify_network_call_end(queue, brew_uuid);
+            self.notify_network_call_end(queue, network_entity, brew_uuid);
             return;
         }
 
-        if !self.has_listener(dest_gssi) {
+        if !self.has_listener(dest_gssi) && network_entity != TetraEntity::Echolink {
             tracing::info!(
                 "CMCE: ignoring network call start uuid={} gssi={} (no listeners)",
                 brew_uuid,
@@ -740,8 +757,14 @@ impl CcBsSubentity {
             );
             self.drop_group_calls_if_unlistened(queue, dest_gssi);
 
-            self.notify_network_call_end(queue, brew_uuid);
+            self.notify_network_call_end(queue, network_entity, brew_uuid);
             return;
+        } else if !self.has_listener(dest_gssi) {
+            tracing::info!(
+                "CMCE: accepting EchoLink network call uuid={} gssi={} without registry listeners",
+                brew_uuid,
+                dest_gssi
+            );
         }
 
         // Speaker change for an existing GSSI call
@@ -758,7 +781,7 @@ impl CcBsSubentity {
                 old_speaker
             );
 
-            if let Err(err) = self.fsm_group_on_network_call_start(queue, call_id, brew_uuid, source_issi) {
+            if let Err(err) = self.fsm_group_on_network_call_start(queue, call_id, network_entity, brew_uuid, source_issi) {
                 match err {
                     GroupTransitionError::UnknownCall(_) => {
                         tracing::warn!(
@@ -914,6 +937,7 @@ impl CcBsSubentity {
         self.active_calls.insert(
             call_id,
             ActiveCall::new_network(
+                network_entity,
                 brew_uuid,
                 dest_gssi,
                 source_issi,
@@ -939,7 +963,7 @@ impl CcBsSubentity {
         queue.push_back(SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
-            dest: TetraEntity::Brew,
+            dest: network_entity,
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
                 brew_uuid,
                 call_id,

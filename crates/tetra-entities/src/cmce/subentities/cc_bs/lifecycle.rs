@@ -157,8 +157,8 @@ impl CcBsSubentity {
         }
     }
 
-    pub(super) fn notify_network_call_end(&self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid) {
-        Self::push_control(queue, TetraEntity::Brew, CallControl::NetworkCallEnd { brew_uuid });
+    pub(super) fn notify_network_call_end(&self, queue: &mut MessageQueue, network_entity: TetraEntity, brew_uuid: uuid::Uuid) {
+        Self::push_control(queue, network_entity, CallControl::NetworkCallEnd { brew_uuid });
     }
 
     pub(super) fn notify_network_circuit_release(

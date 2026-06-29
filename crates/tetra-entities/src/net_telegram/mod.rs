@@ -37,6 +37,13 @@ pub enum TelegramAlertMsg {
     Meshcom { prefix: String, src: String, text: String },
     /// A GeoAlarm geofence event forwarded through the existing Telegram alert delivery path.
     Geoalarm { prefix: String, source: String, text: String },
+    /// An EchoLink session connected or disconnected.
+    EcholinkSession {
+        prefix: String,
+        remote: String,
+        connected: bool,
+        route: String,
+    },
 }
 
 /// Cloneable, push-only handle. Cloned into the telemetry-tee and dashboard-log threads.
@@ -75,6 +82,17 @@ impl TelegramAlertSink {
     #[inline]
     pub fn send_geoalarm(&self, prefix: String, source: String, text: String) {
         let _ = self.tx.send(TelegramAlertMsg::Geoalarm { prefix, source, text });
+    }
+
+    /// Forward an EchoLink session transition to the alerter for Telegram delivery.
+    #[inline]
+    pub fn send_echolink_session(&self, prefix: String, remote: String, connected: bool, route: String) {
+        let _ = self.tx.send(TelegramAlertMsg::EcholinkSession {
+            prefix,
+            remote,
+            connected,
+            route,
+        });
     }
 }
 

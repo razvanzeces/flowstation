@@ -186,6 +186,24 @@ pub fn dapnet(station: &StationInfo, prefix: &str, callsign: &str, text: &str) -
     )
 }
 
+/// An EchoLink station opened or closed a QSO session.
+pub fn echolink_session(station: &StationInfo, prefix: &str, remote: &str, connected: bool, route: &str) -> String {
+    let prefix = truncate_chars(prefix.trim(), 32);
+    let remote = truncate_chars(remote.trim(), 64);
+    let route = truncate_chars(route.trim(), 80);
+    let state = if connected { "connected" } else { "disconnected" };
+    frame(
+        if connected { "🔗" } else { "⛓️" },
+        if prefix.is_empty() { "EchoLink" } else { &prefix },
+        &[
+            format!("Remote: <code>{}</code>", escape_html(&remote)),
+            format!("State: <b>{state}</b>"),
+            format!("TETRA route: <code>{}</code>", escape_html(&route)),
+        ],
+        station,
+    )
+}
+
 /// Station health changed level. Lists the domains that are not Ok, plus the last action taken.
 pub fn health(station: &StationInfo, snap: &crate::health::HealthSnapshot) -> String {
     use crate::health::HealthLevel;
@@ -265,6 +283,15 @@ mod tests {
         assert!(m.contains("<b>DAPNET</b>"));
         assert!(m.contains("<code>DL1ABC</code>"));
         assert!(m.contains("Test &lt;msg&gt;"));
+    }
+
+    #[test]
+    fn echolink_session_contains_remote_state_and_route() {
+        let m = echolink_session(&station(), "EchoLink", "DJ2TH", true, "GSSI 8");
+        assert!(m.contains("<b>EchoLink</b>"));
+        assert!(m.contains("<code>DJ2TH</code>"));
+        assert!(m.contains("<b>connected</b>"));
+        assert!(m.contains("<code>GSSI 8</code>"));
     }
 
     #[test]

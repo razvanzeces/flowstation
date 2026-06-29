@@ -18,6 +18,7 @@ use tetra_entities::net_brew::entity::BrewEntity;
 use tetra_entities::net_brew::new_websocket_transport;
 use tetra_entities::net_dapnet::spawn_dapnet_worker;
 use tetra_entities::net_dashboard::DashboardServer;
+use tetra_entities::net_echolink::{EcholinkEntity, echolink_channel};
 use tetra_entities::net_geoalarm::{GeoAlarmSink, spawn_geoalarm_worker};
 use tetra_entities::net_meshcom::spawn_meshcom_worker;
 use tetra_entities::net_snom::{snom_notify_channel, spawn_snom_notify_worker};
@@ -163,6 +164,8 @@ fn start_control_worker(cfg: SharedConfig, command_dispatchers: HashMap<TetraEnt
 fn build_bs_stack(
     cfg: &mut SharedConfig,
     config_path: &str,
+    echolink_cmd_rx: tetra_entities::net_echolink::EcholinkCmdReceiver,
+    echolink_telegram_sink: Option<TelegramAlertSink>,
 ) -> (
     MessageRouter,
     Option<TelemetrySource>,
@@ -307,6 +310,17 @@ fn build_bs_stack(
         }
     }
 
+    router.register_entity(Box::new(EcholinkEntity::new(
+        cfg.clone(),
+        echolink_cmd_rx,
+        echolink_telegram_sink,
+    )));
+    if cfg.effective_echolink().enabled {
+        eprintln!(" -> EchoLink integration enabled");
+        #[cfg(not(feature = "echolink"))]
+        eprintln!("    audio codecs not compiled in; rebuild with --features echolink");
+    }
+
     // Init network time
     router.set_dl_time(TdmaTime::default());
 
@@ -381,7 +395,15 @@ fn main() {
         );
     }
 
-    let (mut router, tsource, cdispatchers, dapnet_telemetry_sink) = build_bs_stack(&mut cfg, &args.config);
+    let (echolink_cmd_tx, echolink_cmd_rx) = echolink_channel();
+    let (telegram_alert_sink, mut telegram_alert_source) = if cfg.config().telegram.is_some() {
+        let (sink, source) = telegram_alert_channel();
+        (Some(sink), Some(source))
+    } else {
+        (None, None)
+    };
+    let (mut router, tsource, cdispatchers, dapnet_telemetry_sink) =
+        build_bs_stack(&mut cfg, &args.config, echolink_cmd_rx, telegram_alert_sink.clone());
     let dapnet_cmd_tx = cdispatchers.get(&TetraEntity::Cmce).map(|dispatcher| dispatcher.clone_sender());
     let mut dapnet_telegram_sink: Option<TelegramAlertSink> = None;
     #[allow(unused_assignments)]
@@ -412,7 +434,7 @@ fn main() {
         // exists; it idles when alerts are disabled and reads settings live via
         // effective_telegram(), so toggling from the dashboard takes effect without a restart.
         let alert_sink = if has_telegram {
-            let (sink, alert_source) = telegram_alert_channel();
+            let alert_source = telegram_alert_source.take().expect("telegram source created with telegram config");
             let alert_cfg = cfg.clone();
             let snom_for_alerts = snom_notify_sink.clone();
             thread::Builder::new()
@@ -421,7 +443,7 @@ fn main() {
                     TelegramAlerter::new(alert_cfg, alert_source).with_snom_sink(snom_for_alerts).run();
                 })
                 .expect("failed to spawn telegram-alerter thread");
-            Some(sink)
+            telegram_alert_sink.clone()
         } else {
             None
         };
@@ -463,6 +485,7 @@ fn main() {
 
             // Propagate SharedConfig so the dashboard can read live SDS queue state.
             dashboard.set_shared_config(cfg.clone());
+            dashboard.set_echolink_cmd_sender(echolink_cmd_tx.clone());
 
             // Create a control link so dashboard can send commands to CMCE
             let dash_cmd_tx = {

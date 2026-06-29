@@ -13,6 +13,7 @@ path = "src/main.rs"
 # device binary. Off by default so the standard build needs no codec.
 default = []
 asterisk = ["tetra-entities/asterisk"]
+echolink = ["tetra-entities/echolink"]
 
 [dependencies]
 tetra-core = { workspace = true }

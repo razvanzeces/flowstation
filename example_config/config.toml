@@ -732,6 +732,52 @@ voice_service = true
 
 ###############################################################################
 
+# OPTIONAL: EchoLink directory and audio bridge
+#
+# Registers the station in the public EchoLink directory and bridges GSM-FR
+# audio to TETRA. Voice support requires a binary built with --features echolink
+# plus libgsm and the native tetra-codec library.
+#
+# Inbound EchoLink QSOs are simplex/P2MP group calls. Set default_tetra_dest_issi
+# to a GSSI and keep default_tetra_dest_is_group enabled. Outbound TETRA calls
+# can use either the prefix plus an EchoLink node ID or an explicit dial route.
+# Empty allowlists accept every remote station; otherwise callsign or node ID
+# must match. The normal network call lifecycle prevents media loops.
+#
+# [echolink]
+# enabled = false
+# callsign = "YOURCALL-L"
+# password = ""
+# location = "FlowStation"
+# status_text = "FlowStation EchoLink bridge"
+# directory_servers = ["servers.echolink.org", "backup.echolink.org"]
+# directory_port = 5200
+# bind_addr = "0.0.0.0"
+# audio_port = 5198
+# control_port = 5199
+#
+# inbound_enabled = true
+# outbound_enabled = true
+# outbound_prefix = "92"              # dial 92123456 to reach node 123456
+# strip_outbound_prefix = true
+# service_numbers = ["700"]
+# routes = { "700" = "ECHOTEST" }
+#
+# allowed_callsigns = []              # e.g. ["ECHOTEST", "DB0ABC-L"]
+# allowed_node_ids = []               # e.g. [9999, 123456]
+# auto_connect = ""
+# reconnect_interval_secs = 30
+# max_session_secs = 3600
+#
+# default_tetra_source_issi = 9999
+# default_tetra_dest_issi = 26225      # inbound destination GSSI
+# default_tetra_dest_is_group = true
+#
+# telegram_session_alerts = false
+# telegram_session_prefix = "EchoLink"
+
+###############################################################################
+
 # OPTIONAL: Snom/desk-phone ActionURL trigger for Motorola TPG2200 Call-Out
 #
 # Configure a Snom function key / ActionURL to call:

@@ -2267,6 +2267,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <span class="nav-icon" data-icon="dapnet"></span>
       <span class="nav-label" data-i18n="dapnet">DAPNET</span>
     </div>
+    <div class="nav-item" onclick="showPage('echolink',this)" id="nav-echolink">
+      <span class="nav-icon" data-icon="dapnet"></span>
+      <span class="nav-label" data-i18n="echolink">EchoLink</span>
+    </div>
     <div class="nav-item" onclick="showPage('geoalarm',this)" id="nav-geoalarm">
       <span class="nav-icon" data-icon="geoalarm"></span>
       <span class="nav-label" data-i18n="geoalarm">GeoAlarm</span>
@@ -3194,6 +3198,163 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <textarea id="dap-out-text" class="form-input" rows="3" maxlength="80" placeholder="Message text"></textarea>
           </div>
           <div class="config-msg" id="dap-send-msg"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ECHOLINK ── -->
+    <div class="page" id="page-echolink">
+      <div class="section-label" data-i18n="integrations">Integrations</div>
+      <div class="hero">
+        <span class="hero-dot is-idle" id="el-hero-dot"></span>
+        <div class="hero-main">
+          <div class="hero-title" data-i18n="echolink_title">EchoLink</div>
+          <div class="hero-sub" id="el-bind">—</div>
+        </div>
+        <div class="hero-metrics">
+          <span class="pill pill-idle" id="el-directory">—</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title" data-i18n="echolink_title">EchoLink</div>
+          <div class="card-actions">
+            <button class="btn btn-sm" onclick="loadEcholink()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="refresh">Refresh</span></button>
+            <button class="btn btn-primary" onclick="saveEcholink()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="stat-grid" style="margin-bottom:14px">
+            <div class="stat-card">
+              <div class="stat-label">QSO</div>
+              <div class="stat-value" id="el-qso">—</div>
+              <div class="stat-sub" id="el-target">—</div>
+            </div>
+            <div class="stat-card blue">
+              <div class="stat-label">TETRA route</div>
+              <div class="stat-value blue" id="el-route">—</div>
+              <div class="stat-sub" id="el-status-callsign">—</div>
+            </div>
+          </div>
+          <div class="info-grid" style="margin-bottom:14px">
+            <div class="info-row"><div class="info-key">Last event</div><div class="info-val" id="el-last-rx">—</div></div>
+            <div class="info-row"><div class="info-key">Last TX</div><div class="info-val" id="el-last-tx">—</div></div>
+            <div class="info-row"><div class="info-key">Last error</div><div class="info-val" id="el-last-error">—</div></div>
+          </div>
+
+          <label class="sw-row">
+            <span class="sw-text">Enable EchoLink integration</span>
+            <span class="sw"><input type="checkbox" id="el-enabled"><i></i></span>
+          </label>
+          <div class="h-form" style="margin-top:14px">
+            <label class="h-flabel">Callsign</label>
+            <input type="text" id="el-callsign" class="form-input" autocomplete="off" spellcheck="false" style="text-transform:uppercase" placeholder="DJ2TH-L">
+            <label class="h-flabel">Password</label>
+            <input type="password" id="el-password" class="form-input" autocomplete="new-password" spellcheck="false" oninput="echolinkPasswordDirty=true">
+            <label class="h-flabel">Location</label>
+            <input type="text" id="el-location" class="form-input" placeholder="FlowStation">
+            <label class="h-flabel">Status text</label>
+            <input type="text" id="el-status-text" class="form-input" placeholder="FlowStation EchoLink bridge">
+            <label class="h-flabel top">Directory servers</label>
+            <textarea id="el-directory-servers" class="form-input" rows="2" placeholder="servers.echolink.org&#10;backup.echolink.org"></textarea>
+            <label class="h-flabel">Directory port</label>
+            <input type="number" id="el-directory-port" class="form-input" min="1" max="65535" placeholder="5200">
+            <label class="h-flabel">Bind address</label>
+            <input type="text" id="el-bind-addr" class="form-input" placeholder="0.0.0.0">
+            <label class="h-flabel">Audio / control ports</label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <input type="number" id="el-audio-port" class="form-input" min="1" max="65535" placeholder="5198">
+              <input type="number" id="el-control-port" class="form-input" min="1" max="65535" placeholder="5199">
+            </div>
+          </div>
+          <div class="config-msg" id="el-msg"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">EchoLink Routing</div>
+          <div class="card-actions">
+            <button class="btn btn-primary" onclick="saveEcholink()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="h-form wide">
+            <div>
+              <label class="sw-row"><span class="sw-text">Inbound EchoLink → TETRA</span><span class="sw"><input type="checkbox" id="el-inbound"><i></i></span></label>
+              <div class="h-form-pair" style="margin-top:10px">
+                <label class="h-flabel">Source ISSI</label>
+                <input type="number" id="el-source-issi" class="form-input" min="1" max="16777215" placeholder="9999">
+                <label class="h-flabel">Default destination</label>
+                <input type="number" id="el-dest-issi" class="form-input" min="0" max="16777215" placeholder="GSSI">
+                <label class="h-flabel">Group destination</label>
+                <label class="h-finline"><span class="sw"><input type="checkbox" id="el-dest-group"><i></i></span><span class="h-flabel-sm">simplex/P2MP inbound</span></label>
+              </div>
+            </div>
+            <div>
+              <label class="sw-row"><span class="sw-text">Outbound TETRA → EchoLink</span><span class="sw"><input type="checkbox" id="el-outbound"><i></i></span></label>
+              <div class="h-form-pair" style="margin-top:10px">
+                <label class="h-flabel">Outbound prefix</label>
+                <input type="text" id="el-out-prefix" class="form-input" placeholder="92">
+                <label class="h-flabel">Strip prefix</label>
+                <label class="h-finline"><span class="sw"><input type="checkbox" id="el-strip-prefix"><i></i></span><span class="h-flabel-sm">before lookup</span></label>
+                <label class="h-flabel top">Service numbers</label>
+                <textarea id="el-service-numbers" class="form-input" rows="2" placeholder="700"></textarea>
+                <label class="h-flabel top">Dial → EchoLink target</label>
+                <textarea id="el-routes" class="form-input" rows="3" placeholder="700=ECHOTEST&#10;701=DB0ABC-L"></textarea>
+              </div>
+            </div>
+            <div>
+              <div class="h-form-pair">
+                <label class="h-flabel top">Allowed callsigns</label>
+                <textarea id="el-allowed-calls" class="form-input" rows="3" placeholder="ECHOTEST&#10;DB0ABC-L"></textarea>
+                <label class="h-flabel top">Allowed node IDs</label>
+                <textarea id="el-allowed-nodes" class="form-input" rows="3" placeholder="9999"></textarea>
+                <label class="h-flabel">Auto connect</label>
+                <input type="text" id="el-auto-connect" class="form-input" placeholder="ECHOTEST">
+                <label class="h-flabel">Reconnect / max session</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                  <input type="number" id="el-reconnect" class="form-input" min="1" placeholder="30">
+                  <input type="number" id="el-max-session" class="form-input" min="1" placeholder="3600">
+                </div>
+                <label class="h-flabel">Telegram session alerts</label>
+                <label class="h-finline"><span class="sw"><input type="checkbox" id="el-telegram-session-alerts"><i></i></span><span class="h-flabel-sm">connect and disconnect</span></label>
+                <label class="h-flabel">Telegram prefix</label>
+                <input type="text" id="el-telegram-session-prefix" class="form-input" placeholder="EchoLink">
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px">
+            <input type="text" id="el-connect-target" class="form-input" style="max-width:260px" placeholder="ECHOTEST or node ID">
+            <button class="btn btn-primary" onclick="echolinkConnect()">Connect</button>
+            <button class="btn btn-danger" onclick="echolinkDisconnect()">Disconnect</button>
+          </div>
+          <div class="help-text" style="margin-top:10px">EchoLink uses UDP 5198/5199 with GSM-FR audio. TETRA service numbers and prefixes route to EchoLink as simplex calls; inbound QSOs route to the configured GSSI as simplex/P2MP group calls.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">EchoLink Directory</div>
+          <div class="card-actions">
+            <input type="text" id="el-directory-filter" class="form-input" style="width:220px" placeholder="Search callsign, node ID or IP" oninput="echolinkDirectoryPageIndex=0;renderEcholinkDirectory()">
+            <button class="btn btn-sm" onclick="loadEcholinkDirectory()"><span class="btn-icon" data-icon="restart"></span><span data-i18n="refresh">Refresh</span></button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="help-text" id="el-directory-summary">Directory not loaded yet.</div>
+          <div class="table-wrap" style="margin-top:10px">
+            <table>
+              <thead><tr><th>Callsign</th><th>Node ID</th><th>IP</th><th>Action</th></tr></thead>
+              <tbody id="el-directory-tbody"></tbody>
+            </table>
+          </div>
+          <div class="log-controls">
+            <button class="btn btn-sm" onclick="echolinkDirectoryPrevPage()">‹ Prev</button>
+            <span class="sds-empty" id="el-directory-page">Page 0 / 0 · 0</span>
+            <button class="btn btn-sm" onclick="echolinkDirectoryNextPage()">Next ›</button>
+          </div>
         </div>
       </div>
     </div>
@@ -4863,6 +5024,7 @@ function showPage(name,el){
   if(name==='health'){loadHealthIntegrations();}
   if(name==='asterisk'){loadAsteriskStatus();loadSnomNotify();}
   if(name==='dapnet'){loadDapnet();loadDapnetLog();}
+  if(name==='echolink'){loadEcholink();}
   if(name==='geoalarm'){loadGeoalarm();}
   if(name==='meshcom'){loadMeshcom();}
   if(name==='maps'){refreshMapsData();}
@@ -5198,7 +5360,7 @@ async function wifiCall(url, body){
 function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
 
 // ── State + WS ────────────────────────────────────────────────────────────
-let ws=null,state={ms:{},calls:{},emergencies:{},lastHeard:[],sdsLog:[],dapnetLog:[],geoalarmEvents:[],geoalarmConfig:null,meshcomNodes:[],meshcomMessages:[],brewOnline:false,brewVer:0},sdsDest=0;
+let ws=null,state={ms:{},calls:{},emergencies:{},lastHeard:[],sdsLog:[],dapnetLog:[],echolinkDirectory:[],echolinkDirectoryStatus:'unknown',geoalarmEvents:[],geoalarmConfig:null,meshcomNodes:[],meshcomMessages:[],brewOnline:false,brewVer:0},sdsDest=0;
 
 // ── RadioID callsigns (indicativ) ──────────────────────────────────────────────
 // issi -> {cs:"CALLSIGN", fl:"🇷🇴"} (found; fl is the country flag emoji from the prefix, or "")
@@ -6054,7 +6216,7 @@ function _p2(n){return String(n).padStart(2,'0');}
 // live rows arriving over the WS; rows fetched from /api/sds-log already carry a server stamp.
 function nowStamp(){const d=new Date();return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())} ${_p2(d.getHours())}:${_p2(d.getMinutes())}:${_p2(d.getSeconds())}`;}
 const LOG_PAGE_SIZE=50;
-let sdsLogPageIndex=0,dapnetLogPageIndex=0,geoalarmPageIndex=0,meshNodePageIndex=0,meshMsgPageIndex=0;
+let sdsLogPageIndex=0,dapnetLogPageIndex=0,echolinkDirectoryPageIndex=0,geoalarmPageIndex=0,meshNodePageIndex=0,meshMsgPageIndex=0;
 function setLogPager(id,page,total){
   const el=document.getElementById(id);if(!el)return;
   if(!total){el.textContent='Page 0 / 0 · 0';return;}
@@ -6357,6 +6519,200 @@ async function sendDapnetMessage(){
     if(d.ok){setDapSendMsg('✓ Sent',true);document.getElementById('dap-out-text').value='';loadDapnetLog();}
     else setDapSendMsg('✗ '+(d.error||'Send failed'),false);
   }catch{setDapSendMsg(t('conn_error'),false);}
+}
+
+let echolinkPasswordDirty=false;
+function echolinkRoutesText(routes){
+  if(!routes)return'';
+  if(Array.isArray(routes))return routes.join('\n');
+  return Object.keys(routes).sort().map(k=>`${k}=${routes[k]}`).join('\n');
+}
+function echolinkRoutesBody(id){
+  const out={};
+  for(const raw of (document.getElementById(id)?.value||'').split(/\r?\n/)){
+    const line=raw.trim();
+    if(!line)continue;
+    const idx=line.indexOf('=');
+    if(idx<1){setElMsg('Route must use dial=target format',false);return null;}
+    const k=line.slice(0,idx).trim(),v=line.slice(idx+1).trim();
+    if(!k||!v){setElMsg('Route must use dial=target format',false);return null;}
+    out[k]=v.toUpperCase();
+  }
+  return out;
+}
+function echolinkListText(values){return (values||[]).join('\n');}
+function echolinkListBody(id){
+  return (document.getElementById(id)?.value||'')
+    .split(/[\s,]+/)
+    .map(v=>v.trim())
+    .filter(Boolean);
+}
+function echolinkU32ListBody(id){
+  const out=[];
+  for(const raw of echolinkListBody(id)){
+    const n=Number(raw);
+    if(!Number.isInteger(n)||n<1){setElMsg('Node IDs must be positive numbers',false);return null;}
+    out.push(n);
+  }
+  return out;
+}
+function echolinkDirectoryFiltered(){
+  const q=(document.getElementById('el-directory-filter')?.value||'').trim().toUpperCase();
+  const rows=(state.echolinkDirectory||[]).slice().sort((a,b)=>String(a.callsign||'').localeCompare(String(b.callsign||'')));
+  if(!q)return rows;
+  return rows.filter(s=>
+    String(s.callsign||'').toUpperCase().includes(q) ||
+    String(s.id||'').includes(q) ||
+    String(s.ip||'').includes(q)
+  );
+}
+function echolinkDirectoryRow(s){
+  const call=String(s.callsign||'').toUpperCase();
+  return `<tr>
+    <td><span class="badge badge-blue" style="font-size:10px">${escHtml(call||'—')}</span></td>
+    <td class="sds-time">${escHtml(s.id??'')}</td>
+    <td class="sds-time">${escHtml(s.ip||'')}</td>
+    <td><button class="btn btn-sm" onclick="echolinkUseDirectoryTarget('${escAttr(call)}')">Use</button></td>
+  </tr>`;
+}
+function renderEcholinkDirectory(){
+  const tb=document.getElementById('el-directory-tbody');if(!tb)return;
+  const rows=echolinkDirectoryFiltered();
+  echolinkDirectoryPageIndex=clampLogPage(echolinkDirectoryPageIndex,rows.length);
+  setLogPager('el-directory-page',echolinkDirectoryPageIndex,rows.length);
+  const summary=document.getElementById('el-directory-summary');
+  if(summary){
+    const total=(state.echolinkDirectory||[]).length;
+    const status=state.echolinkDirectoryStatus||'Directory';
+    summary.textContent=total?`${status} · ${rows.length} shown · ${total} total`:'Directory not loaded yet.';
+  }
+  if(!rows.length){tb.innerHTML=`<tr><td colspan="4" class="sds-empty" style="text-align:center;padding:24px">No directory entries</td></tr>`;return;}
+  const start=echolinkDirectoryPageIndex*LOG_PAGE_SIZE;
+  tb.innerHTML=rows.slice(start,start+LOG_PAGE_SIZE).map(echolinkDirectoryRow).join('');
+}
+function echolinkDirectoryPrevPage(){echolinkDirectoryPageIndex--;renderEcholinkDirectory();}
+function echolinkDirectoryNextPage(){echolinkDirectoryPageIndex++;renderEcholinkDirectory();}
+function echolinkUseDirectoryTarget(target){
+  dapSet('el-connect-target',target);
+  setElMsg(`Target selected: ${target}`,true);
+}
+async function loadEcholinkDirectory(){
+  try{
+    const r=await fetch('/api/echolink/directory');
+    if(!r.ok)return;
+    const d=await r.json();
+    state.echolinkDirectory=d.stations||[];
+    state.echolinkDirectoryStatus=d.directory_status||'unknown';
+    echolinkDirectoryPageIndex=0;
+    renderEcholinkDirectory();
+  }catch{}
+}
+async function loadEcholink(){
+  try{
+    const r=await fetch('/api/echolink');
+    if(!r.ok){setElMsg(t('conn_error'),false);return;}
+    const d=await r.json(),rt=d.runtime||{};
+    dapCheck('el-enabled',d.enabled);
+    dapSet('el-callsign',d.callsign||'');
+    dapSet('el-password',d.password_set?(d.password_masked||''):'');
+    echolinkPasswordDirty=false;
+    dapSet('el-location',d.location||'FlowStation');
+    dapSet('el-status-text',d.status_text||'FlowStation EchoLink bridge');
+    dapSet('el-directory-servers',echolinkListText(d.directory_servers));
+    dapSet('el-directory-port',d.directory_port||5200);
+    dapSet('el-bind-addr',d.bind_addr||'0.0.0.0');
+    dapSet('el-audio-port',d.audio_port||5198);
+    dapSet('el-control-port',d.control_port||5199);
+    dapCheck('el-inbound',d.inbound_enabled);
+    dapCheck('el-outbound',d.outbound_enabled);
+    dapSet('el-out-prefix',d.outbound_prefix||'92');
+    dapCheck('el-strip-prefix',d.strip_outbound_prefix);
+    dapSet('el-service-numbers',echolinkListText(d.service_numbers));
+    dapSet('el-source-issi',d.default_tetra_source_issi||9999);
+    dapSet('el-dest-issi',d.default_tetra_dest_issi||0);
+    dapCheck('el-dest-group',d.default_tetra_dest_is_group);
+    dapSet('el-routes',echolinkRoutesText(d.routes));
+    dapSet('el-allowed-calls',echolinkListText(d.allowed_callsigns));
+    dapSet('el-allowed-nodes',echolinkListText(d.allowed_node_ids));
+    dapSet('el-auto-connect',d.auto_connect||'');
+    dapSet('el-reconnect',d.reconnect_interval_secs||30);
+    dapSet('el-max-session',d.max_session_secs||3600);
+    dapCheck('el-telegram-session-alerts',d.telegram_session_alerts);
+    dapSet('el-telegram-session-prefix',d.telegram_session_prefix||'EchoLink');
+    dapSet('el-directory',rt.directory_status||'—');
+    dapSet('el-qso',rt.qso_status||'—');
+    dapSet('el-bind',rt.bind||'—');
+    dapSet('el-target',rt.connected_target||'idle');
+    dapSet('el-status-callsign',rt.callsign||d.callsign||'—');
+    dapSet('el-route',rt.routed_tetra_dest||'not routed');
+    dapSet('el-last-rx',rt.last_session_event||'—');
+    dapSet('el-last-tx',rt.last_tx||'—');
+    dapSet('el-last-error',rt.last_error||'—');
+    const active=!!d.enabled&&!rt.last_error;
+    const dot=document.getElementById('el-hero-dot');
+    const pill=document.getElementById('el-directory');
+    if(dot)dot.className='hero-dot '+(active?'is-ok':(d.enabled?'is-warn':'is-idle'));
+    if(pill)pill.className='pill '+(active?'pill-ok':(d.enabled?'pill-warn':'pill-idle'));
+    setElMsg('',true);
+    loadEcholinkDirectory();
+  }catch{setElMsg(t('conn_error'),false);}
+}
+async function saveEcholink(){
+  const routes=echolinkRoutesBody('el-routes');
+  if(routes===null)return;
+  const allowedNodes=echolinkU32ListBody('el-allowed-nodes');
+  if(allowedNodes===null)return;
+  const body={
+    enabled:document.getElementById('el-enabled').checked,
+    callsign:dapVal('el-callsign').toUpperCase(),
+    location:dapVal('el-location')||'FlowStation',
+    status_text:dapVal('el-status-text')||'FlowStation EchoLink bridge',
+    directory_servers:echolinkListBody('el-directory-servers'),
+    directory_port:dapNum('el-directory-port',5200,1,65535),
+    bind_addr:dapVal('el-bind-addr')||'0.0.0.0',
+    audio_port:dapNum('el-audio-port',5198,1,65535),
+    control_port:dapNum('el-control-port',5199,1,65535),
+    inbound_enabled:document.getElementById('el-inbound').checked,
+    outbound_enabled:document.getElementById('el-outbound').checked,
+    outbound_prefix:dapVal('el-out-prefix')||'92',
+    strip_outbound_prefix:document.getElementById('el-strip-prefix').checked,
+    service_numbers:echolinkListBody('el-service-numbers'),
+    default_tetra_source_issi:dapNum('el-source-issi',9999,1,16777215),
+    default_tetra_dest_issi:dapNum('el-dest-issi',0,0,16777215),
+    default_tetra_dest_is_group:document.getElementById('el-dest-group').checked,
+    routes,
+    allowed_callsigns:echolinkListBody('el-allowed-calls').map(v=>v.toUpperCase()),
+    allowed_node_ids:allowedNodes,
+    auto_connect:dapVal('el-auto-connect').toUpperCase(),
+    reconnect_interval_secs:dapNum('el-reconnect',30,1,86400),
+    max_session_secs:dapNum('el-max-session',3600,1,86400),
+    telegram_session_alerts:document.getElementById('el-telegram-session-alerts').checked,
+    telegram_session_prefix:dapVal('el-telegram-session-prefix')||'EchoLink'
+  };
+  if(echolinkPasswordDirty)body.password=dapVal('el-password');
+  try{
+    const r=await fetch('/api/echolink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.ok){setElMsg('✓ Saved',true);loadEcholink();}
+    else setElMsg(t('save_fail')+': '+await r.text(),false);
+  }catch{setElMsg(t('conn_error'),false);}
+}
+async function echolinkConnect(){
+  const target=dapVal('el-connect-target').toUpperCase();
+  if(!target){setElMsg('Set EchoLink target first',false);return;}
+  try{
+    const r=await fetch('/api/echolink/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target})});
+    const d=await r.json();
+    if(d.ok){setElMsg('✓ Connect requested',true);setTimeout(loadEcholink,500);}
+    else setElMsg('✗ '+(d.error||'Connect failed'),false);
+  }catch{setElMsg(t('conn_error'),false);}
+}
+async function echolinkDisconnect(){
+  try{
+    const r=await fetch('/api/echolink/disconnect',{method:'POST'});
+    const d=await r.json();
+    if(d.ok){setElMsg('✓ Disconnect requested',true);setTimeout(loadEcholink,500);}
+    else setElMsg('✗ '+(d.error||'Disconnect failed'),false);
+  }catch{setElMsg(t('conn_error'),false);}
 }
 
 // ── Shared map-link + paths helpers (also used by GeoAlarm) ────────────────
@@ -6765,6 +7121,7 @@ async function sendMeshcomMessage(){
 }
 function setMeshMsg(txt,ok){const el=document.getElementById('mesh-msg');if(!el)return;el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';if(txt)setTimeout(()=>{if(el.textContent===txt)el.textContent='';},5000);}
 function setMeshSendMsg(txt,ok){const el=document.getElementById('mesh-send-msg');if(!el)return;el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';if(txt)setTimeout(()=>{if(el.textContent===txt)el.textContent='';},5000);}
+function setElMsg(txt,ok){const el=document.getElementById('el-msg');if(!el)return;el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';if(txt)setTimeout(()=>{if(el.textContent===txt)el.textContent='';},5000);}
 function setDapMsg(txt,ok){const el=document.getElementById('dap-msg');if(!el)return;el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';if(txt)setTimeout(()=>{if(el.textContent===txt)el.textContent='';},5000);}
 function setDapSendMsg(txt,ok){const el=document.getElementById('dap-send-msg');if(!el)return;el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';if(txt)setTimeout(()=>{if(el.textContent===txt)el.textContent='';},5000);}
 
@@ -8050,6 +8407,7 @@ function healthDomainAccent(d){ return (HEALTH_SVG[d]||{}).accent || ''; }
 const INTEGRATION_SVG = {
   asterisk:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
   dapnet:'<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 6h6M9 10h6M9 14h3"/>',
+  echolink:'<path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L11 4.93"/><path d="M14 11a5 5 0 0 0-7.07 0L4.81 13.12a5 5 0 0 0 7.07 7.07L13 19.07"/>',
   geoalarm:'<path d="M12 21s-7-5.5-7-11a7 7 0 0 1 14 0c0 5.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
 };
 function integrationSvg(key){
@@ -8107,8 +8465,8 @@ function renderHealthTab(h){
   });
 }
 
-let healthIntegrationState={asterisk:null,dapnet:null,geoalarm:null,meshcom:null,lastLoad:0};
-// title, iconKey (asterisk|dapnet|geoalarm), accent (blue|purple|''), level, detail, extra.
+let healthIntegrationState={asterisk:null,dapnet:null,echolink:null,geoalarm:null,meshcom:null,lastLoad:0};
+// title, iconKey (asterisk|dapnet|echolink|geoalarm), accent (blue|purple|''), level, detail, extra.
 function integrationHealthCard(title,iconKey,accent,level,detail,extra){
   const lvlCls = healthLevelClass(level);
   const icoCls = level==='ok' ? accent : lvlCls;
@@ -8165,6 +8523,22 @@ function classifyDapnetHealth(data){
   const extra=notes.length?notes.join(' · '):('Host '+(rt.endpoint||((data.rwth_core_host||'—')+':'+(data.rwth_core_port||'—')))+' · seen '+(rt.seen_messages??0)+(rt.last_rx?' · last RX '+rt.last_rx:''));
   return {level,detail,extra};
 }
+function classifyEcholinkHealth(data){
+  if(!data||!data.enabled)return {level:'ok',detail:'disabled',extra:'EchoLink bridge is not active.'};
+  const rt=data.runtime||{};
+  const status=String(rt.directory_status||'').toLowerCase();
+  const err=rt.last_error||'';
+  let level='ok';
+  const notes=[];
+  if(!data.callsign)notes.push('callsign missing');
+  if(!data.password_set)notes.push('password missing');
+  if(err)notes.push('Last error: '+err);
+  if(status&&/(error|failed)/.test(status))notes.push('Directory '+rt.directory_status);
+  if(notes.length)level='degraded';
+  const detail=(rt.directory_status||'configured')+' · '+(rt.qso_status||'idle');
+  const extra=notes.length?notes.join(' · '):('Bind '+(rt.bind||'—')+' · route '+(rt.routed_tetra_dest||'not routed'));
+  return {level,detail,extra};
+}
 function classifyGeoalarmHealth(data){
   if(!data||!data.enabled)return {level:'ok',detail:'disabled',extra:'GeoAlarm is not active.'};
   const rt=data.runtime||{};
@@ -8212,6 +8586,12 @@ function renderHealthIntegrations(){
   } else {
     grid.appendChild(integrationHealthCard('DAPNET','dapnet','blue','degraded','status unavailable','Open the DAPNET page or wait for the next refresh.'));
   }
+  if(healthIntegrationState.echolink){
+    const e=classifyEcholinkHealth(healthIntegrationState.echolink);
+    grid.appendChild(integrationHealthCard('EchoLink','echolink','blue',e.level,e.detail,e.extra));
+  } else {
+    grid.appendChild(integrationHealthCard('EchoLink','echolink','blue','degraded','status unavailable','Open the EchoLink page or wait for the next refresh.'));
+  }
   if(healthIntegrationState.geoalarm){
     const g=classifyGeoalarmHealth(healthIntegrationState.geoalarm);
     grid.appendChild(integrationHealthCard('GeoAlarm','geoalarm','purple',g.level,g.detail,g.extra));
@@ -8228,14 +8608,16 @@ function renderHealthIntegrations(){
 async function loadHealthIntegrations(){
   healthIntegrationState.lastLoad=Date.now();
   try{
-    const [ast,dap,geo,mesh]=await Promise.all([
+    const [ast,dap,el,geo,mesh]=await Promise.all([
       fetch('/api/asterisk/status').then(r=>r.ok?r.json():null).catch(()=>null),
       fetch('/api/dapnet').then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch('/api/echolink').then(r=>r.ok?r.json():null).catch(()=>null),
       fetch('/api/geoalarm').then(r=>r.ok?r.json():null).catch(()=>null),
       fetch('/api/meshcom').then(r=>r.ok?r.json():null).catch(()=>null)
     ]);
     healthIntegrationState.asterisk=ast;
     healthIntegrationState.dapnet=dap;
+    healthIntegrationState.echolink=el;
     healthIntegrationState.geoalarm=geo;
     healthIntegrationState.meshcom=mesh;
   }catch{}

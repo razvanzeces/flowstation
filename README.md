@@ -224,6 +224,17 @@ cargo build --release
 ./target/release/bluestation-bs config.toml
 ```
 
+For voice bridges, install the native codec dependencies first and select the
+required feature:
+
+```bash
+# EchoLink voice
+cargo build --release --features echolink
+
+# Asterisk and EchoLink voice together
+cargo build --release --features asterisk,echolink
+```
+
 ### As a systemd service
 
 ```bash
@@ -492,7 +503,8 @@ sure AMI is enabled and `res_pjsip_notify.so` loads.
 
 EchoLink uses the public directory servers for login/status and UDP 5198/5199
 for QSO audio/control. GSM-FR audio requires `libgsm1-dev` at build time and the
-TETRA ACELP codec for TETRA audio conversion.
+TETRA ACELP codec for TETRA audio conversion. Build the station with
+`cargo build --release --features echolink`.
 
 ```toml
 [echolink]
@@ -518,14 +530,19 @@ allowed_node_ids = []
 auto_connect = ""
 reconnect_interval_secs = 30
 max_session_secs = 3600
+telegram_session_alerts = false
+telegram_session_prefix = "EchoLink"
 
 default_tetra_source_issi = 9999
-default_tetra_dest_issi = 2632585
-default_tetra_dest_is_group = false
+default_tetra_dest_issi = 26225
+default_tetra_dest_is_group = true
 ```
 
 The EchoLink dashboard page shows directory status, station count, QSO status,
-current route, last TX/error, and the downloaded directory list.
+current route, last TX/error, and the downloaded directory list. Empty remote
+allowlists accept all stations; when either list is populated, the remote
+callsign or node ID must match. Incoming audio is routed as a simplex/P2MP group
+call and uses the normal call ownership and teardown path for loop protection.
 
 ### MeshCom external UDP bridge
 
@@ -658,20 +675,21 @@ The dashboard shows a persistent red warning banner with the parse error so you 
 FlowStation can bridge TETRA to external paging and telephony networks and push
 alerts out to desk phones, dashboards, and Telegram. DAPNET, Snom display
 notifications, GeoAlarm, and the TPG2200 trigger are all part of the **default
-build** — just fill in their config sections. Asterisk SIP/RTP telephony is
-**feature-gated** (see below).
+build** — just fill in their config sections. Asterisk SIP/RTP and EchoLink
+voice are **feature-gated** (see below).
 
-> **Asterisk is not in the default build.** To use the SIP/RTP bridge the device
-> binary must be built with `cargo build --release --features asterisk`, and the
+> **Voice bridges are not in the default build.** Build Asterisk SIP/RTP with
+> `--features asterisk`, EchoLink audio with `--features echolink`, or both with
+> `--features asterisk,echolink`. The
 > native [`tetra-codec`](https://github.com/outerplane/tetra-codec) (outerplane)
 > ACELP library must be installed so FlowStation can convert between TETRA ACELP
-> and PCM audio. The default `cargo build --release` does **not** include Asterisk;
-> DAPNET, Snom notify, GeoAlarm, the TPG2200 trigger, and the dashboard all work
-> without it.
+> and PCM audio; EchoLink additionally needs `libgsm1-dev`. The default build
+> keeps EchoLink config, directory status, and dashboard support available but
+> does not compile QSO control or native voice transcoding.
 
-### TETRA ACELP codec (Asterisk only)
+### TETRA ACELP codec (voice bridges)
 
-The Asterisk audio bridge needs a TETRA ACELP codec implementation. One tested
+The Asterisk and EchoLink audio bridges need a TETRA ACELP codec implementation. One tested
 implementation is `outerplane/tetra-codec`:
 
 ```bash

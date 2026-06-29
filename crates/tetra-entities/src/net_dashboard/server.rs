@@ -12,6 +12,7 @@ use tungstenite::{
 use crate::net_control::commands::ControlCommand;
 use crate::net_dashboard::html::DASHBOARD_HTML;
 use crate::net_dashboard::state::{CallEntry, DashboardState, DashboardStateInner, MsEntry};
+use crate::net_echolink::{EcholinkCmdSender, EcholinkCommand};
 use crate::net_telemetry::TelemetryEvent;
 use crate::tpg2200::build_tpg2200_callout_payload;
 
@@ -621,6 +622,7 @@ pub struct DashboardServer {
     /// Shared stack config — used to read live_sds_queue from StackState.
     shared_config: Option<tetra_config::bluestation::SharedConfig>,
     cmd_tx: Option<CmdSender>,
+    echolink_cmd_tx: Option<EcholinkCmdSender>,
     update_state: SharedUpdateState,
     /// Optional override for the OTA update source directory.
     /// If None, the update routine auto-detects.
@@ -652,6 +654,7 @@ impl DashboardServer {
             config_path,
             shared_config: None,
             cmd_tx: None,
+            echolink_cmd_tx: None,
             update_state: Arc::new(Mutex::new(UpdateState::new())),
             source_dir_override: None,
             auth: None,
@@ -664,6 +667,10 @@ impl DashboardServer {
 
     pub fn set_cmd_sender(&mut self, tx: CmdSender) {
         self.cmd_tx = Some(tx);
+    }
+
+    pub fn set_echolink_cmd_sender(&mut self, tx: EcholinkCmdSender) {
+        self.echolink_cmd_tx = Some(tx);
     }
 
     /// Provide the SharedConfig so the dashboard can read live SDS queue state.
@@ -701,6 +708,7 @@ impl DashboardServer {
         let clients = Arc::clone(&self.clients);
         let config_path = self.config_path.clone();
         let cmd_tx: Arc<Mutex<Option<CmdSender>>> = Arc::new(Mutex::new(self.cmd_tx.take()));
+        let echolink_cmd_tx: Arc<Mutex<Option<EcholinkCmdSender>>> = Arc::new(Mutex::new(self.echolink_cmd_tx.take()));
         let update_state = Arc::clone(&self.update_state);
         let source_dir_override = self.source_dir_override.clone();
         let auth = self.auth.clone();
@@ -742,6 +750,7 @@ impl DashboardServer {
                     let clients = Arc::clone(&clients);
                     let config_path = config_path.clone();
                     let cmd_tx = Arc::clone(&cmd_tx);
+                    let echolink_cmd_tx = Arc::clone(&echolink_cmd_tx);
                     let update_state = Arc::clone(&update_state);
                     let source_dir_override = source_dir_override.clone();
                     let auth = auth.clone();
@@ -757,6 +766,7 @@ impl DashboardServer {
                                 clients,
                                 config_path,
                                 cmd_tx,
+                                echolink_cmd_tx,
                                 update_state,
                                 source_dir_override,
                                 auth,
@@ -1424,6 +1434,7 @@ fn handle_connection(
     clients: WsClients,
     config_path: String,
     cmd_tx: Arc<Mutex<Option<CmdSender>>>,
+    echolink_cmd_tx: Arc<Mutex<Option<EcholinkCmdSender>>>,
     update_state: SharedUpdateState,
     source_dir_override: Option<String>,
     auth: Option<(String, String)>,
@@ -2005,6 +2016,23 @@ fn handle_connection(
     } else if req_line.contains("POST /api/dapnet") {
         let (inner, body_str) = read_post_body(stream);
         serve_dapnet_post(inner, &shared_config, &config_path, &body_str);
+    } else if req_line.contains("GET /api/echolink/directory") {
+        let mut s = stream;
+        drain_http_headers(&mut s);
+        serve_echolink_directory(s, &shared_config);
+    } else if req_line.contains("POST /api/echolink/connect") {
+        let (inner, body_str) = read_post_body(stream);
+        serve_echolink_connect(inner, &shared_config, &echolink_cmd_tx, &body_str);
+    } else if req_line.contains("POST /api/echolink/disconnect") {
+        let (inner, _) = read_post_body(stream);
+        serve_echolink_disconnect(inner, &echolink_cmd_tx);
+    } else if req_line.contains("GET /api/echolink") {
+        let mut s = stream;
+        drain_http_headers(&mut s);
+        serve_echolink_get(s, &shared_config);
+    } else if req_line.contains("POST /api/echolink") {
+        let (inner, body_str) = read_post_body(stream);
+        serve_echolink_post(inner, &shared_config, &config_path, &body_str);
     } else if req_line.contains("GET /api/geoalarm") {
         let mut s = stream;
         drain_http_headers(&mut s);
@@ -4611,6 +4639,307 @@ fn serve_dapnet_post(stream: TcpStream, shared_config: &Option<tetra_config::blu
         ov.forward_telegram
     );
     http_response(stream, 200, "OK");
+}
+
+/// GET /api/echolink — effective settings and live directory/QSO state.
+fn serve_echolink_get(stream: TcpStream, shared_config: &Option<tetra_config::bluestation::SharedConfig>) {
+    let (echolink, runtime) = match shared_config {
+        Some(cfg) => (cfg.effective_echolink(), cfg.state_read().echolink_status.clone()),
+        None => (
+            tetra_config::bluestation::CfgEcholink::default(),
+            tetra_config::bluestation::EcholinkRuntimeStatus::default(),
+        ),
+    };
+    let password = echolink.password.as_ref().to_string();
+    let body = serde_json::json!({
+        "enabled": echolink.enabled,
+        "callsign": echolink.callsign,
+        "password_masked": crate::net_dashboard::echolink::mask_secret(&password),
+        "password_set": !password.trim().is_empty(),
+        "location": echolink.location,
+        "status_text": echolink.status_text,
+        "directory_servers": echolink.directory_servers,
+        "directory_port": echolink.directory_port,
+        "bind_addr": echolink.bind_addr,
+        "audio_port": echolink.audio_port,
+        "control_port": echolink.control_port,
+        "inbound_enabled": echolink.inbound_enabled,
+        "outbound_enabled": echolink.outbound_enabled,
+        "outbound_prefix": echolink.outbound_prefix,
+        "strip_outbound_prefix": echolink.strip_outbound_prefix,
+        "service_numbers": echolink.service_numbers,
+        "default_tetra_source_issi": echolink.default_tetra_source_issi,
+        "default_tetra_dest_issi": echolink.default_tetra_dest_issi,
+        "default_tetra_dest_is_group": echolink.default_tetra_dest_is_group,
+        "routes": echolink.routes,
+        "allowed_callsigns": echolink.allowed_callsigns,
+        "allowed_node_ids": echolink.allowed_node_ids,
+        "auto_connect": echolink.auto_connect,
+        "reconnect_interval_secs": echolink.reconnect_interval_secs,
+        "max_session_secs": echolink.max_session_secs,
+        "telegram_session_alerts": echolink.telegram_session_alerts,
+        "telegram_session_prefix": echolink.telegram_session_prefix,
+        "runtime": {
+            "configured": runtime.configured,
+            "enabled": runtime.enabled,
+            "directory_status": runtime.directory_status,
+            "qso_status": runtime.qso_status,
+            "bind": runtime.bind,
+            "callsign": runtime.callsign,
+            "connected_target": runtime.connected_target,
+            "routed_tetra_dest": runtime.routed_tetra_dest,
+            "last_session_event": runtime.last_session_event,
+            "last_rx": runtime.last_rx,
+            "last_tx": runtime.last_tx,
+            "last_error": runtime.last_error,
+        }
+    });
+    http_json_response(stream, 200, &body.to_string());
+}
+
+fn serve_echolink_directory(stream: TcpStream, shared_config: &Option<tetra_config::bluestation::SharedConfig>) {
+    let runtime = shared_config
+        .as_ref()
+        .map(|cfg| cfg.state_read().echolink_status.clone())
+        .unwrap_or_default();
+    let stations = runtime
+        .directory_stations
+        .iter()
+        .map(|station| {
+            serde_json::json!({
+                "callsign": station.callsign,
+                "id": station.id,
+                "ip": station.ip,
+            })
+        })
+        .collect::<Vec<_>>();
+    let body = serde_json::json!({
+        "configured": runtime.configured,
+        "enabled": runtime.enabled,
+        "directory_status": runtime.directory_status,
+        "count": stations.len(),
+        "stations": stations,
+        "last_tx": runtime.last_tx,
+        "last_error": runtime.last_error,
+    });
+    http_json_response(stream, 200, &body.to_string());
+}
+
+/// POST /api/echolink — apply settings immediately and persist `[echolink]`.
+fn serve_echolink_post(
+    stream: TcpStream,
+    shared_config: &Option<tetra_config::bluestation::SharedConfig>,
+    config_path: &str,
+    body: &str,
+) {
+    use tetra_config::bluestation::{CfgEcholinkDto, EcholinkRuntimeOverride, apply_echolink_patch};
+
+    let json: serde_json::Value = match serde_json::from_str(body.trim()) {
+        Ok(value) => value,
+        Err(err) => {
+            http_response(stream, 400, &format!("Invalid JSON: {err}"));
+            return;
+        }
+    };
+    let Some(cfg) = shared_config else {
+        http_response(stream, 503, "Config not available");
+        return;
+    };
+    let cur = cfg.effective_echolink();
+    let dto = CfgEcholinkDto {
+        enabled: dapnet_as_bool(&json, "enabled", cur.enabled),
+        callsign: dapnet_as_string(&json, "callsign", &cur.callsign),
+        password: dapnet_resolve_secret(&json, "password", cur.password.as_ref()),
+        location: dapnet_as_string(&json, "location", &cur.location),
+        status_text: dapnet_as_string(&json, "status_text", &cur.status_text),
+        directory_servers: echolink_string_list(&json, "directory_servers", &cur.directory_servers),
+        directory_port: dapnet_as_u16(&json, "directory_port", cur.directory_port),
+        bind_addr: dapnet_as_string(&json, "bind_addr", &cur.bind_addr),
+        audio_port: dapnet_as_u16(&json, "audio_port", cur.audio_port),
+        control_port: dapnet_as_u16(&json, "control_port", cur.control_port),
+        inbound_enabled: dapnet_as_bool(&json, "inbound_enabled", cur.inbound_enabled),
+        outbound_enabled: dapnet_as_bool(&json, "outbound_enabled", cur.outbound_enabled),
+        outbound_prefix: dapnet_as_string(&json, "outbound_prefix", &cur.outbound_prefix),
+        strip_outbound_prefix: dapnet_as_bool(&json, "strip_outbound_prefix", cur.strip_outbound_prefix),
+        service_numbers: echolink_string_list(&json, "service_numbers", &cur.service_numbers),
+        default_tetra_source_issi: dapnet_as_u32(&json, "default_tetra_source_issi", cur.default_tetra_source_issi),
+        default_tetra_dest_issi: dapnet_as_u32(&json, "default_tetra_dest_issi", cur.default_tetra_dest_issi),
+        default_tetra_dest_is_group: dapnet_as_bool(&json, "default_tetra_dest_is_group", cur.default_tetra_dest_is_group),
+        routes: echolink_routes_from_json(&json, &cur.routes),
+        allowed_callsigns: echolink_string_list(&json, "allowed_callsigns", &cur.allowed_callsigns),
+        allowed_node_ids: echolink_u32_list(&json, "allowed_node_ids", &cur.allowed_node_ids),
+        auto_connect: dapnet_as_string(&json, "auto_connect", &cur.auto_connect),
+        reconnect_interval_secs: dapnet_as_u64(&json, "reconnect_interval_secs", cur.reconnect_interval_secs),
+        max_session_secs: dapnet_as_u64(&json, "max_session_secs", cur.max_session_secs),
+        telegram_session_alerts: dapnet_as_bool(&json, "telegram_session_alerts", cur.telegram_session_alerts),
+        telegram_session_prefix: dapnet_as_string(&json, "telegram_session_prefix", &cur.telegram_session_prefix),
+        extra: HashMap::new(),
+    };
+    let normalized = match apply_echolink_patch(dto) {
+        Ok(value) => value,
+        Err(err) => {
+            http_response(stream, 400, &err);
+            return;
+        }
+    };
+    let text_fields = [
+        normalized.callsign.as_str(),
+        normalized.password.as_ref(),
+        normalized.location.as_str(),
+        normalized.status_text.as_str(),
+        normalized.bind_addr.as_str(),
+        normalized.outbound_prefix.as_str(),
+        normalized.auto_connect.as_str(),
+        normalized.telegram_session_prefix.as_str(),
+    ];
+    let list_fields = normalized
+        .directory_servers
+        .iter()
+        .chain(&normalized.service_numbers)
+        .chain(&normalized.allowed_callsigns);
+    let route_fields = normalized.routes.iter().flat_map(|(dial, target)| [dial, target]);
+    if !text_fields.iter().all(|value| dapnet_text_acceptable(value))
+        || !list_fields.chain(route_fields).all(|value| dapnet_text_acceptable(value))
+    {
+        http_response(stream, 400, "Invalid EchoLink setting: control characters are not allowed");
+        return;
+    }
+
+    let ov = EcholinkRuntimeOverride {
+        enabled: normalized.enabled,
+        callsign: normalized.callsign,
+        password: normalized.password.as_ref().to_string(),
+        location: normalized.location,
+        status_text: normalized.status_text,
+        directory_servers: normalized.directory_servers,
+        directory_port: normalized.directory_port,
+        bind_addr: normalized.bind_addr,
+        audio_port: normalized.audio_port,
+        control_port: normalized.control_port,
+        inbound_enabled: normalized.inbound_enabled,
+        outbound_enabled: normalized.outbound_enabled,
+        outbound_prefix: normalized.outbound_prefix,
+        strip_outbound_prefix: normalized.strip_outbound_prefix,
+        service_numbers: normalized.service_numbers,
+        default_tetra_source_issi: normalized.default_tetra_source_issi,
+        default_tetra_dest_issi: normalized.default_tetra_dest_issi,
+        default_tetra_dest_is_group: normalized.default_tetra_dest_is_group,
+        routes: normalized.routes,
+        allowed_callsigns: normalized.allowed_callsigns,
+        allowed_node_ids: normalized.allowed_node_ids,
+        auto_connect: normalized.auto_connect,
+        reconnect_interval_secs: normalized.reconnect_interval_secs,
+        max_session_secs: normalized.max_session_secs,
+        telegram_session_alerts: normalized.telegram_session_alerts,
+        telegram_session_prefix: normalized.telegram_session_prefix,
+    };
+    cfg.state_write().echolink_override = Some(ov.clone());
+
+    if let Err(err) = crate::net_dashboard::echolink::write_echolink_to_toml(config_path, &ov) {
+        tracing::warn!("Dashboard: EchoLink applied at runtime but failed to persist: {}", err);
+        http_response(stream, 200, "Applied at runtime; failed to write config file (check permissions)");
+        return;
+    }
+    http_response(stream, 200, "OK");
+}
+
+fn serve_echolink_connect(
+    stream: TcpStream,
+    shared_config: &Option<tetra_config::bluestation::SharedConfig>,
+    cmd_tx: &Arc<Mutex<Option<EcholinkCmdSender>>>,
+    body: &str,
+) {
+    let json: serde_json::Value = serde_json::from_str(body.trim()).unwrap_or(serde_json::Value::Null);
+    let target = json
+        .get("target")
+        .and_then(|value| value.as_str())
+        .map(tetra_config::bluestation::normalize_echolink_target)
+        .unwrap_or_default();
+    if target.is_empty() {
+        http_json_response(stream, 400, "{\"ok\":false,\"error\":\"target is required\"}");
+        return;
+    }
+    if shared_config.as_ref().is_some_and(|cfg| !cfg.effective_echolink().enabled) {
+        http_json_response(stream, 200, "{\"ok\":false,\"error\":\"EchoLink is disabled\"}");
+        return;
+    }
+    let Some(tx) = cmd_tx.lock().ok().and_then(|guard| guard.clone()) else {
+        http_json_response(stream, 503, "{\"ok\":false,\"error\":\"EchoLink worker is unavailable\"}");
+        return;
+    };
+    match tx.send(EcholinkCommand::Connect { target }) {
+        Ok(()) => http_json_response(stream, 200, "{\"ok\":true}"),
+        Err(err) => http_json_response(stream, 503, &serde_json::json!({"ok":false,"error":err.to_string()}).to_string()),
+    }
+}
+
+fn serve_echolink_disconnect(stream: TcpStream, cmd_tx: &Arc<Mutex<Option<EcholinkCmdSender>>>) {
+    let Some(tx) = cmd_tx.lock().ok().and_then(|guard| guard.clone()) else {
+        http_json_response(stream, 503, "{\"ok\":false,\"error\":\"EchoLink worker is unavailable\"}");
+        return;
+    };
+    match tx.send(EcholinkCommand::Disconnect) {
+        Ok(()) => http_json_response(stream, 200, "{\"ok\":true}"),
+        Err(err) => http_json_response(stream, 503, &serde_json::json!({"ok":false,"error":err.to_string()}).to_string()),
+    }
+}
+
+fn echolink_string_list(json: &serde_json::Value, key: &str, default: &[String]) -> Vec<String> {
+    if let Some(values) = json.get(key).and_then(|value| value.as_array()) {
+        return values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+    }
+    if let Some(value) = json.get(key).and_then(|value| value.as_str()) {
+        return value
+            .split(|ch: char| ch == ',' || ch.is_whitespace())
+            .map(|part| part.trim().to_string())
+            .filter(|part| !part.is_empty())
+            .collect();
+    }
+    default.to_vec()
+}
+
+fn echolink_u32_list(json: &serde_json::Value, key: &str, default: &[u32]) -> Vec<u32> {
+    if let Some(values) = json.get(key).and_then(|value| value.as_array()) {
+        return values
+            .iter()
+            .filter_map(|value| {
+                value
+                    .as_u64()
+                    .filter(|number| *number <= u32::MAX as u64)
+                    .map(|number| number as u32)
+                    .or_else(|| value.as_str().and_then(|text| text.trim().parse::<u32>().ok()))
+            })
+            .filter(|number| *number > 0)
+            .collect();
+    }
+    default.to_vec()
+}
+
+fn echolink_routes_from_json(json: &serde_json::Value, default: &BTreeMap<String, String>) -> HashMap<String, String> {
+    let Some(value) = json.get("routes") else {
+        return default.iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+    };
+    if let Some(object) = value.as_object() {
+        return object
+            .iter()
+            .filter_map(|(key, value)| value.as_str().map(|target| (key.trim().to_string(), target.trim().to_string())))
+            .filter(|(key, target)| !key.is_empty() && !target.is_empty())
+            .collect();
+    }
+    if let Some(text) = value.as_str() {
+        return text
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(dial, target)| (dial.trim().to_string(), target.trim().to_string()))
+            .filter(|(dial, target)| !dial.is_empty() && !target.is_empty())
+            .collect();
+    }
+    default.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
 }
 
 /// GET /api/meshcom — return effective MeshCom settings and runtime status as JSON.

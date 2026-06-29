@@ -1699,6 +1699,26 @@ impl UmacBs {
                     }
                 }
 
+                // Forward UL voice to EchoLink if the bridge is enabled. The EchoLink entity keeps
+                // its own ts -> QSO map and ignores unrelated circuits.
+                if self.config.effective_echolink().enabled {
+                    if self.scheduler_for(carrier_num).circuit_is_active(Direction::Ul, ts) {
+                        let msg = SapMsg {
+                            sap: Sap::TmdSap,
+                            src: TetraEntity::Umac,
+                            dest: TetraEntity::Echolink,
+                            msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd {
+                                carrier_num,
+                                ts,
+                                data: data.clone(),
+                            }),
+                        };
+                        queue.push_back(msg);
+                    } else {
+                        tracing::trace!("rx_tmd_prim: no active UL circuit on ts={}, dropping UL voice to EchoLink", ts);
+                    }
+                }
+
                 // Determine DL target timeslot:
                 //   - Full-duplex P2P (local): UL on `ts` cross-routed to peer MS's DL on `peer_ts`.
                 //   - Group / simplex (LocalLoopback, no peer_ts): same-ts loopback so all members hear.
