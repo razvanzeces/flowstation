@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use toml::Value;
 
 /// Geo-fence alarm configuration.
@@ -29,7 +29,11 @@ pub struct CfgGeoalarm {
     pub sds_dest_is_group: bool,
     pub tpg2200_source_issi: u32,
     pub tpg2200_dest_issi: u32,
+    pub tpg2200_ric: u32,
     pub tpg2200_incident_base: u16,
+    pub tpg2200_priority: u8,
+    pub tpg2200_issi_priorities: BTreeMap<u32, u8>,
+    pub tpg2200_ric_priorities: BTreeMap<u32, u8>,
     pub tpg2200_text_prefix: String,
     pub tpg2200_max_text_chars: usize,
     pub sip_title_prefix: String,
@@ -59,7 +63,11 @@ impl Default for CfgGeoalarm {
             sds_dest_is_group: false,
             tpg2200_source_issi: default_source_issi(),
             tpg2200_dest_issi: 0,
-            tpg2200_incident_base: 1,
+            tpg2200_ric: default_tpg2200_ric(),
+            tpg2200_incident_base: default_tpg2200_callout_id_base(),
+            tpg2200_priority: default_tpg2200_priority(),
+            tpg2200_issi_priorities: BTreeMap::new(),
+            tpg2200_ric_priorities: BTreeMap::new(),
             tpg2200_text_prefix: default_geoalarm_prefix(),
             tpg2200_max_text_chars: 80,
             sip_title_prefix: default_geoalarm_prefix(),
@@ -110,8 +118,18 @@ pub struct CfgGeoalarmDto {
     pub tpg2200_source_issi: u32,
     #[serde(default)]
     pub tpg2200_dest_issi: u32,
-    #[serde(default = "default_incident_base")]
-    pub tpg2200_incident_base: u16,
+    #[serde(default = "default_tpg2200_ric")]
+    pub tpg2200_ric: u32,
+    #[serde(default)]
+    pub tpg2200_callout_id_base: Option<u16>,
+    #[serde(default)]
+    pub tpg2200_incident_base: Option<u16>,
+    #[serde(default = "default_tpg2200_priority")]
+    pub tpg2200_priority: u8,
+    #[serde(default)]
+    pub tpg2200_issi_priorities: HashMap<String, u8>,
+    #[serde(default)]
+    pub tpg2200_ric_priorities: HashMap<String, u8>,
     #[serde(default = "default_geoalarm_prefix")]
     pub tpg2200_text_prefix: String,
     #[serde(default = "default_tpg2200_max_text_chars")]
@@ -148,7 +166,12 @@ impl Default for CfgGeoalarmDto {
             sds_dest_is_group: false,
             tpg2200_source_issi: default_source_issi(),
             tpg2200_dest_issi: 0,
-            tpg2200_incident_base: default_incident_base(),
+            tpg2200_ric: default_tpg2200_ric(),
+            tpg2200_callout_id_base: None,
+            tpg2200_incident_base: None,
+            tpg2200_priority: default_tpg2200_priority(),
+            tpg2200_issi_priorities: HashMap::new(),
+            tpg2200_ric_priorities: HashMap::new(),
             tpg2200_text_prefix: default_geoalarm_prefix(),
             tpg2200_max_text_chars: default_tpg2200_max_text_chars(),
             sip_title_prefix: default_geoalarm_prefix(),
@@ -174,8 +197,31 @@ fn default_source_issi() -> u32 {
     9999
 }
 
-fn default_incident_base() -> u16 {
-    1
+fn default_tpg2200_callout_id_base() -> u16 {
+    0x21
+}
+
+fn default_tpg2200_ric() -> u32 {
+    0x0009_0D10
+}
+
+fn default_tpg2200_priority() -> u8 {
+    15
+}
+
+fn legacy_incident_selector(incident: u16) -> u16 {
+    let incident = incident.clamp(1, 256);
+    let zero_based = incident - 1;
+    let major = ((zero_based + 1) & 0x0F) as u16;
+    let minor = (((zero_based / 16) + 1) & 0x0F) as u16;
+    (major << 4) | minor
+}
+
+fn select_tpg2200_callout_id_base(src: &CfgGeoalarmDto) -> u16 {
+    src.tpg2200_callout_id_base
+        .map(|id| id.min(255))
+        .or_else(|| src.tpg2200_incident_base.map(legacy_incident_selector))
+        .unwrap_or_else(default_tpg2200_callout_id_base)
 }
 
 fn default_tpg2200_max_text_chars() -> usize {
@@ -187,6 +233,7 @@ fn default_geoalarm_prefix() -> String {
 }
 
 pub fn apply_geoalarm_patch(src: CfgGeoalarmDto) -> Result<CfgGeoalarm, String> {
+    let tpg2200_callout_id_base = select_tpg2200_callout_id_base(&src);
     if src.enabled {
         validate_lat_lon(src.flowstation_lat, src.flowstation_lon)?;
         if !src.radius_m.is_finite() || src.radius_m <= 0.0 {
@@ -204,6 +251,8 @@ pub fn apply_geoalarm_patch(src: CfgGeoalarmDto) -> Result<CfgGeoalarm, String> 
 
     let tetra_issi_whitelist = normalize_issi_set(src.tetra_issi_whitelist)?;
     let tetra_issi_blacklist = normalize_issi_set(src.tetra_issi_blacklist)?;
+    let tpg2200_issi_priorities = normalize_issi_priority_map("geoalarm.tpg2200_issi_priorities", src.tpg2200_issi_priorities)?;
+    let tpg2200_ric_priorities = normalize_ric_priority_map("geoalarm.tpg2200_ric_priorities", src.tpg2200_ric_priorities)?;
 
     Ok(CfgGeoalarm {
         enabled: src.enabled,
@@ -230,7 +279,11 @@ pub fn apply_geoalarm_patch(src: CfgGeoalarmDto) -> Result<CfgGeoalarm, String> 
         sds_dest_is_group: src.sds_dest_is_group,
         tpg2200_source_issi: src.tpg2200_source_issi.max(1),
         tpg2200_dest_issi: src.tpg2200_dest_issi,
-        tpg2200_incident_base: src.tpg2200_incident_base.clamp(1, 256),
+        tpg2200_ric: src.tpg2200_ric,
+        tpg2200_incident_base: tpg2200_callout_id_base,
+        tpg2200_priority: src.tpg2200_priority.min(15),
+        tpg2200_issi_priorities,
+        tpg2200_ric_priorities,
         tpg2200_text_prefix: non_empty_or(src.tpg2200_text_prefix, "GeoAlarm"),
         tpg2200_max_text_chars: src.tpg2200_max_text_chars.clamp(8, 160),
         sip_title_prefix: non_empty_or(src.sip_title_prefix, "GeoAlarm"),
@@ -267,6 +320,45 @@ fn normalize_issi_set(values: Vec<u32>) -> Result<BTreeSet<u32>, String> {
     Ok(out)
 }
 
+fn normalize_issi_priority_map(field: &str, values: HashMap<String, u8>) -> Result<BTreeMap<u32, u8>, String> {
+    let mut out = BTreeMap::new();
+    for (raw_issi, priority) in values {
+        let issi = raw_issi
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("{field}: invalid ISSI '{raw_issi}'"))?;
+        validate_issi(field, issi, false)?;
+        if priority > 15 {
+            return Err(format!("{field}: priority for ISSI {issi} must be 0..=15"));
+        }
+        out.insert(issi, priority);
+    }
+    Ok(out)
+}
+
+fn normalize_ric_priority_map(field: &str, values: HashMap<String, u8>) -> Result<BTreeMap<u32, u8>, String> {
+    let mut out = BTreeMap::new();
+    for (raw_ric, priority) in values {
+        let ric = parse_ric_key(&raw_ric)?;
+        if priority > 15 {
+            return Err(format!("{field}: priority for TPG RIC {raw_ric} must be 0..=15"));
+        }
+        out.insert(ric, priority);
+    }
+    Ok(out)
+}
+
+fn parse_ric_key(raw: &str) -> Result<u32, String> {
+    let key = raw.trim();
+    if key.is_empty() {
+        return Err("empty TPG RIC key".to_string());
+    }
+    if let Some(hex) = key.strip_prefix("0x").or_else(|| key.strip_prefix("0X")) {
+        return u32::from_str_radix(hex, 16).map_err(|_| format!("invalid hex TPG RIC key '{raw}'"));
+    }
+    key.parse::<u32>().map_err(|_| format!("invalid decimal TPG RIC key '{raw}'"))
+}
+
 fn normalize_source_list(values: Vec<String>) -> BTreeSet<String> {
     values
         .into_iter()
@@ -287,5 +379,21 @@ fn non_empty_or(value: String, fallback: &str) -> String {
         fallback.to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_incident_and_direct_id_are_both_supported() {
+        let mut legacy = CfgGeoalarmDto::default();
+        legacy.tpg2200_incident_base = Some(2);
+        assert_eq!(apply_geoalarm_patch(legacy).unwrap().tpg2200_incident_base, 0x21);
+
+        let mut direct = CfgGeoalarmDto::default();
+        direct.tpg2200_callout_id_base = Some(0);
+        assert_eq!(apply_geoalarm_patch(direct).unwrap().tpg2200_incident_base, 0);
     }
 }

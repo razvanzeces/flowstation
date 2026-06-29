@@ -13,7 +13,7 @@ use crate::net_control::commands::ControlCommand;
 use crate::net_dashboard::html::DASHBOARD_HTML;
 use crate::net_dashboard::state::{CallEntry, DashboardState, DashboardStateInner, MsEntry};
 use crate::net_telemetry::TelemetryEvent;
-use crate::tpg2200::build_tpg2200_callout_payload;
+use crate::tpg2200::{build_tpg2200_callout_payload, default_tpg2200_ric, format_hex_bytes, parse_hex_payload, tpg2200_incident_byte};
 
 type CmdSender = crossbeam_channel::Sender<ControlCommand>;
 
@@ -2391,7 +2391,7 @@ fn handle_ws_command(
     if !control_allowed
         && matches!(
             cmd_type,
-            Some("kick" | "restart" | "shutdown" | "update" | "sds" | "dgna" | "emergency_clear")
+            Some("kick" | "restart" | "shutdown" | "update" | "sds" | "sds_callout" | "dgna" | "emergency_clear")
         )
     {
         tracing::warn!(
@@ -2482,6 +2482,104 @@ fn handle_ws_command(
             });
             let mut s = state.write().unwrap();
             s.push_log("INFO", format!("SDS sent to {}: {}", dest, msg_text));
+        }
+        Some("sds_callout") => {
+            let dest = v.get("dest_issi").and_then(|i| i.as_u64()).unwrap_or(0).min(16_777_215) as u32;
+            if dest == 0 {
+                return;
+            }
+            let source_issi = match v.get("source_issi").and_then(|i| i.as_u64()) {
+                Some(0) | None => 9999,
+                Some(source) => source.min(16_777_215) as u32,
+            };
+            let callout_id = v
+                .get("callout_id")
+                .or_else(|| v.get("id"))
+                .or_else(|| v.get("incident"))
+                .and_then(|i| i.as_u64())
+                .unwrap_or(0x21)
+                .min(255) as u16;
+            let priority = v
+                .get("priority")
+                .or_else(|| v.get("tone"))
+                .and_then(|i| i.as_u64())
+                .unwrap_or(15)
+                .min(15) as u8;
+            let tpg_ric = v
+                .get("tpg_ric")
+                .or_else(|| v.get("ric"))
+                .and_then(|value| {
+                    value
+                        .as_u64()
+                        .filter(|number| *number <= u32::MAX as u64)
+                        .map(|number| number as u32)
+                        .or_else(|| {
+                            value
+                                .as_str()
+                                .and_then(|text| tetra_config::bluestation::parse_ric_route_key(text).ok())
+                        })
+                })
+                .unwrap_or_else(default_tpg2200_ric);
+            let message_input = v.get("message").and_then(|m| m.as_str()).unwrap_or("ALARM").trim();
+            let alarm_text = if message_input.is_empty() {
+                "ALARM".to_string()
+            } else {
+                message_input.to_string()
+            };
+            let raw_hex = v.get("raw_hex").and_then(|m| m.as_str()).unwrap_or("").trim();
+
+            let payload = if raw_hex.is_empty() {
+                build_tpg2200_callout_payload(tpg_ric, callout_id, priority, &alarm_text)
+            } else {
+                match parse_hex_payload(raw_hex) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        tracing::warn!("Dashboard: invalid TPG2200 raw hex payload: {}", err);
+                        state
+                            .write()
+                            .unwrap()
+                            .push_log("WARN", format!("TPG2200 Call-Out not sent: invalid raw hex ({err})"));
+                        return;
+                    }
+                }
+            };
+            if payload.is_empty() || payload.len() > (u16::MAX as usize / 8) {
+                tracing::warn!("Dashboard: invalid TPG2200 Call-Out payload length: {} bytes", payload.len());
+                state.write().unwrap().push_log(
+                    "WARN",
+                    format!("TPG2200 Call-Out not sent: invalid payload length ({})", payload.len()),
+                );
+                return;
+            }
+
+            tracing::info!(
+                "Dashboard: TPG2200 Call-Out to {} tpg_ric={:08X} callout_id={} priority={} source={} text={:?} payload=[{}]",
+                dest,
+                tpg_ric,
+                callout_id,
+                priority,
+                source_issi,
+                alarm_text,
+                format_hex_bytes(&payload)
+            );
+            if !send_cmd(ControlCommand::SendRawSdsType4 {
+                handle: 0,
+                source_ssi: source_issi,
+                dest_ssi: dest,
+                dest_is_group: false,
+                len_bits: (payload.len() * 8) as u16,
+                payload,
+            }) {
+                tracing::warn!("Dashboard: no control dispatcher for TPG2200 Call-Out");
+                return;
+            }
+            state.write().unwrap().push_log(
+                "INFO",
+                format!(
+                    "TPG2200 Call-Out sent to {}: RIC {:08X}, ID {}, priority {}, text {}",
+                    dest, tpg_ric, callout_id, priority, alarm_text
+                ),
+            );
         }
         Some("dgna") => {
             let issi = v.get("issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
@@ -3932,6 +4030,41 @@ fn next_tpg2200_action_incident(cfg: &tetra_config::bluestation::SharedConfig, b
     incident
 }
 
+fn query_u16(params: &HashMap<String, String>, keys: &[&str], max: u16) -> Option<u16> {
+    keys.iter()
+        .filter_map(|key| params.get(*key))
+        .find_map(|value| value.trim().parse::<u16>().ok())
+        .map(|value| value.min(max))
+}
+
+fn query_u8(params: &HashMap<String, String>, keys: &[&str], max: u8) -> Option<u8> {
+    keys.iter()
+        .filter_map(|key| params.get(*key))
+        .find_map(|value| value.trim().parse::<u8>().ok())
+        .map(|value| value.min(max))
+}
+
+fn query_tpg_ric(params: &HashMap<String, String>, keys: &[&str]) -> Option<u32> {
+    keys.iter()
+        .filter_map(|key| params.get(*key))
+        .find_map(|value| tetra_config::bluestation::parse_ric_route_key(value).ok())
+}
+
+fn tpg2200_priority_for(
+    default_priority: u8,
+    issi_priorities: &BTreeMap<u32, u8>,
+    ric_priorities: &BTreeMap<u32, u8>,
+    dest_issi: u32,
+    tpg_ric: u32,
+) -> u8 {
+    issi_priorities
+        .get(&dest_issi)
+        .or_else(|| ric_priorities.get(&tpg_ric))
+        .copied()
+        .unwrap_or(default_priority)
+        .min(15)
+}
+
 /// GET /api/action/tpg2200?token=...&text=...
 ///
 /// Public-by-design ActionURL endpoint for phones that cannot hold the dashboard session cookie.
@@ -3991,8 +4124,23 @@ fn serve_tpg2200_action_url(
         return;
     };
 
-    let incident = next_tpg2200_action_incident(cfg, action.incident_base);
-    let payload = build_tpg2200_callout_payload(incident, &message);
+    let incident = query_u16(&params, &["incident", "incident_id"], 256).map(|value| value.clamp(1, 256));
+    let raw_callout_id = query_u16(&params, &["id", "callout_id", "raw_id"], 255);
+    let callout_id = raw_callout_id.unwrap_or_else(|| {
+        let incident = incident.unwrap_or_else(|| next_tpg2200_action_incident(cfg, action.incident_base));
+        tpg2200_incident_byte(incident) as u16
+    });
+    let tpg_ric = query_tpg_ric(&params, &["ric", "tpg_ric"]).unwrap_or(action.tpg_ric);
+    let priority = query_u8(&params, &["priority", "prio", "tone"], 15).unwrap_or_else(|| {
+        tpg2200_priority_for(
+            action.priority,
+            &action.tpg_issi_priorities,
+            &action.tpg_ric_priorities,
+            action.dest_issi,
+            tpg_ric,
+        )
+    });
+    let payload = build_tpg2200_callout_payload(tpg_ric, callout_id, priority, &message);
     if payload.len() > (u16::MAX as usize / 8) {
         http_response(stream, 500, "TPG2200 payload too large");
         return;
@@ -4012,22 +4160,28 @@ fn serve_tpg2200_action_url(
     }
 
     tracing::info!(
-        "TPG2200 ActionURL sent: dest={} source={} incident={} text={:?}",
+        "TPG2200 ActionURL sent: dest={} source={} tpg_ric={:08X} selector=0x{:02X} priority={} text={:?}",
         action.dest_issi,
         action.source_issi,
-        incident,
+        tpg_ric,
+        callout_id,
+        priority,
         message
     );
     if let Ok(mut s) = state.write() {
         s.push_log(
             "INFO",
             format!(
-                "TPG2200 ActionURL sent to {}: incident {} text {}",
-                action.dest_issi, incident, message
+                "TPG2200 ActionURL sent to {}: selector 0x{:02X} priority {} text {}",
+                action.dest_issi, callout_id, priority, message
             ),
         );
     }
-    http_response(stream, 200, &format!("OK incident={incident}"));
+    http_response(
+        stream,
+        200,
+        &format!("OK ric={tpg_ric:08X} selector=0x{callout_id:02X} priority={priority}"),
+    );
 }
 
 /// GET /api/asterisk/status — return Asterisk SIP/RTP config + runtime status.
@@ -4265,6 +4419,22 @@ fn dapnet_as_u32(json: &serde_json::Value, key: &str, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
+fn dapnet_as_tpg_ric(json: &serde_json::Value, key: &str, default: u32) -> u32 {
+    json.get(key)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .filter(|number| *number <= u32::MAX as u64)
+                .map(|number| number as u32)
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .and_then(|text| tetra_config::bluestation::parse_ric_route_key(text).ok())
+                })
+        })
+        .unwrap_or(default)
+}
+
 fn dapnet_as_u64(json: &serde_json::Value, key: &str, default: u64) -> u64 {
     json.get(key).and_then(|x| x.as_u64()).unwrap_or(default)
 }
@@ -4300,6 +4470,24 @@ fn dapnet_ric_routes_as_json(routes: &BTreeMap<u32, u32>) -> serde_json::Value {
         map.insert(tetra_config::bluestation::format_ric_route_key(*ric), serde_json::json!(issi));
     }
     serde_json::Value::Object(map)
+}
+
+fn issi_priority_map_as_json(routes: &BTreeMap<u32, u8>) -> serde_json::Value {
+    serde_json::Value::Object(
+        routes
+            .iter()
+            .map(|(issi, priority)| (issi.to_string(), serde_json::json!(priority)))
+            .collect(),
+    )
+}
+
+fn tpg_ric_priority_map_as_json(routes: &BTreeMap<u32, u8>) -> serde_json::Value {
+    serde_json::Value::Object(
+        routes
+            .iter()
+            .map(|(ric, priority)| (format!("0x{ric:08X}"), serde_json::json!(priority)))
+            .collect(),
+    )
 }
 
 fn dapnet_ric_set_as_json(rics: &BTreeSet<u32>) -> serde_json::Value {
@@ -4404,6 +4592,92 @@ fn dapnet_ric_routes_from_json(json: &serde_json::Value, current: &BTreeMap<u32,
     dapnet_ric_routes_from_json_key(json, "ric_issi_routes", current)
 }
 
+fn issi_priority_map_from_json(json: &serde_json::Value, key: &str, current: &BTreeMap<u32, u8>) -> Result<BTreeMap<u32, u8>, String> {
+    let Some(value) = json.get(key) else {
+        return Ok(current.clone());
+    };
+    let mut out = BTreeMap::new();
+    let mut insert = |raw_issi: &str, raw_priority: &serde_json::Value| -> Result<(), String> {
+        let issi = raw_issi
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("{key}: ISSI '{raw_issi}' must be numeric"))?;
+        if issi == 0 || issi > 16_777_215 {
+            return Err(format!("{key}: ISSI {issi} out of range"));
+        }
+        let priority = raw_priority
+            .as_u64()
+            .or_else(|| raw_priority.as_str().and_then(|text| text.trim().parse::<u64>().ok()))
+            .ok_or_else(|| format!("{key}: priority for ISSI {issi} must be numeric"))?;
+        if priority > 15 {
+            return Err(format!("{key}: priority for ISSI {issi} must be 0..=15"));
+        }
+        out.insert(issi, priority as u8);
+        Ok(())
+    };
+    match value {
+        serde_json::Value::Object(map) => {
+            for (raw_issi, raw_priority) in map {
+                insert(raw_issi, raw_priority)?;
+            }
+        }
+        serde_json::Value::String(text) => {
+            for line in text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            {
+                let (raw_issi, raw_priority) = line
+                    .split_once('=')
+                    .ok_or_else(|| format!("{key}: line '{line}' must be ISSI=Priority"))?;
+                insert(raw_issi, &serde_json::Value::String(raw_priority.trim().to_string()))?;
+            }
+        }
+        _ => return Err(format!("{key} must be an object or text lines")),
+    }
+    Ok(out)
+}
+
+fn tpg_ric_priority_map_from_json(json: &serde_json::Value, key: &str, current: &BTreeMap<u32, u8>) -> Result<BTreeMap<u32, u8>, String> {
+    let Some(value) = json.get(key) else {
+        return Ok(current.clone());
+    };
+    let mut out = BTreeMap::new();
+    let mut insert = |raw_ric: &str, raw_priority: &serde_json::Value| -> Result<(), String> {
+        let ric = tetra_config::bluestation::parse_ric_route_key(raw_ric)?;
+        let priority = raw_priority
+            .as_u64()
+            .or_else(|| raw_priority.as_str().and_then(|text| text.trim().parse::<u64>().ok()))
+            .ok_or_else(|| format!("{key}: priority for TPG RIC {raw_ric} must be numeric"))?;
+        if priority > 15 {
+            return Err(format!("{key}: priority for TPG RIC {raw_ric} must be 0..=15"));
+        }
+        out.insert(ric, priority as u8);
+        Ok(())
+    };
+    match value {
+        serde_json::Value::Object(map) => {
+            for (raw_ric, raw_priority) in map {
+                insert(raw_ric, raw_priority)?;
+            }
+        }
+        serde_json::Value::String(text) => {
+            for line in text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            {
+                let (raw_ric, raw_priority) = line
+                    .split_once('=')
+                    .ok_or_else(|| format!("{key}: line '{line}' must be RIC=Priority"))?;
+                insert(raw_ric, &serde_json::Value::String(raw_priority.trim().to_string()))?;
+            }
+        }
+        _ => return Err(format!("{key} must be an object or text lines")),
+    }
+    Ok(out)
+}
+
 fn dapnet_validate_route_conflicts(issi_routes: &BTreeMap<u32, u32>, gssi_routes: &BTreeMap<u32, u32>) -> Result<(), String> {
     for ric in issi_routes.keys() {
         if gssi_routes.contains_key(ric) {
@@ -4462,7 +4736,12 @@ fn serve_dapnet_get(stream: TcpStream, shared_config: &Option<tetra_config::blue
         "telegram_allowed_rics": dapnet_ric_set_as_json(&dapnet.telegram_allowed_rics),
         "callout_source_issi": dapnet.callout_source_issi,
         "callout_dest_issi": dapnet.callout_dest_issi,
+        "callout_tpg_ric": dapnet.callout_tpg_ric,
+        "callout_id_base": dapnet.callout_incident_base,
         "callout_incident_base": dapnet.callout_incident_base,
+        "callout_priority": dapnet.callout_priority,
+        "callout_issi_priorities": issi_priority_map_as_json(&dapnet.callout_issi_priorities),
+        "callout_tpg_ric_priorities": tpg_ric_priority_map_as_json(&dapnet.callout_tpg_ric_priorities),
         "callout_text_prefix": dapnet.callout_text_prefix.clone(),
         "telegram_prefix": dapnet.telegram_prefix.clone(),
         "rwth_core_enabled": dapnet.rwth_core_enabled,
@@ -4541,6 +4820,21 @@ fn serve_dapnet_post(stream: TcpStream, shared_config: &Option<tetra_config::blu
             return;
         }
     };
+    let callout_issi_priorities = match issi_priority_map_from_json(&json, "callout_issi_priorities", &cur.callout_issi_priorities) {
+        Ok(routes) => routes,
+        Err(err) => {
+            http_response(stream, 400, &format!("Invalid Call-Out ISSI priority: {err}"));
+            return;
+        }
+    };
+    let callout_tpg_ric_priorities =
+        match tpg_ric_priority_map_from_json(&json, "callout_tpg_ric_priorities", &cur.callout_tpg_ric_priorities) {
+            Ok(routes) => routes,
+            Err(err) => {
+                http_response(stream, 400, &format!("Invalid Call-Out TPG RIC priority: {err}"));
+                return;
+            }
+        };
 
     let ov = DapnetRuntimeOverride {
         enabled: dapnet_as_bool(&json, "enabled", cur.enabled),
@@ -4561,7 +4855,15 @@ fn serve_dapnet_post(stream: TcpStream, shared_config: &Option<tetra_config::blu
         telegram_allowed_rics,
         callout_source_issi: dapnet_as_u32(&json, "callout_source_issi", cur.callout_source_issi).max(1),
         callout_dest_issi: dapnet_as_u32(&json, "callout_dest_issi", cur.callout_dest_issi),
-        callout_incident_base: dapnet_as_u16(&json, "callout_incident_base", cur.callout_incident_base).clamp(1, 256),
+        callout_tpg_ric: dapnet_as_tpg_ric(&json, "callout_tpg_ric", cur.callout_tpg_ric),
+        callout_incident_base: json
+            .get("callout_id_base")
+            .and_then(|value| value.as_u64())
+            .map(|value| value.min(255) as u16)
+            .unwrap_or_else(|| dapnet_as_u16(&json, "callout_incident_base", cur.callout_incident_base).min(255)),
+        callout_priority: dapnet_as_u16(&json, "callout_priority", cur.callout_priority as u16).min(15) as u8,
+        callout_issi_priorities,
+        callout_tpg_ric_priorities,
         callout_text_prefix: dapnet_as_string(&json, "callout_text_prefix", &cur.callout_text_prefix),
         telegram_prefix: dapnet_as_string(&json, "telegram_prefix", &cur.telegram_prefix),
         rwth_core_enabled: dapnet_as_bool(&json, "rwth_core_enabled", cur.rwth_core_enabled),
@@ -5018,7 +5320,12 @@ fn serve_geoalarm_get(stream: TcpStream, shared_config: &Option<tetra_config::bl
         "sds_dest_is_group": geoalarm.sds_dest_is_group,
         "tpg2200_source_issi": geoalarm.tpg2200_source_issi,
         "tpg2200_dest_issi": geoalarm.tpg2200_dest_issi,
+        "tpg2200_ric": geoalarm.tpg2200_ric,
+        "tpg2200_callout_id_base": geoalarm.tpg2200_incident_base,
         "tpg2200_incident_base": geoalarm.tpg2200_incident_base,
+        "tpg2200_priority": geoalarm.tpg2200_priority,
+        "tpg2200_issi_priorities": issi_priority_map_as_json(&geoalarm.tpg2200_issi_priorities),
+        "tpg2200_ric_priorities": tpg_ric_priority_map_as_json(&geoalarm.tpg2200_ric_priorities),
         "tpg2200_text_prefix": geoalarm.tpg2200_text_prefix.clone(),
         "tpg2200_max_text_chars": geoalarm.tpg2200_max_text_chars,
         "sip_title_prefix": geoalarm.sip_title_prefix.clone(),
@@ -5075,6 +5382,20 @@ fn serve_geoalarm_post(stream: TcpStream, shared_config: &Option<tetra_config::b
             return;
         }
     };
+    let tpg2200_issi_priorities = match issi_priority_map_from_json(&json, "tpg2200_issi_priorities", &cur.tpg2200_issi_priorities) {
+        Ok(routes) => routes,
+        Err(err) => {
+            http_response(stream, 400, &format!("Invalid TPG2200 ISSI priority: {err}"));
+            return;
+        }
+    };
+    let tpg2200_ric_priorities = match tpg_ric_priority_map_from_json(&json, "tpg2200_ric_priorities", &cur.tpg2200_ric_priorities) {
+        Ok(routes) => routes,
+        Err(err) => {
+            http_response(stream, 400, &format!("Invalid TPG2200 RIC priority: {err}"));
+            return;
+        }
+    };
 
     let dto = CfgGeoalarmDto {
         enabled: dapnet_as_bool(&json, "enabled", cur.enabled),
@@ -5097,7 +5418,23 @@ fn serve_geoalarm_post(stream: TcpStream, shared_config: &Option<tetra_config::b
         sds_dest_is_group: dapnet_as_bool(&json, "sds_dest_is_group", cur.sds_dest_is_group),
         tpg2200_source_issi: dapnet_as_u32(&json, "tpg2200_source_issi", cur.tpg2200_source_issi),
         tpg2200_dest_issi: dapnet_as_u32(&json, "tpg2200_dest_issi", cur.tpg2200_dest_issi),
-        tpg2200_incident_base: dapnet_as_u16(&json, "tpg2200_incident_base", cur.tpg2200_incident_base),
+        tpg2200_ric: dapnet_as_tpg_ric(&json, "tpg2200_ric", cur.tpg2200_ric),
+        tpg2200_callout_id_base: Some(
+            json.get("tpg2200_callout_id_base")
+                .and_then(|value| value.as_u64())
+                .map(|value| value.min(255) as u16)
+                .unwrap_or_else(|| dapnet_as_u16(&json, "tpg2200_incident_base", cur.tpg2200_incident_base).min(255)),
+        ),
+        tpg2200_incident_base: None,
+        tpg2200_priority: dapnet_as_u16(&json, "tpg2200_priority", cur.tpg2200_priority as u16).min(15) as u8,
+        tpg2200_issi_priorities: tpg2200_issi_priorities
+            .iter()
+            .map(|(issi, priority)| (issi.to_string(), *priority))
+            .collect(),
+        tpg2200_ric_priorities: tpg2200_ric_priorities
+            .iter()
+            .map(|(ric, priority)| (format!("0x{ric:08X}"), *priority))
+            .collect(),
         tpg2200_text_prefix: dapnet_as_string(&json, "tpg2200_text_prefix", &cur.tpg2200_text_prefix),
         tpg2200_max_text_chars: dapnet_as_usize(&json, "tpg2200_max_text_chars", cur.tpg2200_max_text_chars),
         sip_title_prefix: dapnet_as_string(&json, "sip_title_prefix", &cur.sip_title_prefix),
@@ -5148,7 +5485,11 @@ fn serve_geoalarm_post(stream: TcpStream, shared_config: &Option<tetra_config::b
         sds_dest_is_group: normalized.sds_dest_is_group,
         tpg2200_source_issi: normalized.tpg2200_source_issi,
         tpg2200_dest_issi: normalized.tpg2200_dest_issi,
+        tpg2200_ric: normalized.tpg2200_ric,
         tpg2200_incident_base: normalized.tpg2200_incident_base,
+        tpg2200_priority: normalized.tpg2200_priority,
+        tpg2200_issi_priorities: normalized.tpg2200_issi_priorities,
+        tpg2200_ric_priorities: normalized.tpg2200_ric_priorities,
         tpg2200_text_prefix: normalized.tpg2200_text_prefix,
         tpg2200_max_text_chars: normalized.tpg2200_max_text_chars,
         sip_title_prefix: normalized.sip_title_prefix,
@@ -5507,8 +5848,12 @@ fn serve_dapnet_send(
 
 #[cfg(test)]
 mod tests {
-    use super::{DashboardServer, binary_built_from, mask_config_secrets, write_config_validated};
+    use super::{
+        DashboardServer, binary_built_from, is_tpg2200_action_request, mask_config_secrets, query_params, query_tpg_ric, query_u8,
+        query_u16, tpg2200_priority_for, write_config_validated,
+    };
     use crate::net_telemetry::TelemetryEvent;
+    use std::collections::BTreeMap;
 
     /// A minimal config.toml that parses + validates (mirrors tetra-config's own minimal fixture).
     const MINIMAL_CONFIG: &str = r#"
@@ -5639,6 +5984,9 @@ enabled = true
         // Read-only peer: the kick is ignored, nothing reaches the control dispatcher.
         handle_ws_command(kick, &state, &cmd_tx, &update_state, false);
         assert!(rx.try_recv().is_err(), "off-host kick must not be dispatched");
+        let callout = r#"{"type":"sds_callout","dest_issi":2632585,"source_issi":9999,"tpg_ric":593168,"callout_id":33,"priority":15,"message":"ALARM"}"#;
+        handle_ws_command(callout, &state, &cmd_tx, &update_state, false);
+        assert!(rx.try_recv().is_err(), "off-host TPG2200 Call-Out must not be dispatched");
 
         // Localhost / authenticated peer: the same kick is dispatched.
         handle_ws_command(kick, &state, &cmd_tx, &update_state, true);
@@ -5646,6 +5994,57 @@ enabled = true
             Ok(ControlCommand::KickMs { issi }) => assert_eq!(issi, 123),
             other => panic!("expected KickMs dispatch, got {other:?}"),
         }
+
+        handle_ws_command(callout, &state, &cmd_tx, &update_state, true);
+        match rx.try_recv() {
+            Ok(ControlCommand::SendRawSdsType4 {
+                source_ssi,
+                dest_ssi,
+                payload,
+                ..
+            }) => {
+                assert_eq!(source_ssi, 9999);
+                assert_eq!(dest_ssi, 2632585);
+                assert_eq!(&payload[..8], &[0xC3, 0x00, 0x09, 0x0D, 0x10, 0x21, 0x27, 0x0F]);
+            }
+            other => panic!("expected TPG2200 raw Type-4 SDS dispatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tpg2200_action_route_and_overrides_are_unambiguous() {
+        assert!(is_tpg2200_action_request("GET /api/action/tpg2200?id=33 HTTP/1.1"));
+        assert!(!is_tpg2200_action_request("GET /api/action/tpg2200-extra?id=33 HTTP/1.1"));
+
+        let params = query_params("/api/action/tpg2200?incident=2&id=33&priority=7&ric=0x00090D10&text=ALARM%20TEST");
+        assert_eq!(query_u16(&params, &["id"], 255), Some(33));
+        assert_eq!(query_u8(&params, &["priority"], 15), Some(7));
+        assert_eq!(query_tpg_ric(&params, &["ric"]), Some(crate::tpg2200::default_tpg2200_ric()));
+        assert_eq!(params.get("text").map(String::as_str), Some("ALARM TEST"));
+
+        let issi_priorities = BTreeMap::from([(2_632_585, 3)]);
+        let ric_priorities = BTreeMap::from([(crate::tpg2200::default_tpg2200_ric(), 5)]);
+        assert_eq!(
+            tpg2200_priority_for(
+                15,
+                &issi_priorities,
+                &ric_priorities,
+                2_632_585,
+                crate::tpg2200::default_tpg2200_ric(),
+            ),
+            3,
+            "an ISSI route has precedence over a RIC route"
+        );
+        assert_eq!(
+            tpg2200_priority_for(
+                15,
+                &issi_priorities,
+                &ric_priorities,
+                2_000_001,
+                crate::tpg2200::default_tpg2200_ric(),
+            ),
+            5
+        );
     }
 
     #[test]

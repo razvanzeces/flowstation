@@ -23,7 +23,7 @@ use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 
 use tetra_entities::cmce::cmce_bs::CmceBs;
 use tetra_entities::net_control::{ControlCommand, make_control_link};
-use tetra_entities::tpg2200::build_tpg2200_callout_payload;
+use tetra_entities::tpg2200::{build_tpg2200_callout_payload, default_tpg2200_ric};
 use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
 
 use crate::common::ComponentTest;
@@ -139,7 +139,7 @@ fn test_raw_sds_type4_from_control_delivered_verbatim() {
     const DEST: u32 = 2628191;
     register_subscriber(&mut test, DEST);
 
-    let payload = build_tpg2200_callout_payload(1, "ALARM");
+    let payload = build_tpg2200_callout_payload(default_tpg2200_ric(), 0x11, 0x0F, "ALARM");
     assert_eq!(payload[0], 0xC3, "sanity: a TPG2200 Call-Out SDU starts with PID 0xC3");
 
     dispatcher.send(ControlCommand::SendRawSdsType4 {
@@ -154,7 +154,11 @@ fn test_raw_sds_type4_from_control_delivered_verbatim() {
     let msgs = test.dump_sinks();
 
     // The fix: the command is no longer dropped — exactly one D-SDS-DATA is delivered locally.
-    assert_eq!(count_d_sds_data(&msgs), 1, "raw Type-4 SDS must be delivered, not ignored (FH-BUG-052)");
+    assert_eq!(
+        count_d_sds_data(&msgs),
+        1,
+        "raw Type-4 SDS must be delivered, not ignored (FH-BUG-052)"
+    );
     assert_eq!(count_brew_sds(&msgs), 0, "a local dest must not be forwarded to Brew");
 
     // And the Type-4 SDU is delivered byte-for-byte, with NO SDS-TL wrap prepended.

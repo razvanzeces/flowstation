@@ -136,8 +136,8 @@ struct GeoAlarmWorker {
     last_alarm: Option<String>,
     last_error: Option<String>,
     last_enabled: Option<bool>,
-    next_tpg2200_incident: u16,
-    last_incident_base: Option<u16>,
+    next_tpg2200_callout_id: u16,
+    last_callout_id_base: Option<u16>,
 }
 
 impl GeoAlarmWorker {
@@ -148,7 +148,7 @@ impl GeoAlarmWorker {
         snom_sink: Option<SnomNotifySink>,
         rx: crossbeam_channel::Receiver<GeoAlarmUpdate>,
     ) -> Self {
-        let next_tpg2200_incident = cfg.effective_geoalarm().tpg2200_incident_base.clamp(1, 256);
+        let next_tpg2200_callout_id = cfg.effective_geoalarm().tpg2200_incident_base.min(255);
         Self {
             cfg,
             cmce_cmd_tx,
@@ -163,8 +163,8 @@ impl GeoAlarmWorker {
             last_alarm: None,
             last_error: None,
             last_enabled: None,
-            next_tpg2200_incident,
-            last_incident_base: None,
+            next_tpg2200_callout_id,
+            last_callout_id_base: None,
         }
     }
 
@@ -330,21 +330,30 @@ impl GeoAlarmWorker {
         let Some(tx) = self.cmce_cmd_tx.clone() else {
             return Err("CMCE control sender unavailable".to_string());
         };
-        let incident_base = geoalarm.tpg2200_incident_base.clamp(1, 256);
-        if self.last_incident_base != Some(incident_base) {
-            self.next_tpg2200_incident = incident_base;
-            self.last_incident_base = Some(incident_base);
+        let callout_id_base = geoalarm.tpg2200_incident_base.min(255);
+        if self.last_callout_id_base != Some(callout_id_base) {
+            self.next_tpg2200_callout_id = callout_id_base;
+            self.last_callout_id_base = Some(callout_id_base);
         }
-        let incident = self.next_incident();
+        let callout_id = self.next_callout_id();
+        let priority = geoalarm
+            .tpg2200_issi_priorities
+            .get(&geoalarm.tpg2200_dest_issi)
+            .or_else(|| geoalarm.tpg2200_ric_priorities.get(&geoalarm.tpg2200_ric))
+            .copied()
+            .unwrap_or(geoalarm.tpg2200_priority)
+            .min(15);
         let text = prefixed_text(&geoalarm.tpg2200_text_prefix, body);
         let (text, truncated) = truncate_chars(&text, geoalarm.tpg2200_max_text_chars);
         if truncated {
             tracing::warn!("GeoAlarm: TPG2200 text truncated to {} chars", geoalarm.tpg2200_max_text_chars);
         }
-        let payload = build_tpg2200_callout_payload(incident, &text);
+        let payload = build_tpg2200_callout_payload(geoalarm.tpg2200_ric, callout_id, priority, &text);
         tracing::debug!(
-            "GeoAlarm: TPG2200 incident={} dest={} payload=[{}]",
-            incident,
+            "GeoAlarm: TPG2200 tpg_ric={:08X} callout_id={} priority={} dest={} payload=[{}]",
+            geoalarm.tpg2200_ric,
+            callout_id,
+            priority,
             geoalarm.tpg2200_dest_issi,
             format_hex_bytes(&payload)
         );
@@ -412,10 +421,10 @@ impl GeoAlarmWorker {
         self.last_error = Some(msg);
     }
 
-    fn next_incident(&mut self) -> u16 {
-        let incident = self.next_tpg2200_incident.clamp(1, 256);
-        self.next_tpg2200_incident = if incident >= 256 { 1 } else { incident + 1 };
-        incident
+    fn next_callout_id(&mut self) -> u16 {
+        let callout_id = self.next_tpg2200_callout_id.min(255);
+        self.next_tpg2200_callout_id = if callout_id >= 255 { 0 } else { callout_id + 1 };
+        callout_id
     }
 
     fn publish_status(&self, geoalarm: &CfgGeoalarm) {

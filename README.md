@@ -415,7 +415,11 @@ telegram_allowed_rics = []
 
 callout_source_issi = 9999
 callout_dest_issi = 0
-callout_incident_base = 2
+callout_tpg_ric = 0x00090D10
+callout_id_base = 33
+callout_priority = 15
+callout_issi_priorities = {}
+callout_tpg_ric_priorities = {}
 callout_text_prefix = "DAPNET"
 
 telegram_prefix = "DAPNET"
@@ -430,13 +434,19 @@ rwth_core_authkey = "your-rwth-core-authkey"
 rwth_messages_limit = 100
 ```
 
+For DAPNET and GeoAlarm, `callout_id_base` is the raw selector byte and cycles
+through `0..255`. Legacy `callout_incident_base` and
+`tpg2200_incident_base` keys remain accepted and are converted to the selector
+sequence. Per-target priority uses ISSI first, then TPG RIC, then the default.
+
 Keep `password` and `rwth_core_authkey` private and out of commits.
 
 ### Motorola TPG2200 ActionURL trigger
 
 FlowStation can expose a token-protected HTTP endpoint so a Snom function key
-can trigger a Motorola TPG2200 Call-Out. Every accepted request increments the
-incident number in memory and wraps after 256.
+can trigger a Motorola TPG2200 Call-Out. Without URL parameters it advances the
+incident sequence: incident `1` sends selector `0x11`, incident `2` sends
+`0x21`, incident `3` sends `0x31`, and so on.
 
 ```toml
 [tpg2200_action]
@@ -444,7 +454,11 @@ enabled = true
 token = "long-random-token"
 source_issi = 9999
 dest_issi = 2632585
+tpg_ric = 0x00090D10
 incident_base = 1
+priority = 15
+tpg_issi_priorities = { "2632585" = 15 }
+tpg_ric_priorities = { "0x00090D10" = 15 }
 default_text = "ALARM"
 max_text_chars = 80
 ```
@@ -454,7 +468,13 @@ Snom ActionURL examples:
 ```text
 http://<flowstation>:8080/api/action/tpg2200?token=<token>
 http://<flowstation>:8080/api/action/tpg2200?token=<token>&text=ALARM
+http://<flowstation>:8080/api/action/tpg2200?token=<token>&incident=2&priority=12&tpg_ric=0x00090D10
+http://<flowstation>:8080/api/action/tpg2200?token=<token>&id=33&priority=12&tpg_ric=0x00090D10
 ```
+
+`incident` follows the incident sequence. `id`, `callout_id`, or `raw_id`
+selects the raw ID byte directly. Priority overrides are resolved by destination
+ISSI first, then by TPG RIC, and finally by the global `priority`.
 
 ### Snom XML display notifications
 
@@ -943,7 +963,11 @@ telegram_allowed_rics = []
 
 callout_source_issi = 9999
 callout_dest_issi = 0
-callout_incident_base = 2
+callout_tpg_ric = 0x00090D10
+callout_id_base = 33
+callout_priority = 15
+callout_issi_priorities = {}
+callout_tpg_ric_priorities = {}
 callout_text_prefix = "DAPNET"
 
 telegram_prefix = "DAPNET"
@@ -958,13 +982,19 @@ rwth_core_authkey = "your-rwth-core-authkey"
 rwth_messages_limit = 100
 ```
 
+For DAPNET and GeoAlarm, `callout_id_base` is the raw selector byte and cycles
+through `0..255`. Legacy `callout_incident_base` and
+`tpg2200_incident_base` keys remain accepted and are converted to the selector
+sequence. Per-target priority uses ISSI first, then TPG RIC, then the default.
+
 Keep `password` and `rwth_core_authkey` private and out of commits.
 
 ### Motorola TPG2200 ActionURL trigger
 
 FlowStation can expose a token-protected HTTP endpoint so a Snom function key
-can trigger a Motorola TPG2200 Call-Out. Every accepted request increments the
-incident number in memory and wraps after 256.
+can trigger a Motorola TPG2200 Call-Out. Without URL parameters it advances the
+incident sequence: incident `1` sends selector `0x11`, incident `2` sends
+`0x21`, incident `3` sends `0x31`, and so on.
 
 ```toml
 [tpg2200_action]
@@ -972,7 +1002,11 @@ enabled = true
 token = "long-random-token"
 source_issi = 9999
 dest_issi = 2632585
+tpg_ric = 0x00090D10
 incident_base = 1
+priority = 15
+tpg_issi_priorities = { "2632585" = 15 }
+tpg_ric_priorities = { "0x00090D10" = 15 }
 default_text = "ALARM"
 max_text_chars = 80
 ```
@@ -982,7 +1016,13 @@ Snom ActionURL examples:
 ```text
 http://<flowstation>:8080/api/action/tpg2200?token=<token>
 http://<flowstation>:8080/api/action/tpg2200?token=<token>&text=ALARM
+http://<flowstation>:8080/api/action/tpg2200?token=<token>&incident=2&priority=12&tpg_ric=0x00090D10
+http://<flowstation>:8080/api/action/tpg2200?token=<token>&id=33&priority=12&tpg_ric=0x00090D10
 ```
+
+`incident` follows the incident sequence. `id`, `callout_id`, or `raw_id`
+selects the raw ID byte directly. Priority overrides are resolved by destination
+ISSI first, then by TPG RIC, and finally by the global `priority`.
 
 ### Snom XML display notifications
 
@@ -1051,7 +1091,11 @@ sds_dest_is_group = false
 
 tpg2200_source_issi = 9999
 tpg2200_dest_issi = 0
-tpg2200_incident_base = 1
+tpg2200_ric = 0x00090D10
+tpg2200_callout_id_base = 33
+tpg2200_priority = 15
+tpg2200_issi_priorities = {}
+tpg2200_ric_priorities = {}
 tpg2200_text_prefix = "GeoAlarm"
 tpg2200_max_text_chars = 80
 

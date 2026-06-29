@@ -61,8 +61,8 @@ struct DapnetWorker {
     telemetry_sink: Option<TelemetrySink>,
     seen: HashSet<String>,
     seen_order: VecDeque<String>,
-    next_callout_incident: u16,
-    last_callout_incident_base: Option<u16>,
+    next_callout_id: u16,
+    last_callout_id_base: Option<u16>,
     last_enabled: Option<bool>,
 }
 
@@ -73,7 +73,7 @@ impl DapnetWorker {
         telegram_sink: Option<TelegramAlertSink>,
         telemetry_sink: Option<TelemetrySink>,
     ) -> Self {
-        let next_callout_incident = cfg.effective_dapnet().callout_incident_base.clamp(1, 256);
+        let next_callout_id = cfg.effective_dapnet().callout_incident_base.min(255);
         Self {
             cfg,
             cmce_cmd_tx,
@@ -81,8 +81,8 @@ impl DapnetWorker {
             telemetry_sink,
             seen: HashSet::new(),
             seen_order: VecDeque::new(),
-            next_callout_incident,
-            last_callout_incident_base: None,
+            next_callout_id,
+            last_callout_id_base: None,
             last_enabled: None,
         }
     }
@@ -131,13 +131,13 @@ impl DapnetWorker {
                 if !(dapnet.forward_sds || dapnet.forward_callout || dapnet.forward_telegram) {
                     tracing::warn!("DAPNET: enabled but no forwarding target is enabled");
                 }
-                self.last_callout_incident_base = None;
+                self.last_callout_id_base = None;
                 self.last_enabled = Some(true);
             }
-            let incident_base = dapnet.callout_incident_base.clamp(1, 256);
-            if self.last_callout_incident_base != Some(incident_base) {
-                self.next_callout_incident = incident_base;
-                self.last_callout_incident_base = Some(incident_base);
+            let callout_id_base = dapnet.callout_incident_base.min(255);
+            if self.last_callout_id_base != Some(callout_id_base) {
+                self.next_callout_id = callout_id_base;
+                self.last_callout_id_base = Some(callout_id_base);
             }
 
             if dapnet.rwth_core_enabled {
@@ -417,7 +417,14 @@ impl DapnetWorker {
         let Some(tx) = self.cmce_cmd_tx.clone() else {
             return Err("CMCE control sender unavailable".to_string());
         };
-        let incident = self.next_incident();
+        let callout_id = self.next_callout_id();
+        let priority = dapnet
+            .callout_issi_priorities
+            .get(&dapnet.callout_dest_issi)
+            .or_else(|| dapnet.callout_tpg_ric_priorities.get(&dapnet.callout_tpg_ric))
+            .copied()
+            .unwrap_or(dapnet.callout_priority)
+            .min(15);
         let callout_text = prefixed_text(&dapnet.callout_text_prefix, &msg.text);
         let (callout_text, truncated) = truncate_chars(&callout_text, CALLOUT_TEXT_MAX_CHARS);
         if truncated {
@@ -427,14 +434,16 @@ impl DapnetWorker {
                 CALLOUT_TEXT_MAX_CHARS
             );
         }
-        let payload = build_tpg2200_callout_payload(incident, &callout_text);
+        let payload = build_tpg2200_callout_payload(dapnet.callout_tpg_ric, callout_id, priority, &callout_text);
         if payload.len() > (u16::MAX as usize / 8) {
             return Err(format!("payload too large ({} bytes)", payload.len()));
         }
         tracing::debug!(
-            "DAPNET: TPG2200 Call-Out id={} incident={} dest={} payload=[{}]",
+            "DAPNET: TPG2200 Call-Out id={} tpg_ric={:08X} callout_id={} priority={} dest={} payload=[{}]",
             msg.id,
-            incident,
+            dapnet.callout_tpg_ric,
+            callout_id,
+            priority,
             dapnet.callout_dest_issi,
             format_hex_bytes(&payload)
         );
@@ -457,10 +466,10 @@ impl DapnetWorker {
         Ok(())
     }
 
-    fn next_incident(&mut self) -> u16 {
-        let incident = self.next_callout_incident.clamp(1, 256);
-        self.next_callout_incident = if incident >= 256 { 1 } else { incident + 1 };
-        incident
+    fn next_callout_id(&mut self) -> u16 {
+        let callout_id = self.next_callout_id.min(255);
+        self.next_callout_id = if callout_id >= 255 { 0 } else { callout_id + 1 };
+        callout_id
     }
 }
 
