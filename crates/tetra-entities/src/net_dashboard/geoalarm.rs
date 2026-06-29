@@ -10,6 +10,22 @@ fn u32_set_toml(values: &std::collections::BTreeSet<u32>) -> String {
     values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")
 }
 
+fn u32_priority_map_toml(values: &std::collections::BTreeMap<u32, u8>) -> String {
+    values
+        .iter()
+        .map(|(issi, priority)| format!("\"{}\" = {}", issi, priority))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn tpg_ric_priority_map_toml(values: &std::collections::BTreeMap<u32, u8>) -> String {
+    values
+        .iter()
+        .map(|(ric, priority)| format!("\"0x{ric:08X}\" = {}", priority))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn string_set_toml(values: &std::collections::BTreeSet<String>) -> String {
     values
         .iter()
@@ -43,7 +59,11 @@ pub fn write_geoalarm_to_toml(config_path: &str, ov: &GeoalarmRuntimeOverride) -
          sds_dest_is_group = {}\n\n\
          tpg2200_source_issi = {}\n\
          tpg2200_dest_issi = {}\n\
-         tpg2200_incident_base = {}\n\
+         tpg2200_ric = {}\n\
+         tpg2200_callout_id_base = {}\n\
+         tpg2200_priority = {}\n\
+         tpg2200_issi_priorities = {{{}}}\n\
+         tpg2200_ric_priorities = {{{}}}\n\
          tpg2200_text_prefix = \"{}\"\n\
          tpg2200_max_text_chars = {}\n\n\
          sip_title_prefix = \"{}\"\n\
@@ -68,7 +88,11 @@ pub fn write_geoalarm_to_toml(config_path: &str, ov: &GeoalarmRuntimeOverride) -
         ov.sds_dest_is_group,
         ov.tpg2200_source_issi.max(1),
         ov.tpg2200_dest_issi,
-        ov.tpg2200_incident_base.clamp(1, 256),
+        ov.tpg2200_ric,
+        ov.tpg2200_incident_base.min(255),
+        ov.tpg2200_priority.min(15),
+        u32_priority_map_toml(&ov.tpg2200_issi_priorities),
+        tpg_ric_priority_map_toml(&ov.tpg2200_ric_priorities),
         toml_escape(&ov.tpg2200_text_prefix),
         ov.tpg2200_max_text_chars.clamp(8, 160),
         toml_escape(&ov.sip_title_prefix),

@@ -37,7 +37,13 @@ pub struct CfgDapnet {
 
     pub callout_source_issi: u32,
     pub callout_dest_issi: u32,
+    pub callout_tpg_ric: u32,
+    /// Raw TPG2200 Call-Out ID byte to start from. This is stored in the historic
+    /// `callout_incident_base` field for compatibility with older dashboard code.
     pub callout_incident_base: u16,
+    pub callout_priority: u8,
+    pub callout_issi_priorities: BTreeMap<u32, u8>,
+    pub callout_tpg_ric_priorities: BTreeMap<u32, u8>,
     pub callout_text_prefix: String,
 
     pub telegram_prefix: String,
@@ -76,7 +82,11 @@ impl Default for CfgDapnet {
 
             callout_source_issi: 9999,
             callout_dest_issi: 0,
-            callout_incident_base: 2,
+            callout_tpg_ric: default_tpg2200_ric(),
+            callout_incident_base: default_callout_id_base(),
+            callout_priority: default_callout_priority(),
+            callout_issi_priorities: BTreeMap::new(),
+            callout_tpg_ric_priorities: BTreeMap::new(),
             callout_text_prefix: "DAPNET".to_string(),
 
             telegram_prefix: "DAPNET".to_string(),
@@ -144,8 +154,18 @@ pub struct CfgDapnetDto {
     pub callout_source_issi: u32,
     #[serde(default)]
     pub callout_dest_issi: u32,
-    #[serde(default = "default_callout_incident_base")]
-    pub callout_incident_base: u16,
+    #[serde(default = "default_tpg2200_ric")]
+    pub callout_tpg_ric: u32,
+    #[serde(default)]
+    pub callout_id_base: Option<u16>,
+    #[serde(default)]
+    pub callout_incident_base: Option<u16>,
+    #[serde(default = "default_callout_priority")]
+    pub callout_priority: u8,
+    #[serde(default)]
+    pub callout_issi_priorities: HashMap<String, u8>,
+    #[serde(default)]
+    pub callout_tpg_ric_priorities: HashMap<String, u8>,
     #[serde(default = "default_dapnet_prefix")]
     pub callout_text_prefix: String,
 
@@ -194,7 +214,12 @@ impl Default for CfgDapnetDto {
             telegram_allowed_rics: Vec::new(),
             callout_source_issi: default_source_issi(),
             callout_dest_issi: 0,
-            callout_incident_base: default_callout_incident_base(),
+            callout_tpg_ric: default_tpg2200_ric(),
+            callout_id_base: None,
+            callout_incident_base: None,
+            callout_priority: default_callout_priority(),
+            callout_issi_priorities: HashMap::new(),
+            callout_tpg_ric_priorities: HashMap::new(),
             callout_text_prefix: default_dapnet_prefix(),
             telegram_prefix: default_dapnet_prefix(),
             rwth_core_enabled: true,
@@ -226,8 +251,31 @@ fn default_source_issi() -> u32 {
     9999
 }
 
-fn default_callout_incident_base() -> u16 {
-    2
+fn default_callout_id_base() -> u16 {
+    0x21
+}
+
+fn default_tpg2200_ric() -> u32 {
+    0x0009_0D10
+}
+
+fn default_callout_priority() -> u8 {
+    15
+}
+
+fn legacy_incident_selector(incident: u16) -> u16 {
+    let incident = incident.clamp(1, 256);
+    let zero_based = incident - 1;
+    let major = ((zero_based + 1) & 0x0F) as u16;
+    let minor = (((zero_based / 16) + 1) & 0x0F) as u16;
+    (major << 4) | minor
+}
+
+fn select_callout_id_base(dto: &CfgDapnetDto) -> u16 {
+    dto.callout_id_base
+        .map(|id| id.min(255))
+        .or_else(|| dto.callout_incident_base.map(legacy_incident_selector))
+        .unwrap_or_else(default_callout_id_base)
 }
 
 fn default_dapnet_prefix() -> String {
@@ -255,8 +303,12 @@ fn default_rwth_messages_limit() -> usize {
 }
 
 pub fn apply_dapnet_patch(dto: CfgDapnetDto) -> Result<CfgDapnet, String> {
+    let callout_id_base = select_callout_id_base(&dto);
     let ric_issi_routes = normalize_ric_ssi_routes("dapnet.ric_issi_routes", dto.ric_issi_routes)?;
     let ric_gssi_routes = normalize_ric_ssi_routes("dapnet.ric_gssi_routes", dto.ric_gssi_routes)?;
+    let callout_issi_priorities = normalize_issi_priority_routes("dapnet.callout_issi_priorities", dto.callout_issi_priorities)?;
+    let callout_tpg_ric_priorities =
+        normalize_tpg_ric_priority_routes("dapnet.callout_tpg_ric_priorities", dto.callout_tpg_ric_priorities)?;
     ensure_no_route_conflicts(&ric_issi_routes, &ric_gssi_routes)?;
     Ok(CfgDapnet {
         enabled: dto.enabled,
@@ -277,7 +329,11 @@ pub fn apply_dapnet_patch(dto: CfgDapnetDto) -> Result<CfgDapnet, String> {
         telegram_allowed_rics: normalize_ric_value_list("dapnet.telegram_allowed_rics", dto.telegram_allowed_rics)?,
         callout_source_issi: dto.callout_source_issi,
         callout_dest_issi: dto.callout_dest_issi,
-        callout_incident_base: dto.callout_incident_base.clamp(1, 256),
+        callout_tpg_ric: dto.callout_tpg_ric,
+        callout_incident_base: callout_id_base,
+        callout_priority: dto.callout_priority.min(15),
+        callout_issi_priorities,
+        callout_tpg_ric_priorities,
         callout_text_prefix: dto.callout_text_prefix,
         telegram_prefix: dto.telegram_prefix,
         rwth_core_enabled: dto.rwth_core_enabled,
@@ -324,6 +380,36 @@ fn normalize_ric_ssi_routes(field: &str, routes: HashMap<String, u32>) -> Result
     Ok(out)
 }
 
+fn normalize_issi_priority_routes(field: &str, routes: HashMap<String, u8>) -> Result<BTreeMap<u32, u8>, String> {
+    let mut out = BTreeMap::new();
+    for (raw_issi, priority) in routes {
+        let issi = raw_issi
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("{field}: invalid ISSI key '{raw_issi}'"))?;
+        if issi == 0 || issi > 16_777_215 {
+            return Err(format!("{field}: ISSI {raw_issi} must be 1..=16777215"));
+        }
+        if priority > 15 {
+            return Err(format!("{field}: priority for ISSI {raw_issi} must be 0..=15"));
+        }
+        out.insert(issi, priority);
+    }
+    Ok(out)
+}
+
+fn normalize_tpg_ric_priority_routes(field: &str, routes: HashMap<String, u8>) -> Result<BTreeMap<u32, u8>, String> {
+    let mut out = BTreeMap::new();
+    for (raw_ric, priority) in routes {
+        let ric = parse_ric_route_key(&raw_ric)?;
+        if priority > 15 {
+            return Err(format!("{field}: priority for TPG RIC {raw_ric} must be 0..=15"));
+        }
+        out.insert(ric, priority);
+    }
+    Ok(out)
+}
+
 fn normalize_ric_value_list(field: &str, values: Vec<toml::Value>) -> Result<BTreeSet<u32>, String> {
     let mut out = BTreeSet::new();
     for value in values {
@@ -347,4 +433,30 @@ fn ensure_no_route_conflicts(issi_routes: &BTreeMap<u32, u32>, gssi_routes: &BTr
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_incident_base_maps_to_selector_byte() {
+        let mut dto = CfgDapnetDto::default();
+        dto.callout_incident_base = Some(2);
+        assert_eq!(apply_dapnet_patch(dto).unwrap().callout_incident_base, 0x21);
+    }
+
+    #[test]
+    fn direct_callout_id_and_priorities_are_preserved() {
+        let mut dto = CfgDapnetDto::default();
+        dto.callout_id_base = Some(0);
+        dto.callout_priority = 12;
+        dto.callout_issi_priorities.insert("2632585".to_string(), 14);
+        dto.callout_tpg_ric_priorities.insert("0x00090D10".to_string(), 13);
+        let cfg = apply_dapnet_patch(dto).unwrap();
+        assert_eq!(cfg.callout_incident_base, 0);
+        assert_eq!(cfg.callout_priority, 12);
+        assert_eq!(cfg.callout_issi_priorities.get(&2632585), Some(&14));
+        assert_eq!(cfg.callout_tpg_ric_priorities.get(&0x0009_0D10), Some(&13));
+    }
 }

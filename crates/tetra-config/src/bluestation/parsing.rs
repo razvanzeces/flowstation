@@ -467,7 +467,11 @@ callout_allowed_rics = ["0004520"]
 telegram_allowed_rics = ["0000200", "0x1C40"]
 callout_source_issi = 9999
 callout_dest_issi = 1234567
-callout_incident_base = 2
+callout_tpg_ric = 0x00090D10
+callout_id_base = 33
+callout_priority = 12
+callout_issi_priorities = { "1234567" = 14 }
+callout_tpg_ric_priorities = { "0x00090D10" = 13 }
 callout_text_prefix = "DAPNET"
 telegram_prefix = "DAPNET"
 rwth_core_enabled = true
@@ -508,7 +512,11 @@ enabled = true
 token = "example-token"
 source_issi = 9999
 dest_issi = 1234567
+tpg_ric = 0x00090D10
 incident_base = 1
+priority = 15
+tpg_issi_priorities = { "1234567" = 14 }
+tpg_ric_priorities = { "0x00090D10" = 13 }
 default_text = "ALARM"
 max_text_chars = 80
 
@@ -557,6 +565,9 @@ sds_queue_critical = 128
         assert!(cfg.recovery.enabled);
         assert!(cfg.tpg2200_action.enabled);
         assert_eq!(cfg.tpg2200_action.dest_issi, 1234567);
+        assert_eq!(cfg.tpg2200_action.tpg_ric, 0x0009_0D10);
+        assert_eq!(cfg.tpg2200_action.tpg_issi_priorities.get(&1234567), Some(&14));
+        assert_eq!(cfg.tpg2200_action.tpg_ric_priorities.get(&0x0009_0D10), Some(&13));
         assert!(cfg.snom_notify.enabled);
         assert_eq!(cfg.snom_notify.endpoints, vec!["385"]);
         assert!(cfg.snom_notify.notify_sds);
@@ -571,7 +582,10 @@ sds_queue_critical = 128
         assert_eq!(cfg.asterisk.service_numbers, vec!["600".to_string(), "601".to_string()]);
         assert!(cfg.dapnet.enabled);
         assert!(cfg.dapnet.rwth_core_enabled);
-        assert_eq!(cfg.dapnet.callout_incident_base, 2);
+        assert_eq!(cfg.dapnet.callout_incident_base, 33);
+        assert_eq!(cfg.dapnet.callout_priority, 12);
+        assert_eq!(cfg.dapnet.callout_issi_priorities.get(&1234567), Some(&14));
+        assert_eq!(cfg.dapnet.callout_tpg_ric_priorities.get(&0x0009_0D10), Some(&13));
         assert_eq!(cfg.dapnet.ric_issi_routes.get(&632585), Some(&2632585));
         assert_eq!(cfg.dapnet.ric_issi_routes.get(&632586), Some(&2632586));
         assert_eq!(cfg.dapnet.ric_gssi_routes.get(&4520), Some(&80));

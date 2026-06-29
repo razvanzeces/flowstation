@@ -3152,12 +3152,20 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
                 <input type="number" id="dap-callout-source" class="form-input" min="1" max="16777215" placeholder="9999">
                 <label class="h-flabel">Destination</label>
                 <input type="number" id="dap-callout-dest" class="form-input" min="0" max="16777215" placeholder="TPG2200 ISSI">
-                <label class="h-flabel">Incident base</label>
-                <input type="number" id="dap-callout-incident" class="form-input" min="1" max="256" placeholder="2">
+                <label class="h-flabel">TPG RIC</label>
+                <input type="text" id="dap-callout-tpg-ric" class="form-input" placeholder="0x00090D10">
+                <label class="h-flabel">Call-Out ID base</label>
+                <input type="number" id="dap-callout-id" class="form-input" min="0" max="255" placeholder="33">
+                <label class="h-flabel">Priority / tone</label>
+                <input type="number" id="dap-callout-priority" class="form-input" min="0" max="15" placeholder="15">
                 <label class="h-flabel">Text prefix</label>
                 <input type="text" id="dap-callout-prefix" class="form-input" placeholder="DAPNET">
                 <label class="h-flabel top">Call-Out RIC filter</label>
                 <textarea id="dap-callout-rics" class="form-input" rows="3" placeholder="0004520"></textarea>
+                <label class="h-flabel top">TPG ISSI → priority</label>
+                <textarea id="dap-callout-issi-priorities" class="form-input" rows="3" placeholder="2632585=15"></textarea>
+                <label class="h-flabel top">TPG RIC → priority</label>
+                <textarea id="dap-callout-tpg-ric-priorities" class="form-input" rows="3" placeholder="0x00090D10=15"></textarea>
               </div>
             </div>
 
@@ -3280,8 +3288,16 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
                 <input type="number" id="geo-tpg-dest" class="form-input" min="0" max="16777215" placeholder="TPG ISSI">
               </div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
-                <input type="number" id="geo-tpg-incident" class="form-input" min="1" max="256" placeholder="Incident base">
+                <input type="text" id="geo-tpg-ric" class="form-input" placeholder="TPG RIC, e.g. 0x00090D10">
                 <input type="number" id="geo-tpg-max" class="form-input" min="8" max="160" placeholder="Max chars">
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
+                <input type="number" id="geo-tpg-id" class="form-input" min="0" max="255" placeholder="Call-Out ID base (33)">
+                <input type="number" id="geo-tpg-priority" class="form-input" min="0" max="15" placeholder="Priority / tone (15)">
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
+                <textarea id="geo-tpg-issi-priorities" class="form-input" rows="2" placeholder="TPG ISSI priority&#10;2632585=15"></textarea>
+                <textarea id="geo-tpg-ric-priorities" class="form-input" rows="2" placeholder="TPG RIC priority&#10;0x00090D10=15"></textarea>
               </div>
               <input type="text" id="geo-tpg-prefix" class="form-input" placeholder="TPG text prefix" style="margin-top:10px">
             </div>
@@ -4110,8 +4126,16 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <input type="number" id="sds-callout-source" class="form-input" value="9999" min="1">
       </div>
       <div class="form-row">
-        <label class="form-label" data-i18n="sds_callout_incident">Vorfallnummer</label>
-        <input type="number" id="sds-callout-incident" class="form-input" value="1" min="1" max="256">
+        <label class="form-label" data-i18n="sds_callout_id">Call-Out ID</label>
+        <input type="number" id="sds-callout-id" class="form-input" value="33" min="0" max="255">
+      </div>
+      <div class="form-row">
+        <label class="form-label" data-i18n="sds_callout_ric">TPG RIC</label>
+        <input type="text" id="sds-callout-ric" class="form-input" value="0x00090D10">
+      </div>
+      <div class="form-row">
+        <label class="form-label" data-i18n="sds_callout_priority">Priority / Ton</label>
+        <input type="number" id="sds-callout-priority" class="form-input" value="15" min="0" max="15">
       </div>
       <div class="form-row">
         <label class="form-label" data-i18n="sds_callout_text">Alarmtext</label>
@@ -4122,7 +4146,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <input type="text" id="sds-callout-raw" class="form-input" placeholder="C3 00 09 0D 10 11 27 0F 02 30 8D 41 4C 41 52 4D">
       </div>
       <div class="form-row" style="font-size:12px;color:var(--muted);line-height:1.45" data-i18n="sds_callout_help">
-        Vorfall 1-15 use the confirmed byte formula (N &lt;&lt; 4) | 0x01: 1=11, 2=21, 3=31, 4=41. Vorfall 16-256 use the extended one-byte selector. Raw Hex overrides automatic payload generation.
+        TPG RIC is written into the Call-Out payload address bytes. Call-Out ID is the raw ID byte 0..255. Priority/Ton is the raw priority byte 0..15. Raw Hex overrides automatic payload generation.
       </div>
     </div>
     <div class="modal-actions">
@@ -4289,10 +4313,12 @@ const LANGS={
     sds_title:'⬡ Send SDS Message',sds_dest:'Destination ISSI',
     sds_callout_enable:'TPG2200 Call-Out / Send alarm',
     sds_callout_source:'Source ISSI',
-    sds_callout_incident:'Incident number',
+    sds_callout_id:'Call-Out ID',
+    sds_callout_ric:'TPG RIC',
+    sds_callout_priority:'Priority / tone',
     sds_callout_text:'Alarm text',
     sds_callout_raw:'Raw Hex Payload optional',
-    sds_callout_help:'Incidents 1-15 use the confirmed byte formula (N << 4) | 0x01: 1=11, 2=21, 3=31, 4=41. Incidents 16-256 use the extended one-byte selector. Raw Hex overrides automatic payload generation.',
+    sds_callout_help:'TPG RIC is written into the Call-Out payload address bytes. Call-Out ID is the raw ID byte 0..255. Priority/tone is the raw priority byte 0..15. Raw Hex overrides automatic payload generation.',
     live_sds_desc:'Broadcast a text message to all radios on the cell, repeating at the Home Mode Display interval. Repeats until deleted or the repeat count is reached.',
     live_sds_text:'Message text (max 251 chars)',live_sds_repeat:'Repeat (0=∞)',live_sds_send:'Broadcast',
     live_sds_clear_all:'Clear All',live_sds_empty:'No active broadcasts.',
@@ -4506,10 +4532,12 @@ const LANGS={
     sds_title:'⬡ SDS-Nachricht senden',sds_dest:'Ziel-ISSI',
     sds_callout_enable:'TPG2200 Call-Out / Alarm senden',
     sds_callout_source:'Source ISSI',
-    sds_callout_incident:'Vorfallnummer',
+    sds_callout_id:'Call-Out ID',
+    sds_callout_ric:'TPG RIC',
+    sds_callout_priority:'Priority / Ton',
     sds_callout_text:'Alarmtext',
     sds_callout_raw:'Raw Hex Payload optional',
-    sds_callout_help:'Vorfall 1-15 nutzen die bestätigte Byte-Formel (N << 4) | 0x01: 1=11, 2=21, 3=31, 4=41. Vorfall 16-256 nutzen den erweiterten Ein-Byte-Selector. Raw Hex überschreibt die automatische Payload.',
+    sds_callout_help:'TPG RIC wird in die Call-Out-Adressbytes geschrieben. Call-Out ID ist das direkte ID-Byte 0..255. Priority/Ton ist das direkte Priority-Byte 0..15. Raw Hex überschreibt die automatische Payload.',
     sds_msg_label:'Nachricht',cancel:'Abbrechen',send:'Senden',
     th_issi:'ISSI',th_groups:'Gruppen',th_ee:'Energiesparen',th_signal:'Signal',
     th_status:'Status',th_last_seen:'Zuletzt',th_actions:'Aktionen',
@@ -6160,6 +6188,22 @@ function dapNum(id,def,min,max){
   if(!Number.isFinite(n))return def;
   return Math.max(min,Math.min(max,n));
 }
+function tpgRicText(v){
+  const n=Number(v);
+  if(!Number.isFinite(n))return '0x00090D10';
+  return '0x'+(n>>>0).toString(16).toUpperCase().padStart(8,'0');
+}
+function parseTpgRicValue(raw){
+  const s=String(raw||'').trim();
+  if(!s)return null;
+  const n=s.toLowerCase().startsWith('0x')?parseInt(s.slice(2),16):parseInt(s,10);
+  if(!Number.isFinite(n)||n<0||n>0xFFFFFFFF)return null;
+  return n>>>0;
+}
+function tpgRicInput(id,def){
+  const parsed=parseTpgRicValue(dapVal(id));
+  return parsed===null?def:parsed;
+}
 function dapList(id){return dapVal(id).split(/[\s,]+/).map(s=>s.trim()).filter(Boolean);}
 function dapRicRoutesText(routes){
   return Object.keys(routes||{}).sort().map(k=>`${k}=${routes[k]}`).join('\n');
@@ -6176,6 +6220,28 @@ function dapRicRoutesBody(id,label){
     const issi=parseInt(m[2],10);
     if(!Number.isFinite(issi)||issi<1||issi>16777215){setDapMsg(`Invalid SSI in ${label} route: ${line}`,false);return null;}
     out[m[1]]=issi;
+  }
+  return out;
+}
+function dapPriorityRoutesBody(id,label,keyLabel,min,max){
+  const raw=dapVal(id);
+  const out={};
+  if(!raw)return out;
+  for(const lineRaw of raw.split(/\n+/)){
+    const line=lineRaw.trim();
+    if(!line||line.startsWith('#'))continue;
+    const m=line.match(/^([0-9A-Fa-fxX]+)\s*=\s*([0-9]+)$/);
+    if(!m){setDapMsg(`Invalid ${label} priority route: ${line}`,false);return null;}
+    const priority=parseInt(m[2],10);
+    if(!Number.isFinite(priority)||priority<0||priority>15){setDapMsg(`Invalid priority in ${label} route: ${line}`,false);return null;}
+    if(keyLabel==='ISSI'){
+      const issi=parseInt(m[1],10);
+      if(!Number.isFinite(issi)||issi<min||issi>max){setDapMsg(`Invalid ISSI in ${label} route: ${line}`,false);return null;}
+      out[String(issi)]=priority;
+    }else{
+      if(parseTpgRicValue(m[1])===null){setDapMsg(`Invalid TPG RIC in ${label} route: ${line}`,false);return null;}
+      out[m[1]]=priority;
+    }
   }
   return out;
 }
@@ -6281,9 +6347,13 @@ async function loadDapnet(){
     dapSet('dap-sds-rics',dapRicListText(d.sds_allowed_rics));
     dapSet('dap-callout-source',d.callout_source_issi||9999);
     dapSet('dap-callout-dest',d.callout_dest_issi||0);
-    dapSet('dap-callout-incident',d.callout_incident_base||2);
+    dapSet('dap-callout-tpg-ric',tpgRicText(d.callout_tpg_ric??0x00090D10));
+    dapSet('dap-callout-id',(d.callout_id_base??d.callout_incident_base??33));
+    dapSet('dap-callout-priority',d.callout_priority??15);
     dapSet('dap-callout-prefix',d.callout_text_prefix||'DAPNET');
     dapSet('dap-callout-rics',dapRicListText(d.callout_allowed_rics));
+    dapSet('dap-callout-issi-priorities',dapRicRoutesText(d.callout_issi_priorities));
+    dapSet('dap-callout-tpg-ric-priorities',dapRicRoutesText(d.callout_tpg_ric_priorities));
     dapSet('dap-telegram-prefix',d.telegram_prefix||'DAPNET');
     dapSet('dap-telegram-rics',dapRicListText(d.telegram_allowed_rics));
     // Hero pill — DAPNET has no live link probe; reflect the enabled feed state.
@@ -6304,6 +6374,10 @@ async function saveDapnet(){
   if(calloutRics===null)return;
   const telegramRics=dapRicListBody('dap-telegram-rics','Telegram');
   if(telegramRics===null)return;
+  const calloutIssiPriorities=dapPriorityRoutesBody('dap-callout-issi-priorities','Call-Out ISSI','ISSI',1,16777215);
+  if(calloutIssiPriorities===null)return;
+  const calloutTpgRicPriorities=dapPriorityRoutesBody('dap-callout-tpg-ric-priorities','Call-Out TPG RIC','TPG_RIC',0,0);
+  if(calloutTpgRicPriorities===null)return;
   const body={
     enabled:document.getElementById('dap-enabled').checked,
     rwth_core_enabled:document.getElementById('dap-rwth-enabled').checked,
@@ -6327,9 +6401,13 @@ async function saveDapnet(){
     sds_allowed_rics:sdsRics,
     callout_source_issi:dapNum('dap-callout-source',9999,1,16777215),
     callout_dest_issi:dapNum('dap-callout-dest',0,0,16777215),
-    callout_incident_base:dapNum('dap-callout-incident',2,1,256),
+    callout_tpg_ric:tpgRicInput('dap-callout-tpg-ric',0x00090D10),
+    callout_id_base:dapNum('dap-callout-id',33,0,255),
+    callout_priority:dapNum('dap-callout-priority',15,0,15),
     callout_text_prefix:dapVal('dap-callout-prefix')||'DAPNET',
     callout_allowed_rics:calloutRics,
+    callout_issi_priorities:calloutIssiPriorities,
+    callout_tpg_ric_priorities:calloutTpgRicPriorities,
     telegram_prefix:dapVal('dap-telegram-prefix')||'DAPNET',
     telegram_allowed_rics:telegramRics
   };
@@ -6540,7 +6618,11 @@ async function loadGeoalarm(){
     dapCheck('geo-sds-group',d.sds_dest_is_group);
     dapSet('geo-tpg-source',d.tpg2200_source_issi||9999);
     dapSet('geo-tpg-dest',d.tpg2200_dest_issi||0);
-    dapSet('geo-tpg-incident',d.tpg2200_incident_base||1);
+    dapSet('geo-tpg-ric',tpgRicText(d.tpg2200_ric??0x00090D10));
+    dapSet('geo-tpg-id',(d.tpg2200_callout_id_base??d.tpg2200_incident_base??33));
+    dapSet('geo-tpg-priority',d.tpg2200_priority??15);
+    dapSet('geo-tpg-issi-priorities',dapRicRoutesText(d.tpg2200_issi_priorities));
+    dapSet('geo-tpg-ric-priorities',dapRicRoutesText(d.tpg2200_ric_priorities));
     dapSet('geo-tpg-prefix',d.tpg2200_text_prefix||'GeoAlarm');
     dapSet('geo-tpg-max',d.tpg2200_max_text_chars||80);
     dapSet('geo-sip-prefix',d.sip_title_prefix||'GeoAlarm');
@@ -6570,6 +6652,10 @@ async function saveGeoalarm(){
   if(tetraWhite===null)return;
   const tetraBlack=geoIssiListBody('geo-tetra-black','blacklist');
   if(tetraBlack===null)return;
+  const tpgIssiPriorities=dapPriorityRoutesBody('geo-tpg-issi-priorities','GeoAlarm TPG ISSI','ISSI',1,16777215);
+  if(tpgIssiPriorities===null)return;
+  const tpgRicPriorities=dapPriorityRoutesBody('geo-tpg-ric-priorities','GeoAlarm TPG RIC','TPG_RIC',0,0);
+  if(tpgRicPriorities===null)return;
   const body={
     enabled:document.getElementById('geo-enabled').checked,
     flowstation_lat:geoFloat('geo-lat',0,-90,90),
@@ -6591,7 +6677,11 @@ async function saveGeoalarm(){
     sds_dest_is_group:document.getElementById('geo-sds-group').checked,
     tpg2200_source_issi:dapNum('geo-tpg-source',9999,1,16777215),
     tpg2200_dest_issi:dapNum('geo-tpg-dest',0,0,16777215),
-    tpg2200_incident_base:dapNum('geo-tpg-incident',1,1,256),
+    tpg2200_ric:tpgRicInput('geo-tpg-ric',0x00090D10),
+    tpg2200_callout_id_base:dapNum('geo-tpg-id',33,0,255),
+    tpg2200_priority:dapNum('geo-tpg-priority',15,0,15),
+    tpg2200_issi_priorities:tpgIssiPriorities,
+    tpg2200_ric_priorities:tpgRicPriorities,
     tpg2200_text_prefix:dapVal('geo-tpg-prefix')||'GeoAlarm',
     tpg2200_max_text_chars:dapNum('geo-tpg-max',80,8,160),
     sip_title_prefix:dapVal('geo-sip-prefix')||'GeoAlarm',
@@ -7160,10 +7250,10 @@ async function restartService(){if(!confirm(t('confirm_restart')))return;wsSend(
 async function shutdownService(){if(!confirm(t('confirm_shutdown')))return;wsSend({type:'shutdown'});}
 function kickMs(issi){if(!confirm(t('confirm_kick',{issi})))return;wsSend({type:'kick',issi});}
 function toggleSdsCallout(){const on=document.getElementById('sds-callout').checked;document.getElementById('sds-callout-fields').style.display=on?'block':'none';}
-function resetSdsCallout(){document.getElementById('sds-callout').checked=false;document.getElementById('sds-callout-source').value='9999';document.getElementById('sds-callout-incident').value='1';document.getElementById('sds-callout-text').value='ALARM';document.getElementById('sds-callout-raw').value='';toggleSdsCallout();}
+function resetSdsCallout(){document.getElementById('sds-callout').checked=false;document.getElementById('sds-callout-source').value='9999';document.getElementById('sds-callout-id').value='33';document.getElementById('sds-callout-ric').value='0x00090D10';document.getElementById('sds-callout-priority').value='15';document.getElementById('sds-callout-text').value='ALARM';document.getElementById('sds-callout-raw').value='';toggleSdsCallout();}
 function openSds(issi){sdsDest=issi;document.getElementById('sds-dest').value=issi;document.getElementById('sds-msg').value='';resetSdsCallout();document.getElementById('sds-modal').classList.add('open');}
 function closeSdsModal(){document.getElementById('sds-modal').classList.remove('open');}
-function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value);if(!dest)return;if(document.getElementById('sds-callout').checked){const source=parseInt(document.getElementById('sds-callout-source').value)||9999;const incident=Math.max(1,Math.min(256,parseInt(document.getElementById('sds-callout-incident').value)||1));const alarmText=document.getElementById('sds-callout-text').value.trim()||'ALARM';const rawhex=document.getElementById('sds-callout-raw').value.trim();wsSend({type:'sds_callout',dest_issi:dest,source_issi:source,incident,message:alarmText,raw_hex:rawhex});closeSdsModal();return;}const msg=document.getElementById('sds-msg').value.trim();if(!msg)return;wsSend({type:'sds',dest_issi:dest,message:msg});closeSdsModal();}
+function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value);if(!dest)return;if(document.getElementById('sds-callout').checked){const source=parseInt(document.getElementById('sds-callout-source').value)||9999;const calloutId=Math.max(0,Math.min(255,parseInt(document.getElementById('sds-callout-id').value)||0));const tpgRic=tpgRicInput('sds-callout-ric',0x00090D10);const priority=Math.max(0,Math.min(15,parseInt(document.getElementById('sds-callout-priority').value)||0));const alarmText=document.getElementById('sds-callout-text').value.trim()||'ALARM';const rawhex=document.getElementById('sds-callout-raw').value.trim();wsSend({type:'sds_callout',dest_issi:dest,source_issi:source,tpg_ric:tpgRic,callout_id:calloutId,priority,message:alarmText,raw_hex:rawhex});closeSdsModal();return;}const msg=document.getElementById('sds-msg').value.trim();if(!msg)return;wsSend({type:'sds',dest_issi:dest,message:msg});closeSdsModal();}
 function openDgna(issi){document.getElementById('dgna-issi').value=issi;document.getElementById('dgna-gssi').value='';const cur=document.getElementById('dgna-current');const gl=(state.ms[issi]&&state.ms[issi].groups)||[];cur.innerHTML=gl.length?gl.slice().sort((a,b)=>a-b).map(g=>`<span class="badge badge-blue" style="font-size:10px">${g}</span>`).join(''):'<span class="badge badge-dim">—</span>';document.getElementById('dgna-modal').classList.add('open');}
 function closeDgnaModal(){document.getElementById('dgna-modal').classList.remove('open');}
 function sendDgna(attach){const issi=parseInt(document.getElementById('dgna-issi').value),gssi=parseInt(document.getElementById('dgna-gssi').value);if(!issi||!gssi)return;wsSend({type:'dgna',issi,gssi,attach});closeDgnaModal();}

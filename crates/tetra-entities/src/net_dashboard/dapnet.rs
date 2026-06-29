@@ -39,6 +39,22 @@ fn ric_routes_toml(routes: &std::collections::BTreeMap<u32, u32>) -> String {
         .join(", ")
 }
 
+fn issi_priority_routes_toml(routes: &std::collections::BTreeMap<u32, u8>) -> String {
+    routes
+        .iter()
+        .map(|(issi, priority)| format!("\"{}\" = {}", issi, priority))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn tpg_ric_priority_routes_toml(routes: &std::collections::BTreeMap<u32, u8>) -> String {
+    routes
+        .iter()
+        .map(|(ric, priority)| format!("\"0x{ric:08X}\" = {}", priority))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Rewrite (or insert) the `[dapnet]` section in the TOML file. A `.dapnet.bak` backup is made.
 pub fn write_dapnet_to_toml(config_path: &str, ov: &DapnetRuntimeOverride) -> std::io::Result<()> {
     let original = std::fs::read_to_string(config_path)?;
@@ -47,6 +63,8 @@ pub fn write_dapnet_to_toml(config_path: &str, ov: &DapnetRuntimeOverride) -> st
     let sds_allowed_rics = ric_set_toml(&ov.sds_allowed_rics);
     let callout_allowed_rics = ric_set_toml(&ov.callout_allowed_rics);
     let telegram_allowed_rics = ric_set_toml(&ov.telegram_allowed_rics);
+    let callout_issi_priorities = issi_priority_routes_toml(&ov.callout_issi_priorities);
+    let callout_tpg_ric_priorities = tpg_ric_priority_routes_toml(&ov.callout_tpg_ric_priorities);
     let section = format!(
         "[dapnet]\n\
          enabled = {}\n\
@@ -67,7 +85,11 @@ pub fn write_dapnet_to_toml(config_path: &str, ov: &DapnetRuntimeOverride) -> st
          telegram_allowed_rics = [{}]\n\n\
          callout_source_issi = {}\n\
          callout_dest_issi = {}\n\
-         callout_incident_base = {}\n\
+         callout_tpg_ric = {}\n\
+         callout_id_base = {}\n\
+         callout_priority = {}\n\
+         callout_issi_priorities = {{{}}}\n\
+         callout_tpg_ric_priorities = {{{}}}\n\
          callout_text_prefix = \"{}\"\n\n\
          telegram_prefix = \"{}\"\n\n\
          rwth_core_enabled = {}\n\
@@ -96,7 +118,11 @@ pub fn write_dapnet_to_toml(config_path: &str, ov: &DapnetRuntimeOverride) -> st
         telegram_allowed_rics,
         ov.callout_source_issi,
         ov.callout_dest_issi,
-        ov.callout_incident_base.clamp(1, 256),
+        ov.callout_tpg_ric,
+        ov.callout_incident_base.min(255),
+        ov.callout_priority.min(15),
+        callout_issi_priorities,
+        callout_tpg_ric_priorities,
         toml_escape(&ov.callout_text_prefix),
         toml_escape(&ov.telegram_prefix),
         ov.rwth_core_enabled,
