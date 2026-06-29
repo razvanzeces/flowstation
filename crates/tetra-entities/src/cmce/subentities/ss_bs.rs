@@ -42,14 +42,22 @@ impl SsBsSubentity {
     /// ASSIGN uses attachment mode 000 (attached permanently, TS Table 51) so
     /// the PDU both defines and attaches the group in one step (cl.6.5.2.1) —
     /// the same MLE handoff the MM D-ATTACH does, but only after the radio has
-    /// the group definition. No mnemonic is carried in v1: a real terminal shows
-    /// its own provisioned name for the GSSI, or the bare number.
+    /// the group definition. The optional `group_name` is carried as the SS-DGNA mnemonic so a
+    /// terminal that renders it shows the talkgroup name instead of the bare GSSI; when `None`, the
+    /// radio falls back to its own provisioned name (or the number).
     ///
     /// Reliability rests on the LLC ACK of the FACILITY transport, not a
     /// DGNA-layer retransmit (cl.6.6 mandates no protocol timer), so this is sent
     /// with `Layer2Service::Acknowledged` — the same choice the MM DGNA path made
     /// for its individually-addressed D-ATTACH.
-    pub fn send_d_facility_dgna(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) {
+    pub fn send_d_facility_dgna(
+        &self,
+        queue: &mut MessageQueue,
+        issi: u32,
+        gssi: u32,
+        attach: bool,
+        group_name: Option<Vec<u8>>,
+    ) {
         let ss_pdu = if attach {
             SsDgnaPdu::Assign(Assign {
                 groups: vec![GroupAssignment {
@@ -59,8 +67,9 @@ impl SsBsSubentity {
                     // update, matching the persistent (lifetime=0) MM D-ATTACH the legacy path sent.
                     attachment_mode: GroupIdentityAttachmentMode::AttachedPermanently,
                     class_of_usage: Some(DGNA_CLASS_OF_USAGE),
-                    // No group-name config in v1 — the radio displays its own provisioned name.
-                    mnemonic: None,
+                    // Optional talkgroup display name (config dgna_group_names), shown by terminals
+                    // that render the DGNA mnemonic.
+                    mnemonic: group_name,
                     security_related_information: None,
                     additional_group_information: None,
                     vgssi: None,
