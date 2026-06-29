@@ -2,9 +2,9 @@ use super::*;
 
 impl CcBsSubentity {
     pub fn rx_call_control(&mut self, queue: &mut MessageQueue, message: SapMsg) {
-        // The originating network entity (Brew or Asterisk). Inbound network-initiated setup
+        // The originating network entity (Brew, Asterisk, or EchoLink). Inbound network-initiated setup
         // requests carry no prior call record, so we route replies back to the sender.
-        let src_entity = message.src;
+        let network_entity = message.src;
         let SapMsgInner::CmceCallControl(call_control) = message.msg else {
             tracing::warn!("CMCE CC control ingress received non-call-control message");
             return;
@@ -17,7 +17,7 @@ impl CcBsSubentity {
                 dest_gssi,
                 priority,
             } => {
-                self.rx_network_call_start(queue, brew_uuid, source_issi, dest_gssi, priority);
+                self.rx_network_call_start(queue, network_entity, brew_uuid, source_issi, dest_gssi, priority);
             }
             CallControl::NetworkCallEnd { brew_uuid } => {
                 self.rx_network_call_end(queue, brew_uuid);
@@ -26,7 +26,7 @@ impl CcBsSubentity {
                 self.handle_ul_inactivity_timeout_slot(queue, carrier_num, ts);
             }
             CallControl::NetworkCircuitSetupRequest { brew_uuid, call } => {
-                self.rx_network_circuit_setup_request(queue, src_entity, brew_uuid, call);
+                self.rx_network_circuit_setup_request(queue, network_entity, brew_uuid, call);
             }
             CallControl::NetworkCircuitSetupAccept { brew_uuid } => {
                 self.rx_network_circuit_setup_accept(brew_uuid);

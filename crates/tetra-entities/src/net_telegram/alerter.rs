@@ -114,6 +114,12 @@ impl TelegramAlerter {
                 Ok(TelegramAlertMsg::Dapnet { prefix, callsign, text }) => self.handle_dapnet(prefix, callsign, text),
                 Ok(TelegramAlertMsg::Meshcom { prefix, src, text }) => self.handle_dapnet(prefix, src, text),
                 Ok(TelegramAlertMsg::Geoalarm { prefix, source, text }) => self.handle_dapnet(prefix, source, text),
+                Ok(TelegramAlertMsg::EcholinkSession {
+                    prefix,
+                    remote,
+                    connected,
+                    route,
+                }) => self.handle_echolink_session(prefix, remote, connected, route),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
@@ -226,6 +232,14 @@ impl TelegramAlerter {
         let tg = self.cfg.effective_telegram();
         if tg.is_deliverable() {
             let html = format::dapnet(&self.station, &prefix, &callsign, &text);
+            self.send_all(&tg, &html);
+        }
+    }
+
+    fn handle_echolink_session(&self, prefix: String, remote: String, connected: bool, route: String) {
+        let tg = self.cfg.effective_telegram();
+        if tg.is_deliverable() {
+            let html = format::echolink_session(&self.station, &prefix, &remote, connected, &route);
             self.send_all(&tg, &html);
         }
     }

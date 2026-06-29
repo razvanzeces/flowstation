@@ -9,6 +9,8 @@ edition.workspace = true
 # link the TETRA codec.
 default = []
 asterisk = []
+# EchoLink GSM-FR/TETRA audio bridge. Requires libgsm and libtetra-codec.
+echolink = []
 
 [dependencies]
 tetra-core = { workspace = true }

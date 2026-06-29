@@ -63,6 +63,7 @@ pub(super) enum CallOrigin {
     },
     /// Network-initiated call from TetraPack/Brew
     Network {
+        network_entity: TetraEntity,
         brew_uuid: uuid::Uuid, // For Brew tracking
     },
 }
@@ -212,6 +213,7 @@ impl ActiveCall {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new_network(
+        network_entity: TetraEntity,
         brew_uuid: uuid::Uuid,
         dest_gssi: u32,
         source_issi: u32,
@@ -223,7 +225,7 @@ impl ActiveCall {
         priority: u8,
     ) -> Self {
         Self {
-            origin: CallOrigin::Network { brew_uuid },
+            origin: CallOrigin::Network { network_entity, brew_uuid },
             dest_gssi,
             source_issi,
             created_at,
@@ -411,10 +413,9 @@ pub(super) struct IndividualCall {
     pub(super) called_over_brew: bool,
     /// True when the calling party lives behind Brew/TetraPack.
     pub(super) calling_over_brew: bool,
-    /// Network entity bridging this call (Brew or Asterisk). Call-control messages and
+    /// Network entity bridging this call (Brew, Asterisk, or EchoLink). Call-control messages and
     /// floor/DTMF signalling for the network leg are routed to this entity rather than
-    /// hardcoding `TetraEntity::Brew`, so Brew calls reach Brew and Asterisk calls reach
-    /// the SIP/RTP bridge.
+    /// hardcoding `TetraEntity::Brew`.
     pub(super) network_entity: TetraEntity,
     /// Brew UUID when this call is bridged to TetraPack.
     pub(super) brew_uuid: Option<uuid::Uuid>,
