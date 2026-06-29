@@ -64,9 +64,14 @@ fn register_terminal(test: &mut ComponentTest, issi: u32) {
 /// Pull the first MM->CMCE `CmceSsDgnaAssign` SAP request out of a batch of captured messages.
 /// This is the air-interface emission MM now makes by default for a DGNA: it hands the SS-DGNA
 /// ASSIGN/DEASSIGN to CMCE rather than sending an MM D-ATTACH itself.
-fn find_ss_dgna_request(msgs: &[SapMsg]) -> Option<(u32, u32, bool)> {
+fn find_ss_dgna_request(msgs: &[SapMsg]) -> Option<(u32, u32, Option<String>, bool)> {
     msgs.iter().find_map(|m| match m.msg {
-        SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach } if m.dest == TetraEntity::Cmce => Some((issi, gssi, attach)),
+        SapMsgInner::CmceSsDgnaAssign {
+            issi,
+            gssi,
+            ref mnemonic,
+            attach,
+        } if m.dest == TetraEntity::Cmce => Some((issi, gssi, mnemonic.clone(), attach)),
         _ => None,
     })
 }
@@ -235,14 +240,15 @@ fn test_dgna_assign_affiliates_and_requests_ss_dgna() {
     dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
         attach: true,
     });
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    let (issi, gssi, attach) = find_ss_dgna_request(&msgs)
+    let (issi, gssi, mnemonic, attach) = find_ss_dgna_request(&msgs)
         .unwrap_or_else(|| panic!("expected a CmceSsDgnaAssign request after DGNA assign, got {} msgs", msgs.len()));
-    assert_eq!((issi, gssi, attach), (TEST_ISSI, TEST_GSSI, true));
+    assert_eq!((issi, gssi, mnemonic, attach), (TEST_ISSI, TEST_GSSI, None, true));
 
     // On the SS-DGNA default MM must NOT also send a legacy MM D-ATTACH (that would double-attach).
     assert!(
@@ -281,6 +287,7 @@ fn test_dgna_deassign_requests_ss_dgna_and_deaffiliates() {
     dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
         attach: true,
     });
     test.run_stack(Some(2));
@@ -296,14 +303,15 @@ fn test_dgna_deassign_requests_ss_dgna_and_deaffiliates() {
     dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
         attach: false,
     });
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    let (issi, gssi, attach) = find_ss_dgna_request(&msgs)
+    let (issi, gssi, mnemonic, attach) = find_ss_dgna_request(&msgs)
         .unwrap_or_else(|| panic!("expected a CmceSsDgnaAssign request after DGNA deassign, got {} msgs", msgs.len()));
-    assert_eq!((issi, gssi, attach), (TEST_ISSI, TEST_GSSI, false));
+    assert_eq!((issi, gssi, mnemonic, attach), (TEST_ISSI, TEST_GSSI, None, false));
 
     assert!(
         !test
@@ -341,6 +349,7 @@ fn test_dgna_legacy_flag_emits_mm_attach() {
     dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
         attach: true,
     });
     test.run_stack(Some(2));
@@ -408,6 +417,7 @@ fn test_dgna_from_cmce_control_reaches_mm_and_emits_d_facility() {
     cmce_dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
         attach: true,
     });
     // CMCE drains control -> forwards MmDgnaRequest -> MM affiliates + requests CmceSsDgnaAssign ->
@@ -428,10 +438,7 @@ fn test_dgna_from_cmce_control_reaches_mm_and_emits_d_facility() {
     };
     assert_eq!(assign.groups.len(), 1);
     assert_eq!(assign.groups[0].group_ssi, TEST_GSSI);
-    assert_eq!(
-        assign.groups[0].attachment_mode,
-        GroupIdentityAttachmentMode::AttachedPermanently
-    );
+    assert_eq!(assign.groups[0].attachment_mode, GroupIdentityAttachmentMode::AttachedPermanently);
 
     assert!(
         test.config
@@ -457,6 +464,7 @@ fn test_dgna_to_unregistered_issi_is_refused() {
     dispatcher.send(ControlCommand::Dgna {
         issi: 9_999_001,
         gssi: 100,
+        mnemonic: None,
         attach: true,
     });
     test.run_stack(Some(2));

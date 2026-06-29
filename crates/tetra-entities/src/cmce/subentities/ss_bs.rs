@@ -42,14 +42,15 @@ impl SsBsSubentity {
     /// ASSIGN uses attachment mode 000 (attached permanently, TS Table 51) so
     /// the PDU both defines and attaches the group in one step (cl.6.5.2.1) —
     /// the same MLE handoff the MM D-ATTACH does, but only after the radio has
-    /// the group definition. No mnemonic is carried in v1: a real terminal shows
-    /// its own provisioned name for the GSSI, or the bare number.
+    /// the group definition. When present, the mnemonic is carried as the Table-45
+    /// "Mnemonic group name" so the terminal can label the TG directly from the
+    /// operator request.
     ///
     /// Reliability rests on the LLC ACK of the FACILITY transport, not a
     /// DGNA-layer retransmit (cl.6.6 mandates no protocol timer), so this is sent
     /// with `Layer2Service::Acknowledged` — the same choice the MM DGNA path made
     /// for its individually-addressed D-ATTACH.
-    pub fn send_d_facility_dgna(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) {
+    pub fn send_d_facility_dgna(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, mnemonic: Option<String>, attach: bool) {
         let ss_pdu = if attach {
             SsDgnaPdu::Assign(Assign {
                 groups: vec![GroupAssignment {
@@ -60,7 +61,7 @@ impl SsBsSubentity {
                     attachment_mode: GroupIdentityAttachmentMode::AttachedPermanently,
                     class_of_usage: Some(DGNA_CLASS_OF_USAGE),
                     // No group-name config in v1 — the radio displays its own provisioned name.
-                    mnemonic: None,
+                    mnemonic: mnemonic.as_deref().map(Self::encode_mnemonic),
                     security_related_information: None,
                     additional_group_information: None,
                     vgssi: None,
@@ -137,9 +138,7 @@ impl SsBsSubentity {
         // rx_u_attach_detach_group_identity_ack). We do NOT reply
         // function-not-supported in that case.
         match UFacility::from_bitbuf(&mut prim.sdu) {
-            Ok(UFacility {
-                facility: Some(body),
-            }) => {
+            Ok(UFacility { facility: Some(body) }) => {
                 match &body.ss_pdu {
                     SsDgnaPdu::AssignAck(ack) => {
                         for ie in &ack.acks {
@@ -227,5 +226,14 @@ impl SsBsSubentity {
                 tx_reporter: None,
             }),
         });
+    }
+
+    fn encode_mnemonic(name: &str) -> String {
+        let mut out = String::with_capacity(name.len().min(15));
+        for ch in name.chars().take(15) {
+            let cp = ch as u32;
+            out.push(if cp <= 0xFF { ch } else { '?' });
+        }
+        out
     }
 }

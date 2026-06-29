@@ -88,6 +88,7 @@ pub enum SapMsgInner {
     MmDgnaRequest {
         issi: u32,
         gssi: u32,
+        mnemonic: Option<String>,
         attach: bool,
     },
 
@@ -99,6 +100,7 @@ pub enum SapMsgInner {
     CmceSsDgnaAssign {
         issi: u32,
         gssi: u32,
+        mnemonic: Option<String>,
         attach: bool,
     },
 
@@ -151,11 +153,29 @@ impl Display for SapMsgInner {
 
             // Control/Brew
             SapMsgInner::MmSubscriberUpdate(_) => write!(f, "MmSubscriberUpdate"),
-            SapMsgInner::MmDgnaRequest { issi, gssi, attach } => {
-                write!(f, "MmDgnaRequest(issi={}, gssi={}, attach={})", issi, gssi, attach)
+            SapMsgInner::MmDgnaRequest {
+                issi,
+                gssi,
+                mnemonic,
+                attach,
+            } => {
+                write!(
+                    f,
+                    "MmDgnaRequest(issi={}, gssi={}, mnemonic={:?}, attach={})",
+                    issi, gssi, mnemonic, attach
+                )
             }
-            SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach } => {
-                write!(f, "CmceSsDgnaAssign(issi={}, gssi={}, attach={})", issi, gssi, attach)
+            SapMsgInner::CmceSsDgnaAssign {
+                issi,
+                gssi,
+                mnemonic,
+                attach,
+            } => {
+                write!(
+                    f,
+                    "CmceSsDgnaAssign(issi={}, gssi={}, mnemonic={:?}, attach={})",
+                    issi, gssi, mnemonic, attach
+                )
             }
             SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => write!(f, "MsRssiUpdate(issi={}, rssi={:.1}dBFS)", issi, rssi_dbfs),
             SapMsgInner::BrewReconnected => write!(f, "BrewReconnected"),

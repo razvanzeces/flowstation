@@ -43,9 +43,9 @@ impl SsDgnaPdu {
             value: ss_type_raw,
         })?;
 
-        let pdu_type_raw = buf
-            .peek_bits_posoffset(6, 5)
-            .ok_or(PduParseErr::BufferEnded { field: Some("ss_dgna_pdu_type") })?;
+        let pdu_type_raw = buf.peek_bits_posoffset(6, 5).ok_or(PduParseErr::BufferEnded {
+            field: Some("ss_dgna_pdu_type"),
+        })?;
         let pdu_type = SsDgnaPduType::try_from(pdu_type_raw).map_err(|_| PduParseErr::InvalidValue {
             field: "ss_dgna_pdu_type",
             value: pdu_type_raw,

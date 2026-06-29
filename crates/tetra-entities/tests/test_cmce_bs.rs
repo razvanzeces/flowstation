@@ -1971,7 +1971,7 @@ mod ss_dgna_tests {
 
     /// Build a MM(+control)/CMCE stack with the Mle sink, register the terminal, drive a DGNA, and
     /// return everything captured at the sinks.
-    fn run_dgna(attach: bool) -> (ComponentTest, Vec<SapMsg>) {
+    fn run_dgna(attach: bool, mnemonic: Option<&str>) -> (ComponentTest, Vec<SapMsg>) {
         let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
         test.populate_entities(vec![], vec![TetraEntity::Mle]);
 
@@ -1991,6 +1991,7 @@ mod ss_dgna_tests {
             dispatcher.send(ControlCommand::Dgna {
                 issi: DGNA_ISSI,
                 gssi: DGNA_GSSI,
+                mnemonic: None,
                 attach: true,
             });
             test.run_stack(Some(6));
@@ -2000,6 +2001,7 @@ mod ss_dgna_tests {
         dispatcher.send(ControlCommand::Dgna {
             issi: DGNA_ISSI,
             gssi: DGNA_GSSI,
+            mnemonic: mnemonic.map(str::to_string),
             attach,
         });
         // CMCE drains control -> MmDgnaRequest -> MM affiliates + CmceSsDgnaAssign -> CMCE D-FACILITY.
@@ -2013,7 +2015,7 @@ mod ss_dgna_tests {
     #[test]
     fn test_dgna_assign_emits_d_facility() {
         debug::setup_logging_verbose();
-        let (test, msgs) = run_dgna(true);
+        let (test, msgs) = run_dgna(true, None);
 
         let (addr_ssi, facility) =
             find_d_facility(&msgs).unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA assign, got {} msgs", msgs.len()));
@@ -2042,15 +2044,31 @@ mod ss_dgna_tests {
         );
     }
 
+    /// Operator DGNA assign with a mnemonic carries the TG name in the SS-DGNA Group assignment IE.
+    #[test]
+    fn test_dgna_assign_emits_mnemonic_name() {
+        debug::setup_logging_verbose();
+        let (_test, msgs) = run_dgna(true, Some("OPS 42"));
+
+        let (_addr_ssi, facility) =
+            find_d_facility(&msgs).unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA assign, got {} msgs", msgs.len()));
+        let body = facility.facility.expect("D-FACILITY must carry an SS-DGNA body");
+        let SsDgnaPdu::Assign(assign) = body.ss_pdu else {
+            panic!("expected an ASSIGN, got {}", body.ss_pdu);
+        };
+        assert_eq!(assign.groups.len(), 1, "exactly one group assigned");
+        assert_eq!(assign.groups[0].mnemonic.as_deref(), Some("OPS 42"));
+    }
+
     /// Operator DGNA deassign emits a D-FACILITY{DEASSIGN} naming the GSSI and removes the
     /// affiliation.
     #[test]
     fn test_dgna_deassign_emits_d_facility_deassign() {
         debug::setup_logging_verbose();
-        let (test, msgs) = run_dgna(false);
+        let (test, msgs) = run_dgna(false, None);
 
-        let (addr_ssi, facility) = find_d_facility(&msgs)
-            .unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA deassign, got {} msgs", msgs.len()));
+        let (addr_ssi, facility) =
+            find_d_facility(&msgs).unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA deassign, got {} msgs", msgs.len()));
         assert_eq!(addr_ssi, DGNA_ISSI);
 
         let body = facility.facility.expect("D-FACILITY must carry an SS-DGNA body");
@@ -2088,6 +2106,7 @@ mod ss_dgna_tests {
         dispatcher.send(ControlCommand::Dgna {
             issi: 9_999_002,
             gssi: DGNA_GSSI,
+            mnemonic: None,
             attach: true,
         });
         test.run_stack(Some(6));
@@ -2106,7 +2125,10 @@ mod ss_dgna_tests {
         debug::setup_logging_verbose();
 
         let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
-        test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
+        test.populate_entities(
+            vec![TetraEntity::Cmce],
+            vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+        );
 
         // Build a U-FACILITY{ASSIGN ACK} as the affected MS would send back.
         let ack = AssignAck {

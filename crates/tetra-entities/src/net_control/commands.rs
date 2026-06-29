@@ -44,6 +44,8 @@ pub enum ControlCommand {
         issi: u32,
         /// Group to assign/remove.
         gssi: u32,
+        /// Optional TG alias sent in the SS-DGNA mnemonic group name.
+        mnemonic: Option<String>,
         /// `true` = assign/attach the group, `false` = deassign/detach it.
         attach: bool,
     },

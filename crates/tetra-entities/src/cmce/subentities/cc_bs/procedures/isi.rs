@@ -388,8 +388,7 @@ impl CcBsSubentity {
         // Keep a linkless MCCH copy alongside the traffic-leg send. Reusing the setup LLC link
         // with chan_alloc here can make UMAC treat D-CONNECT as a random-access response and
         // leave the local handset in alerting/ringing state after answer.
-        let connect_msg_fallback =
-            Self::build_sapmsg(connect_sdu, Some(chan_alloc_calling), self.dltime, call.calling_addr, None);
+        let connect_msg_fallback = Self::build_sapmsg(connect_sdu, Some(chan_alloc_calling), self.dltime, call.calling_addr, None);
         queue.push_back(connect_msg_fallback);
 
         let activated = match self.fsm_individual_transition_to_active(call_id) {

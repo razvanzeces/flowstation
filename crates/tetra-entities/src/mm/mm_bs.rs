@@ -1482,7 +1482,7 @@ impl MmBs {
     /// back to an unsolicited MM D-ATTACH/DETACH GROUP IDENTITY. Brew is intentionally not involved.
     ///
     /// Returns `true` if the command was accepted and the regroup was put on the air.
-    fn do_dgna(&mut self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) -> bool {
+    fn do_dgna(&mut self, queue: &mut MessageQueue, issi: u32, gssi: u32, mnemonic: Option<String>, attach: bool) -> bool {
         let verb = if attach { "assign" } else { "deassign" };
 
         // The terminal must be registered on the cell — we cannot regroup a radio that is not here.
@@ -1530,7 +1530,12 @@ impl MmBs {
                 sap: Sap::Control,
                 src: TetraEntity::Mm,
                 dest: TetraEntity::Cmce,
-                msg: SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach },
+                msg: SapMsgInner::CmceSsDgnaAssign {
+                    issi,
+                    gssi,
+                    mnemonic,
+                    attach,
+                },
             });
         } else {
             self.send_d_attach_detach_group_identity(queue, issi, gssi, attach);
@@ -1892,8 +1897,13 @@ impl TetraEntityTrait for MmBs {
             }
             for cmd in cmds {
                 match cmd {
-                    ControlCommand::Dgna { issi, gssi, attach } => {
-                        self.do_dgna(queue, issi, gssi, attach);
+                    ControlCommand::Dgna {
+                        issi,
+                        gssi,
+                        mnemonic,
+                        attach,
+                    } => {
+                        self.do_dgna(queue, issi, gssi, mnemonic, attach);
                     }
                     _ => {
                         tracing::warn!("MM: ignoring unsupported control command {:?}", cmd);
@@ -2134,10 +2144,15 @@ impl TetraEntityTrait for MmBs {
                             self.recovery_mark_dirty();
                         }
                     }
-                    SapMsgInner::MmDgnaRequest { issi, gssi, attach } => {
+                    SapMsgInner::MmDgnaRequest {
+                        issi,
+                        gssi,
+                        mnemonic,
+                        attach,
+                    } => {
                         // Dashboard-originated DGNA, forwarded by CMCE (the dashboard control channel
                         // terminates there). The group machinery lives here in MM.
-                        self.do_dgna(queue, issi, gssi, attach);
+                        self.do_dgna(queue, issi, gssi, mnemonic, attach);
                     }
                     _ => {
                         tracing::warn!("mm_bs: unexpected Control message from {:?}", message.src);

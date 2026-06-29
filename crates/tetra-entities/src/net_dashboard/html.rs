@@ -5,11 +5,11 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>TETRA FlowStation</title>
 <style>
-/* ── Reset ── */
+/* â”€â”€ Reset â”€â”€ */
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;overflow:hidden;}
 
-/* ── Themes ── */
+/* â”€â”€ Themes â”€â”€ */
 :root{
   --bg:      #090d14;
   --bg2:     #111824;
@@ -24,17 +24,17 @@ html,body{height:100%;overflow:hidden;}
   --text:    #eef3fb;
   --text2:   #94abc9;
   --text3:   #4c628a;
-  --muted:   var(--text2);   /* help/secondary text — was referenced everywhere but never defined */
+  --muted:   var(--text2);   /* help/secondary text â€” was referenced everywhere but never defined */
   --sidebar: #070a10;
   --sidebar-border: #161d2c;
   --card-shadow: 0 1px 3px rgba(0,0,0,0.4);
   --r: 10px;
 
-  /* ── Design-system v3 "Instrument" tokens (single source of truth) ──
+  /* â”€â”€ Design-system v3 "Instrument" tokens (single source of truth) â”€â”€
      Semantic + structural tokens consumed by the reusable component classes
-     (.hero/.card/.pill/.gauge/.group-list/.field/.btn/.banner/.sheet …).
+     (.hero/.card/.pill/.gauge/.group-list/.field/.btn/.banner/.sheet â€¦).
      Define them HERE so nothing references them before they exist. */
-  --ok:    #2ec6a6;                         /* canonical "healthy" green — replaces every #3fb950 */
+  --ok:    #2ec6a6;                         /* canonical "healthy" green â€” replaces every #3fb950 */
   --info:  var(--accent2);                  /* neutral / idle accent */
   --sep:   rgba(255,255,255,0.07);          /* hairline divider (inset from leading edge) */
   --hair:  inset 0 1px 0 rgba(255,255,255,0.05);   /* top inner-highlight (was defined far below first use) */
@@ -74,18 +74,18 @@ html,body{height:100%;overflow:hidden;}
   --elev-1: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px -12px rgba(0,0,200,.30);
 }
 
-/* ── Readability scale (eye control) ──────────────────────────────────────────
+/* â”€â”€ Readability scale (eye control) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    --ts is one text-scale multiplier consumed by the curated readability block
    (the @media min-width:701px block) via calc(). data-uisize lives on <html>,
-   persisted as fs_uisize. High/Ultra also strengthen the muted text tiers —
+   persisted as fs_uisize. High/Ultra also strengthen the muted text tiers â€”
    theme-agnostic, because we reassign the *tokens* themselves. */
-:root{ --ts:1.10; --wt-quiet:600; }   /* boot default = Medium (≈16.5px base) */
+:root{ --ts:1.10; --wt-quiet:600; }   /* boot default = Medium (â‰ˆ16.5px base) */
 html[data-uisize="s"]{ --ts:0.92; }
 html[data-uisize="m"]{ --ts:1.10; }
 html[data-uisize="h"]{ --ts:1.26; --text3:var(--text2); --wt-quiet:600; }
 html[data-uisize="u"]{ --ts:1.46; --text3:var(--text); --text2:var(--text); --wt-quiet:700; }
 
-/* ── Touchscreen mode (FH-FEAT-008) ──────────────────────────────────────────
+/* â”€â”€ Touchscreen mode (FH-FEAT-008) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Opt-in via body.touch-mode (persisted in localStorage), OR auto-enabled on a
    coarse-pointer device unless the user opted out (body.no-touch-mode). Class-based
    so it composes with the dark/light/blue data-themes; scoped so the desktop
@@ -113,7 +113,7 @@ body.touch-mode textarea{min-height:44px;font-size:15px;}
   body:not(.no-touch-mode) select,
   body:not(.no-touch-mode) textarea{min-height:44px;}
 }
-/* Touch toggle — its OWN class (never .theme-btn) so setTheme()'s active-reset
+/* Touch toggle â€” its OWN class (never .theme-btn) so setTheme()'s active-reset
    can't desync its highlight from the actual touch state. */
 .touch-btn{
   background:var(--bg3);color:var(--text2);border:1px solid var(--border);
@@ -122,14 +122,14 @@ body.touch-mode textarea{min-height:44px;font-size:15px;}
 .touch-btn:hover{color:var(--text);}
 .touch-btn.active{background:var(--accent);color:var(--bg);border-color:var(--accent);}
 
-/* ── Layout shell ── */
+/* â”€â”€ Layout shell â”€â”€ */
 body{
   background:var(--bg);color:var(--text);
   font-family:var(--sans);font-size:14px;
   display:flex;height:100vh;overflow:hidden;
 }
 
-/* ── Sidebar ── */
+/* â”€â”€ Sidebar â”€â”€ */
 #sidebar{
   width:220px;min-width:220px;
   background:var(--sidebar);
@@ -164,7 +164,7 @@ body{
 .logo-text .logo-sub{font-size:10px;color:var(--text3);letter-spacing:0.08em;font-family:var(--mono);}
 #sidebar.collapsed .logo-text{opacity:0;width:0;pointer-events:none;}
 
-/* ── Hardware status rows — iOS-Settings status block fused to the brand header ── */
+/* â”€â”€ Hardware status rows â€” iOS-Settings status block fused to the brand header â”€â”€ */
 .hw-status{
   display:flex;flex-direction:column;gap:2px;
   padding:5px;border-radius:9px;
@@ -201,7 +201,7 @@ body{
   font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text2);
   letter-spacing:0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-/* Live link indicator — soft radiating teal pulse ("SDR is talking to RF"). */
+/* Live link indicator â€” soft radiating teal pulse ("SDR is talking to RF"). */
 .hw-live{flex-shrink:0;display:flex;align-items:center;}
 .hw-live-dot{
   width:6px;height:6px;border-radius:50%;background:var(--accent);
@@ -225,7 +225,7 @@ body{
 /* Hide the whole block + its border when neither row is active (Chromium :has()). */
 .hw-status:not(:has(.hw-row[style*="flex"])){display:none;}
 
-/* ── Update-available badge (own block under the logo, not clipped by the logo box) ── */
+/* â”€â”€ Update-available badge (own block under the logo, not clipped by the logo box) â”€â”€ */
 .update-badge{
   display:none;
   margin:6px 12px 2px;
@@ -241,7 +241,7 @@ body{
 .update-badge:hover{filter:brightness(1.08);transform:translateY(-1px);}
 #sidebar.collapsed .update-badge{display:none!important;}
 
-/* ── Callsign (indicativ) shown next to an ISSI ── */
+/* â”€â”€ Callsign (indicativ) shown next to an ISSI â”€â”€ */
 .callsign{
   display:inline-block;
   margin-left:6px;
@@ -359,12 +359,12 @@ body{
 }
 .sidebar-toggle:hover{background:var(--bg3);color:var(--text);}
 
-/* ── Main area ── */
+/* â”€â”€ Main area â”€â”€ */
 #main{
   flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;
 }
 
-/* ── Topbar ── */
+/* â”€â”€ Topbar â”€â”€ */
 #topbar{
   height:52px;
   background:var(--bg2);
@@ -383,7 +383,7 @@ body{
 .topbar-right{margin-left:auto;display:flex;align-items:center;gap:8px;}
 
 /* (The old topbar SDR/power pill badges were relocated into the sidebar brand
-   header as the .hw-status block — see the sidebar CSS above.) */
+   header as the .hw-status block â€” see the sidebar CSS above.) */
 
 /* Host hardware sensor tiles on the System tab. Compact, single-line per
    sensor, monospace numbers so columns of values line up visually. */
@@ -406,7 +406,7 @@ body{
   font-size:10px;font-weight:500;color:var(--text3);margin-left:2px;
 }
 
-/* ── WiFi tab ─────────────────────────────────────────────────────────────
+/* â”€â”€ WiFi tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    The WiFi tab shows three cards (status / saved profiles / scan results)
    and a modal for entering passwords. Visual language matches the rest of
    the dashboard: monospace labels, accent green for active items, hover
@@ -593,7 +593,7 @@ body{
 .lang-btn:hover{color:var(--text);background:var(--bg3);}
 .lang-btn.active{color:var(--accent);background:rgba(0,212,168,0.08);border-color:rgba(0,212,168,0.2);}
 
-/* ── Readability eye button + Apple-style level popover ───────────────────── */
+/* â”€â”€ Readability eye button + Apple-style level popover â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .eye-wrap{position:relative;display:flex;}
 .eye-btn{
   width:30px;height:30px;display:flex;align-items:center;justify-content:center;
@@ -608,7 +608,7 @@ body{
   background:color-mix(in srgb,var(--accent) 8%,transparent);
 }
 
-/* Popover: iOS-Settings list on a vibrancy surface — rounded, hairline rows, soft shadow */
+/* Popover: iOS-Settings list on a vibrancy surface â€” rounded, hairline rows, soft shadow */
 .read-pop{
   position:absolute;top:calc(100% + 9px);right:0;
   width:248px;padding:6px;z-index:300;
@@ -638,7 +638,7 @@ body{
 .read-opt + .read-opt{box-shadow:inset 0 1px 0 var(--border);}     /* hairline separator */
 .read-opt:hover{background:var(--bg3);}
 .read-opt:hover + .read-opt{box-shadow:none;}                       /* hide line above hovered row */
-/* Live "Aa" swatch — its font-size is the real base px for that level */
+/* Live "Aa" swatch â€” its font-size is the real base px for that level */
 .read-aa{
   flex-shrink:0;width:34px;height:30px;border-radius:7px;
   background:var(--bg3);border:1px solid var(--border);
@@ -661,11 +661,11 @@ body{
 
 @media (max-width:700px){ .read-pop{width:220px;} }
 
-/* ── Settings controls (Config / Telegram / WX tabs) — premium, consistent ──── */
+/* â”€â”€ Settings controls (Config / Telegram / WX tabs) â€” premium, consistent â”€â”€â”€â”€ */
 /* Sub-label in a card header (e.g. WiFi saved-count). */
 .card-sub{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:0.02em;}
 
-/* iOS-style toggle switch. The real <input type=checkbox id=…> stays in the DOM
+/* iOS-style toggle switch. The real <input type=checkbox id=â€¦> stays in the DOM
    (just visually replaced) so all .checked reads/writes keep working unchanged. */
 .sw{position:relative;display:inline-block;width:44px;height:26px;flex-shrink:0;vertical-align:middle;}
 .sw input{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0;cursor:pointer;z-index:1;}
@@ -696,10 +696,10 @@ body{
 input[type="checkbox"]:not(.sw input),
 input[type="radio"]{accent-color:var(--accent);}
 
-/* Help/intro text under a card title — used across the settings tabs. */
+/* Help/intro text under a card title â€” used across the settings tabs. */
 .help-text{color:var(--muted);font-size:13px;line-height:1.6;}
 
-/* Recipient / ISSI chips (whitelist + telegram) — pill shape, brand-tinted. */
+/* Recipient / ISSI chips (whitelist + telegram) â€” pill shape, brand-tinted. */
 .id-chip{
   display:inline-flex;align-items:center;gap:7px;
   background:color-mix(in srgb,var(--accent2) 10%,transparent);
@@ -716,7 +716,7 @@ input[type="radio"]{accent-color:var(--accent);}
 .id-chip-x:hover{background:color-mix(in srgb,var(--danger) 22%,transparent);}
 
 /* The global .card-body is padding:0 (for table/grid cards). Settings + list tabs
-   put text/controls straight in the body, so give those real breathing room —
+   put text/controls straight in the body, so give those real breathing room â€”
    except the full-bleed code editor, which stays edge-to-edge. */
 #page-telegram .card-body,
 #page-config .card-body,
@@ -724,7 +724,7 @@ input[type="radio"]{accent-color:var(--accent);}
 #page-wifi .card-body{padding:16px 18px;}
 #page-config .card-body:has(#config-editor){padding:0;}
 
-/* ── Content area ── */
+/* â”€â”€ Content area â”€â”€ */
 #content{
   flex:1;overflow-y:auto;overflow-x:hidden;
   padding:20px;
@@ -736,7 +736,7 @@ input[type="radio"]{accent-color:var(--accent);}
 .page{display:none;}
 .page.active{display:block;}
 
-/* ── Stat cards ── */
+/* â”€â”€ Stat cards â”€â”€ */
 .stat-grid{
   display:grid;
   grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
@@ -766,7 +766,7 @@ input[type="radio"]{accent-color:var(--accent);}
 .stat-sub{font-size:11px;color:var(--text3);margin-top:5px;font-family:var(--mono);}
 .stat-icon{position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:28px;opacity:0.07;}
 
-/* ── Cards ── */
+/* â”€â”€ Cards â”€â”€ */
 .card{
   background:var(--bg2);border:1px solid var(--border);
   border-radius:var(--r);
@@ -783,7 +783,7 @@ input[type="radio"]{accent-color:var(--accent);}
 .card-actions{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
 .card-body{padding:0;}
 
-/* ── Table ── */
+/* â”€â”€ Table â”€â”€ */
 .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
 .table-wrap::-webkit-scrollbar{height:4px;}
 .table-wrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
@@ -807,7 +807,7 @@ td code{
 }
 [data-theme="light"] td code{color:var(--accent);background:rgba(0,122,98,0.06);}
 
-/* ── Badges ── */
+/* â”€â”€ Badges â”€â”€ */
 .badge{
   display:inline-block;padding:2px 7px;border-radius:4px;
   font-family:var(--mono);font-size:10px;font-weight:600;
@@ -825,7 +825,7 @@ td code{
 tr.row-emergency td{background:rgba(255,77,109,0.07);}
 tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 
-/* ── Buttons ── */
+/* â”€â”€ Buttons â”€â”€ */
 .btn{
   display:inline-flex;align-items:center;gap:5px;
   background:var(--bg3);border:1px solid var(--border2);
@@ -841,13 +841,13 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 .btn-warn:hover{border-color:var(--warn);color:var(--warn);}
 .btn-sm{padding:3px 8px;font-size:10px;}
 
-/* ── RSSI bar ── */
+/* â”€â”€ RSSI bar â”€â”€ */
 .rssi-bar{display:flex;align-items:center;gap:8px;}
 .rssi-track{width:60px;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden;}
 .rssi-fill{height:100%;border-radius:2px;transition:width 0.5s ease;}
 .rssi-val{font-family:var(--mono);font-size:11px;color:var(--text2);width:65px;text-align:right;flex-shrink:0;}
 
-/* ── Log ── */
+/* â”€â”€ Log â”€â”€ */
 .log-wrap{
   font-family:var(--mono);font-size:11px;line-height:1.7;
   background:var(--bg);padding:12px 16px;
@@ -869,7 +869,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 }
 .autoscroll-label{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;color:var(--text2);cursor:pointer;}
 
-/* ── RF live monitor ─────────────────────────────────────────────────────── */
+/* â”€â”€ RF live monitor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .rf-metrics{
   display:grid;
   grid-template-columns:repeat(5, 1fr);
@@ -927,7 +927,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   .rf-panel{padding:10px;}
 }
 
-/* ── RF signal-quality card ──────────────────────────────────────────── */
+/* â”€â”€ RF signal-quality card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 /* Each metric is a small tile: label, value, and a bar that fills horizontally
    with a colour reflecting health (green/amber/red). The bar replaces the need
    for a separate badge and gives an at-a-glance read of the whole panel. */
@@ -973,7 +973,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 .rf-q-warn .rf-qmetric-value{color:var(--warn);}
 .rf-q-bad  .rf-qmetric-value{color:var(--danger);}
 
-/* ── Hardware health card ────────────────────────────────────────────── */
+/* â”€â”€ Hardware health card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .rf-hw-grid{
   display:grid;
   grid-template-columns:200px 1fr 1fr;
@@ -1017,7 +1017,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   .rf-hw-grid{grid-template-columns:1fr;}
 }
 
-/* ── Config editor ── */
+/* â”€â”€ Config editor â”€â”€ */
 #config-editor{
   width:100%;height:480px;resize:vertical;
   background:var(--bg);border:none;outline:none;
@@ -1026,18 +1026,18 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 }
 .config-msg{padding:8px 16px;font-family:var(--mono);font-size:12px;border-top:1px solid var(--border);min-height:34px;}
 
-/* ── Empty state (legacy children; the .empty-state container itself is the
-   v3 flex component defined in the design-system block below) ── */
+/* â”€â”€ Empty state (legacy children; the .empty-state container itself is the
+   v3 flex component defined in the design-system block below) â”€â”€ */
 .empty-icon{font-size:32px;margin-bottom:10px;opacity:0.3;}
 .empty-text{font-size:13px;color:var(--text3);}
 
-/* ── System info table ── */
+/* â”€â”€ System info table â”€â”€ */
 .info-row{display:flex;border-bottom:1px solid var(--border);padding:11px 18px;align-items:center;gap:12px;}
 .info-row:last-child{border-bottom:none;}
 .info-key{font-size:11px;color:var(--text3);font-family:var(--mono);letter-spacing:0.06em;min-width:140px;flex-shrink:0;}
 .info-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text);word-break:break-all;}
 
-/* ── Modals ── */
+/* â”€â”€ Modals â”€â”€ */
 .modal-overlay{
   display:none;position:fixed;inset:0;
   background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);
@@ -1066,7 +1066,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 }
 .form-input:focus{border-color:var(--accent2);}
 
-/* ── Update modal terminal ── */
+/* â”€â”€ Update modal terminal â”€â”€ */
 .update-terminal{
   background:var(--bg);border:1px solid var(--border);border-radius:6px;
   padding:10px 12px;font-family:var(--mono);font-size:11px;line-height:1.6;
@@ -1079,7 +1079,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 .update-status.err{color:var(--danger);}
 #update-modal .modal{width:min(680px,100%);}
 
-/* ── Profile list ── */
+/* â”€â”€ Profile list â”€â”€ */
 .profile-item{
   display:flex;align-items:center;gap:10px;
   padding:10px 14px;border:1px solid var(--border);border-radius:6px;
@@ -1089,7 +1089,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
 .profile-item.active-profile{border-color:rgba(0,212,168,0.35);background:rgba(0,212,168,0.04);}
 .profile-name{flex:1;font-family:var(--mono);font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
-/* ── Responsive: mobile top nav ── */
+/* â”€â”€ Responsive: mobile top nav â”€â”€ */
 @media(max-width:700px){
   #sidebar{
     position:fixed;left:0;top:0;bottom:0;
@@ -1108,7 +1108,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   #sidebar-toggle-btn{display:flex;}
 }
 
-/* ── Phone portrait (~380px) — single column, larger touch targets ── */
+/* â”€â”€ Phone portrait (~380px) â€” single column, larger touch targets â”€â”€ */
 @media(max-width:500px){
   /* Sidebar covers more of the viewport so the menu items are tappable */
   #sidebar{width:80vw!important;min-width:240px!important;max-width:280px;}
@@ -1171,7 +1171,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:150;
 }
 
-/* ── Topbar mobile toggle ── */
+/* â”€â”€ Topbar mobile toggle â”€â”€ */
 #sidebar-toggle-btn{
   display:none;
   width:32px;height:32px;align-items:center;justify-content:center;
@@ -1179,7 +1179,7 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   color:var(--text2);cursor:pointer;font-size:16px;flex-shrink:0;
 }
 
-/* ── TS Visualizer ───────────────────────────────────────────────── */
+/* â”€â”€ TS Visualizer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .ts-grid{display:flex;flex-direction:column;gap:12px;padding:16px 18px;}
 .ts-carrier-group{display:flex;flex-direction:column;gap:8px;}
 .ts-carrier-head{
@@ -1309,13 +1309,13 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   100%{box-shadow:0 0 14px rgba(255,60,80,1);}
 }
 
-/* ════════════════════════════════════════════════════════════════════════
-   Polish layer — additive motion + gloss on top of the base design (kept).
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   Polish layer â€” additive motion + gloss on top of the base design (kept).
    Aesthetic only; layout unchanged. All motion is gated behind
    prefers-reduced-motion so it respects accessibility / low-power hosts.
-   ════════════════════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* Glossy top sheen on the KPI cards — a faint specular highlight, no motion. */
+/* Glossy top sheen on the KPI cards â€” a faint specular highlight, no motion. */
 .stat-card::after{
   content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;
   background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0) 34%);
@@ -1358,16 +1358,16 @@ tbody td{transition:background .12s ease;}
   }
 }
 
-/* Refined, rounded scrollbar thumbs everywhere (no size change → no conflicts). */
+/* Refined, rounded scrollbar thumbs everywhere (no size change â†’ no conflicts). */
 ::-webkit-scrollbar-thumb{border-radius:6px;}
 
-/* ════════════════════════════════════════════════════════════════════════
-   Ecosystem polish v2 — premium materials layer.
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   Ecosystem polish v2 â€” premium materials layer.
    Purely visual: depth, light, gradients & spacing refinements layered on top
    of the existing token system. NO structural/class/markup changes, so the
    shared mobile schema is untouched. Hues keep the teal/azure brand identity;
    only neutrals, elevation and "material" treatments are enriched.
-   ════════════════════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 :root{
   --brand: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
   /* --hair now lives in the v3 token block at :root (defined before first use). */
@@ -1377,7 +1377,7 @@ tbody td{transition:background .12s ease;}
   --glass: color-mix(in srgb, var(--bg2) 76%, transparent);
 }
 
-/* Ambient backdrop — faint brand glows bleed in from the corners behind the
+/* Ambient backdrop â€” faint brand glows bleed in from the corners behind the
    content, giving the shell a sense of depth without distracting from data. */
 body{
   background:
@@ -1393,7 +1393,7 @@ body{
     var(--bg);
 }
 
-/* ── Sidebar: deeper, with a hairline inner highlight ── */
+/* â”€â”€ Sidebar: deeper, with a hairline inner highlight â”€â”€ */
 #sidebar{
   background:linear-gradient(180deg, color-mix(in srgb,var(--sidebar) 92%, var(--accent2)) 0%, var(--sidebar) 22%, var(--sidebar) 100%);
   box-shadow:1px 0 0 rgba(255,255,255,0.02), 8px 0 24px -16px rgba(0,0,0,0.6);
@@ -1401,7 +1401,7 @@ body{
 .sidebar-logo{padding-top:20px;padding-bottom:16px;}
 .logo-text .logo-name{font-weight:800;letter-spacing:0.01em;}
 
-/* ── Nav items: signature active treatment (left accent bar + soft wash) ── */
+/* â”€â”€ Nav items: signature active treatment (left accent bar + soft wash) â”€â”€ */
 .nav-item{border-radius:8px;}
 .nav-item.active{
   background:linear-gradient(90deg, color-mix(in srgb,var(--accent) 16%, transparent), color-mix(in srgb,var(--accent) 4%, transparent));
@@ -1411,7 +1411,7 @@ body{
 .nav-item.active .nav-icon{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--accent) 60%, transparent));}
 [data-theme="light"] .nav-item.active{box-shadow:inset 2px 0 0 var(--accent);}
 
-/* ── Topbar: frosted glass with a hairline base highlight ── */
+/* â”€â”€ Topbar: frosted glass with a hairline base highlight â”€â”€ */
 #topbar{
   background:var(--glass);
   -webkit-backdrop-filter:saturate(160%) blur(12px);
@@ -1420,11 +1420,11 @@ body{
 }
 .topbar-title{font-size:16px;font-weight:800;letter-spacing:-0.015em;}
 
-/* ── Content rhythm ── */
+/* â”€â”€ Content rhythm â”€â”€ */
 #content{padding:24px;}
 @media(max-width:700px){#content{padding:14px;}}
 
-/* ── Stat cards: subtle vertical sheen, brand top-line fade, deeper lift ── */
+/* â”€â”€ Stat cards: subtle vertical sheen, brand top-line fade, deeper lift â”€â”€ */
 .stat-grid{gap:16px;margin-bottom:22px;}
 .stat-card{
   background:linear-gradient(180deg, var(--bg2) 0%, color-mix(in srgb,var(--bg2) 86%, #000) 100%);
@@ -1441,7 +1441,7 @@ body{
 .stat-value{font-size:30px;letter-spacing:-0.025em;}
 .stat-icon{font-size:30px;opacity:0.06;}
 
-/* ── Cards: refined elevation + header wash ── */
+/* â”€â”€ Cards: refined elevation + header wash â”€â”€ */
 .card{
   border:1px solid var(--border);
   border-radius:var(--r);
@@ -1453,7 +1453,7 @@ body{
 }
 .card-title{color:var(--text2);}
 
-/* ── Tables: zebra-free but with a soft sticky header and crisper hover ── */
+/* â”€â”€ Tables: zebra-free but with a soft sticky header and crisper hover â”€â”€ */
 thead th{
   background:color-mix(in srgb,var(--bg2) 92%, var(--accent2));
   border-bottom:1px solid var(--border2);
@@ -1461,7 +1461,7 @@ thead th{
 tbody tr{transition:background .12s ease;}
 tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 
-/* ── Buttons: hairline highlight + brand primary ── */
+/* â”€â”€ Buttons: hairline highlight + brand primary â”€â”€ */
 .btn{border-radius:8px;box-shadow:var(--hair);}
 .btn-primary{
   background:linear-gradient(180deg, color-mix(in srgb,var(--accent) 22%, transparent), color-mix(in srgb,var(--accent) 12%, transparent));
@@ -1473,42 +1473,42 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   border-color:var(--accent);
 }
 
-/* ── Badges: pill shape for a cleaner, app-like read ── */
+/* â”€â”€ Badges: pill shape for a cleaner, app-like read â”€â”€ */
 .badge{border-radius:999px;padding:2px 9px;}
 
-/* ── Pickers (theme/lang): unified segmented-control feel ── */
+/* â”€â”€ Pickers (theme/lang): unified segmented-control feel â”€â”€ */
 .theme-picker{box-shadow:var(--hair);}
 .touch-btn,.theme-picker,.logout-btn,.sidebar-toggle{border-radius:8px;}
 
-/* ── Footer status rows: a touch more contrast for the LEDs ── */
+/* â”€â”€ Footer status rows: a touch more contrast for the LEDs â”€â”€ */
 .conn-status-row,.brew-status-row{border-radius:8px;}
 
-/* ── Deeper hover lift on cards (compose with existing motion layer) ── */
+/* â”€â”€ Deeper hover lift on cards (compose with existing motion layer) â”€â”€ */
 @media (prefers-reduced-motion: no-preference){
   .card:hover,.stat-card:hover{
     box-shadow:var(--shadow-lg), var(--hair);
   }
 }
 
-/* ── Scrollbar thumb: brand-tinted on hover ── */
+/* â”€â”€ Scrollbar thumb: brand-tinted on hover â”€â”€ */
 ::-webkit-scrollbar-thumb{background:var(--border2);}
 ::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--accent) 40%, var(--border2));}
 
-/* ════════════════════════════════════════════════════════════════════════
-   DESIGN-SYSTEM v3 "INSTRUMENT" — reusable component library.
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   DESIGN-SYSTEM v3 "INSTRUMENT" â€” reusable component library.
    Defined ONCE here so the Tabs phase can apply these classes across every tab.
    Everything maps to tokens (no hardcoded hex). This is the SINGLE source of
    truth; the Health-tab premium look is generalized into these classes.
-   ════════════════════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* ── Section group label (Caption-2 above a card cluster) ── */
+/* â”€â”€ Section group label (Caption-2 above a card cluster) â”€â”€ */
 .section-label{
   font-size:12px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;
   color:var(--text3);margin:0 2px 10px;
 }
 .section-label + .section-label{margin-top:4px;}
 
-/* ── Inline SVG icon sizing — any svg dropped into a slot reads as 1em-ish ── */
+/* â”€â”€ Inline SVG icon sizing â€” any svg dropped into a slot reads as 1em-ish â”€â”€ */
 .nav-icon svg,.btn-icon svg,.pill-icon svg,.hero-ico svg,.chip svg,
 .empty-ico svg,.banner-ico svg,.sheet-close svg,.section-act svg,.ico18 svg{
   display:block;width:100%;height:100%;
@@ -1516,7 +1516,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 /* Generic 18px square icon holder for chrome buttons (hamburger/logout/toggle). */
 .ico18{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;color:inherit;}
 
-/* ── Status pills — unified severity language (leading dot) ───────────────
+/* â”€â”€ Status pills â€” unified severity language (leading dot) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Variants drive from --ok/--warn/--danger/--info/--text3. Tinted fill +
    matching low-alpha border, mono tabular, 10/600. */
 .pill{
@@ -1541,7 +1541,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 .pill-info  {--pc:var(--accent2);}
 .pill-idle  {--pc:var(--text3);}
 
-/* ── Hero status banner (generalized from the Health hero) ── */
+/* â”€â”€ Hero status banner (generalized from the Health hero) â”€â”€ */
 .hero{
   display:flex;align-items:center;gap:16px;
   padding:18px 20px;margin-bottom:22px;
@@ -1566,7 +1566,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 .hero-metric-label{font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--text3);}
 .hero-metric-value{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;}
 
-/* ── Horizontal gauge — track + fill + trailing tabular value ── */
+/* â”€â”€ Horizontal gauge â€” track + fill + trailing tabular value â”€â”€ */
 .gauge{display:flex;align-items:center;gap:10px;min-width:0;}
 .gauge-track{
   flex:1;height:4px;min-width:40px;border-radius:var(--r-pill);
@@ -1586,7 +1586,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   font-variant-numeric:tabular-nums;flex-shrink:0;min-width:42px;text-align:right;
 }
 
-/* ── macOS inset list (.group-list) + .field rows ── */
+/* â”€â”€ macOS inset list (.group-list) + .field rows â”€â”€ */
 .group-list{
   display:flex;flex-direction:column;
   background:var(--bg2);border:1px solid var(--border);
@@ -1622,7 +1622,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 .field-status.err{color:var(--danger);}
 .field-status svg{width:13px;height:13px;}
 
-/* ── Button leading-icon slot (glyphs split out of i18n strings) ── */
+/* â”€â”€ Button leading-icon slot (glyphs split out of i18n strings) â”€â”€ */
 .btn-icon{
   display:inline-flex;align-items:center;justify-content:center;
   width:15px;height:15px;flex-shrink:0;margin-right:7px;margin-left:-2px;
@@ -1636,7 +1636,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   border-left:1px solid var(--sep);
 }
 
-/* ── Calm banners (replace inline #fallback-banner / #emergency-banner) ── */
+/* â”€â”€ Calm banners (replace inline #fallback-banner / #emergency-banner) â”€â”€ */
 .banner{
   display:flex;align-items:center;gap:12px;flex-shrink:0;
   padding:11px 18px;font-size:13px;font-weight:600;
@@ -1658,14 +1658,14 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   border-bottom-color:color-mix(in srgb,var(--danger) 34%,transparent);
 }
 .banner-danger .banner-ico{color:var(--danger);}
-/* Steady danger dot for emergency — soft breathe, never a harsh flash. */
+/* Steady danger dot for emergency â€” soft breathe, never a harsh flash. */
 .banner-danger .banner-dot{
   width:8px;height:8px;border-radius:50%;background:var(--danger);flex-shrink:0;
   animation:fs-breathe 2.5s ease-in-out infinite;
 }
 @keyframes fs-breathe{0%,100%{opacity:1;}50%{opacity:.45;}}
 
-/* ── Empty state (one component for the duplicated stubs) ──
+/* â”€â”€ Empty state (one component for the duplicated stubs) â”€â”€
    v3 flex layout; keeps the legacy .empty-icon/.empty-text children working
    (centered column) while the Tabs phase migrates them to .empty-ico/.empty-msg. */
 .empty-state{
@@ -1676,7 +1676,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 .empty-msg{font-size:13px;font-weight:500;color:var(--text2);}
 .empty-sub{font-size:12px;font-weight:400;color:var(--text3);max-width:340px;}
 
-/* ── Unified sheet/modal (collapses .modal-overlay + .wifi-modal) ── */
+/* â”€â”€ Unified sheet/modal (collapses .modal-overlay + .wifi-modal) â”€â”€ */
 .sheet-overlay{
   position:fixed;inset:0;z-index:1000;
   display:none;align-items:center;justify-content:center;padding:24px;
@@ -1706,11 +1706,11 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 .sheet-close svg{width:16px;height:16px;}
 .sheet-body{padding:18px;}
 
-/* ── Ghost SVG stat-icon: the .stat-icon slot now hosts a faint inline SVG
-   (was an emoji glyph). Auto-themes via currentColor, sits at low opacity. ── */
+/* â”€â”€ Ghost SVG stat-icon: the .stat-icon slot now hosts a faint inline SVG
+   (was an emoji glyph). Auto-themes via currentColor, sits at low opacity. â”€â”€ */
 .stat-icon svg{display:block;width:30px;height:30px;color:var(--text);}
 .stat-icon:has(svg){font-size:0;line-height:0;}
-/* Text-valued stat cards (RF / Network / BREW) — smaller value, state tint
+/* Text-valued stat cards (RF / Network / BREW) â€” smaller value, state tint
    via ONE class instead of inline font-size + JS color hacks. */
 .stat-value.is-text{font-size:18px;letter-spacing:-0.01em;}
 .stat-card.is-ok    .stat-value.is-text{color:var(--ok);}
@@ -1729,7 +1729,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 .num.accent{color:var(--accent2);font-weight:600;}
 .muted{color:var(--text3);}
 
-/* Filled selection-triangle marker (▶ replacement) inside a TG pill. */
+/* Filled selection-triangle marker (â–¶ replacement) inside a TG pill. */
 .tg-marker{display:inline-flex;align-items:center;width:9px;height:9px;margin-right:2px;}
 .tg-marker svg{width:100%;height:100%;display:block;}
 
@@ -1737,7 +1737,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
    (no harsh expanding ring). Matches the emergency BANNER's fs-breathe. */
 .badge-emergency{animation:fs-breathe 2.5s ease-in-out infinite;}
 
-/* ── Numbered steps list (Telegram setup howto) ── */
+/* â”€â”€ Numbered steps list (Telegram setup howto) â”€â”€ */
 .steps{display:flex;flex-direction:column;gap:0;counter-reset:fs-step;}
 .step{
   display:flex;align-items:flex-start;gap:13px;padding:11px 2px;position:relative;
@@ -1758,7 +1758,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 .step-num::before{content:counter(fs-step);}
 .step-body{flex:1;min-width:0;padding-top:1px;}
 
-/* ── Styled terminal block (SoapySDR probe dump, etc.) ── */
+/* â”€â”€ Styled terminal block (SoapySDR probe dump, etc.) â”€â”€ */
 .terminal{
   margin:0;padding:13px 15px;
   background:var(--bg);border:1px solid var(--border);border-radius:var(--r-ctrl);
@@ -1768,7 +1768,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   max-height:340px;overflow:auto;font-variant-numeric:tabular-nums;
 }
 
-/* ── Big-Sur inset nav selection pill + SVG nav-icon slot ──────────────────
+/* â”€â”€ Big-Sur inset nav selection pill + SVG nav-icon slot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Re-skins the existing .nav-item.active (overriding the polish v2 left-bar)
    to the System-Settings inset pill: accent-tinted fill + soft radius.
    The .nav-icon slot becomes an 18px square SVG holder (was an emoji glyph). */
@@ -1790,11 +1790,11 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 /* Keep the signature accent glow on the active icon (per nav spec). */
 .nav-item.active .nav-icon{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--accent) 55%,transparent));}
 
-/* ── Header status chips (BS / Brew / Emergency) — calm .pill in the topbar ── */
+/* â”€â”€ Header status chips (BS / Brew / Emergency) â€” calm .pill in the topbar â”€â”€ */
 .topbar-chips{display:flex;align-items:center;gap:8px;}
 @media(max-width:760px){.topbar-chips{display:none;}}
 
-/* ════ TETRA BTS Details card ════ */
+/* â•â•â•â• TETRA BTS Details card â•â•â•â• */
 .bts-grid{
   display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
   gap:10px;padding:16px 18px;
@@ -1864,7 +1864,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   .bts-access-bar{margin:0 12px 12px;}
 }
 
-/* ════ Monitor tables — consistent column alignment ════
+/* â•â•â•â• Monitor tables â€” consistent column alignment â•â•â•â•
    Headers were left-aligned while badges / status / signal sat centred in the cell,
    so nothing lined up vertically. Rule: the primary identifier column stays left;
    every other column is centred so each value sits directly under its header. */
@@ -1890,7 +1890,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 #page-stations .rssi-bar{ justify-content:center; }
 .rssi-val{ width:auto; min-width:62px; white-space:nowrap; }
 
-/* ════ Timeslot visualizer — live identity + motion ════ */
+/* â•â•â•â• Timeslot visualizer â€” live identity + motion â•â•â•â• */
 /* Per-timeslot call timer, top-right corner. Colour-matched to the call state. */
 .ts-timer{
   position:absolute;top:7px;right:9px;
@@ -1911,14 +1911,14 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   }
   @keyframes tsBreathe{0%,100%{transform:scale(1);opacity:.5;}50%{transform:scale(1.25);opacity:.9;}}
 
-  /* Active timeslots emit an expanding "radar" ripple from the LED — a calmer,
+  /* Active timeslots emit an expanding "radar" ripple from the LED â€” a calmer,
      more signal-like cue than a flat colour change. The ring is centred via
      translate(-50%,-50%) preserved across the whole keyframe, so it stays exactly
      concentric with the dot regardless of scale. currentColor matches the state. */
   .ts-led{position:relative;}
   .ts-led::after{
     content:'';position:absolute;top:50%;left:50%;width:100%;height:100%;
-    box-sizing:border-box;  /* the global *{} reset doesn't reach ::after — set it here so
+    box-sizing:border-box;  /* the global *{} reset doesn't reach ::after â€” set it here so
                                width:100% + border + translate(-50%) all use the same 10px box */
     border-radius:50%;border:1.5px solid currentColor;
     transform:translate(-50%,-50%) scale(1);transform-origin:center;
@@ -1936,12 +1936,12 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   }
 }
 
-/* ════════════════════════════════════════════════════════════════════════
-   Premium light/grey default (FH user feedback) — bigger high-contrast type,
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   Premium light/grey default (FH user feedback) â€” bigger high-contrast type,
    a theme-integrated (light) sidebar, tighter sections, and a subtle texture.
    Light overrides are scoped to [data-theme="light"]; the density/font bumps
    apply on desktop/tablet only so the phone layout keeps its tuned sizes.
-   ════════════════════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 /* Softer elevation for light surfaces (the base shadows are tuned for dark). */
 [data-theme="light"]{
@@ -1975,7 +1975,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
     var(--bg);
 }
 
-/* Readability + density — desktop/tablet only. Type scales with --ts (eye control). */
+/* Readability + density â€” desktop/tablet only. Type scales with --ts (eye control). */
 @media (min-width:701px){
   body{font-size:calc(15px * var(--ts));}
 
@@ -2025,7 +2025,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   html[data-uisize="u"]{ --ts:1.28; }
 }
 
-/* ── Premium health / integration components (Apple-style) ───────────────────
+/* â”€â”€ Premium health / integration components (Apple-style) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Theme-aware via tokens + color-mix. Status hues: ok=--ok, warn=--warn,
    bad=--danger; blue/purple are fixed icon accents for domain variety.
    Used by the Health page, the SDR Hardware-Health card and the
@@ -2133,7 +2133,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 .h-note b.warn{color:var(--warn);}
 .h-note b.bad{color:var(--danger);}
 
-/* Premium form layout (asterisk/dapnet/geoalarm) — replaces repeated inline styles */
+/* Premium form layout (asterisk/dapnet/geoalarm) â€” replaces repeated inline styles */
 .h-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;align-items:center;}
 .h-form.wide{grid-template-columns:repeat(auto-fit,minmax(260px,1fr));align-items:stretch;}
 .h-form-pair{display:grid;grid-template-columns:130px 1fr;gap:10px;align-items:center;}
@@ -2150,7 +2150,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 <!-- Mobile overlay -->
 <div id="mobile-overlay" onclick="closeMobileSidebar()"></div>
 
-<!-- ── Sidebar ── -->
+<!-- â”€â”€ Sidebar â”€â”€ -->
 <nav id="sidebar">
   <div class="sidebar-logo">
     <div class="logo-row">
@@ -2160,7 +2160,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="logo-sub">{{STACK_VERSION}}</div>
       </div>
     </div>
-    <!-- Hardware status — driven by the SAME JS as the old topbar badges (IDs preserved).
+    <!-- Hardware status â€” driven by the SAME JS as the old topbar badges (IDs preserved).
          loadSystemInfo() toggles #sdr-badge + writes #sdr-badge-label;
          handleSysHealth() toggles #pwr-badge + writes #pwr-badge-label. No JS changes. -->
     <div class="hw-status">
@@ -2174,7 +2174,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </span>
         <span class="hw-meta">
           <span class="hw-key" data-i18n="sdr">SDR</span>
-          <span class="hw-val" id="sdr-badge-label">—</span>
+          <span class="hw-val" id="sdr-badge-label">â€”</span>
         </span>
         <span class="hw-live" aria-hidden="true"><span class="hw-live-dot"></span></span>
       </div>
@@ -2187,7 +2187,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </span>
         <span class="hw-meta">
           <span class="hw-key">HEALTH</span>
-          <span class="hw-val" id="health-badge-label">—</span>
+          <span class="hw-val" id="health-badge-label">â€”</span>
         </span>
       </div>
       <div id="pwr-badge" class="hw-row hw-row--pwr" style="display:none" title="Host system power draw">
@@ -2199,7 +2199,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </span>
         <span class="hw-meta">
           <span class="hw-key" data-i18n="power">POWER</span>
-          <span class="hw-val" id="pwr-badge-label">—</span>
+          <span class="hw-val" id="pwr-badge-label">â€”</span>
         </span>
       </div>
     </div>
@@ -2209,7 +2209,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
        title="Click to update"></div>
 
   <div class="sidebar-nav">
-    <!-- MONITOR — live, read-mostly surfaces (ordered by glance-frequency). -->
+    <!-- MONITOR â€” live, read-mostly surfaces (ordered by glance-frequency). -->
     <div class="nav-section-label" data-i18n-section="monitor">MONITOR</div>
     <div class="nav-item active" onclick="showPage('stations',this)" id="nav-stations">
       <span class="nav-icon" data-icon="radios"></span>
@@ -2242,7 +2242,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <span class="nav-label" data-i18n="sdslog">SDS LOG</span>
     </div>
 
-    <!-- INTEGRATIONS — external services (each hidden until its probe succeeds). -->
+    <!-- INTEGRATIONS â€” external services (each hidden until its probe succeeds). -->
     <div class="nav-section-label" data-i18n-section="integrations">INTEGRATIONS</div>
     <div class="nav-item" onclick="showPage('asterisk',this)" id="nav-asterisk">
       <span class="nav-icon" data-icon="asterisk"></span>
@@ -2268,7 +2268,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <span class="nav-label" data-i18n="wifi">WIFI</span>
     </div>
 
-    <!-- SYSTEM — configure / operate the station. -->
+    <!-- SYSTEM â€” configure / operate the station. -->
     <div class="nav-section-label" data-i18n-section="system_sec">SYSTEM</div>
     <div class="nav-item" onclick="showPage('config',this)" id="nav-config">
       <span class="nav-icon" data-icon="config"></span>
@@ -2300,15 +2300,15 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
     </div>
     <!-- Copyright + client info -->
     <div class="sidebar-copyright">
-      <div class="cr-line">© 2026 Razvan Zeces — YO6RZV</div>
-      <div class="cr-line" id="cr-ua">—</div>
+      <div class="cr-line">Â© 2026 Razvan Zeces â€” YO6RZV</div>
+      <div class="cr-line" id="cr-ua">â€”</div>
     </div>
     <!-- Collapse toggle -->
     <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" aria-label="Toggle sidebar"><span class="ico18" data-icon="collapse"></span></button>
   </div>
 </nav>
 
-<!-- ── Main ── -->
+<!-- â”€â”€ Main â”€â”€ -->
 <div id="main">
   <!-- Topbar -->
   <div id="topbar">
@@ -2341,7 +2341,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <span class="read-aa">Aa</span>
             <span class="read-opt-text">
               <span class="read-opt-name" data-i18n="size_small">Small</span>
-              <span class="read-opt-desc" data-i18n="size_small_d">Compact · normal contrast</span>
+              <span class="read-opt-desc" data-i18n="size_small_d">Compact Â· normal contrast</span>
             </span>
             <svg class="read-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
@@ -2350,7 +2350,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <span class="read-aa">Aa</span>
             <span class="read-opt-text">
               <span class="read-opt-name" data-i18n="size_medium">Medium</span>
-              <span class="read-opt-desc" data-i18n="size_medium_d">Default · comfortable</span>
+              <span class="read-opt-desc" data-i18n="size_medium_d">Default Â· comfortable</span>
             </span>
             <svg class="read-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
@@ -2359,7 +2359,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <span class="read-aa">Aa</span>
             <span class="read-opt-text">
               <span class="read-opt-name" data-i18n="size_high">High</span>
-              <span class="read-opt-desc" data-i18n="size_high_d">Larger · stronger contrast</span>
+              <span class="read-opt-desc" data-i18n="size_high_d">Larger Â· stronger contrast</span>
             </span>
             <svg class="read-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
@@ -2368,7 +2368,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <span class="read-aa">Aa</span>
             <span class="read-opt-text">
               <span class="read-opt-name" data-i18n="size_ultra">Ultra</span>
-              <span class="read-opt-desc" data-i18n="size_ultra_d">Largest · maximum contrast</span>
+              <span class="read-opt-desc" data-i18n="size_ultra_d">Largest Â· maximum contrast</span>
             </span>
             <svg class="read-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
@@ -2395,16 +2395,16 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
     </div>
   </div>
 
-  <!-- Fallback config warning banner — hidden until JS shows it -->
+  <!-- Fallback config warning banner â€” hidden until JS shows it -->
   <div id="fallback-banner" class="banner banner-warn" style="display:none">
     <span class="banner-ico" data-icon="alert"></span>
     <div class="banner-body">
-      <div data-i18n="fallback_title">FALLBACK CONFIG ACTIVE — Primary config failed to load</div>
+      <div data-i18n="fallback_title">FALLBACK CONFIG ACTIVE â€” Primary config failed to load</div>
       <div id="fallback-reason" class="banner-sub"></div>
     </div>
   </div>
 
-  <!-- Emergency banner — persistent while >=1 ISSI is in active emergency; populated by JS.
+  <!-- Emergency banner â€” persistent while >=1 ISSI is in active emergency; populated by JS.
        Single steady danger dot (soft breathe), never a harsh flashing ring. -->
   <div id="emergency-banner" class="banner banner-danger" style="display:none">
     <span class="banner-dot" aria-hidden="true"></span>
@@ -2416,31 +2416,31 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   <!-- Content -->
   <div id="content">
 
-    <!-- ── PUBLIC OVERVIEW (FH-FEAT-033) — shown only to anonymous visitors when public_overview is on ── -->
+    <!-- â”€â”€ PUBLIC OVERVIEW (FH-FEAT-033) â€” shown only to anonymous visitors when public_overview is on â”€â”€ -->
     <div class="page" id="page-public">
       <div class="stat-grid">
         <div class="stat-card green">
           <div class="stat-label">Radios</div>
-          <div class="stat-value accent" id="pub-ms">—</div>
+          <div class="stat-value accent" id="pub-ms">â€”</div>
           <div class="stat-sub">registered</div>
           <div class="stat-icon" data-icon="radios"></div>
         </div>
         <div class="stat-card blue">
           <div class="stat-label">Active Calls</div>
-          <div class="stat-value blue" id="pub-calls">—</div>
+          <div class="stat-value blue" id="pub-calls">â€”</div>
           <div class="stat-sub">circuits in use</div>
           <div class="stat-icon" data-icon="calls"></div>
         </div>
         <div class="stat-card" id="pub-rf-card">
           <div class="stat-label">RF</div>
-          <div class="stat-value is-text" id="pub-rf">—</div>
-          <div class="stat-sub" id="pub-freq">—</div>
+          <div class="stat-value is-text" id="pub-rf">â€”</div>
+          <div class="stat-sub" id="pub-freq">â€”</div>
           <div class="stat-icon" data-icon="rf"></div>
         </div>
         <div class="stat-card" id="pub-brew-card">
           <div class="stat-label">Network</div>
-          <div class="stat-value is-text" id="pub-brew">—</div>
-          <div class="stat-sub" id="pub-ver">—</div>
+          <div class="stat-value is-text" id="pub-brew">â€”</div>
+          <div class="stat-sub" id="pub-ver">â€”</div>
           <div class="stat-icon" data-icon="network"></div>
         </div>
       </div>
@@ -2456,7 +2456,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── RADIOS ── -->
+    <!-- â”€â”€ RADIOS â”€â”€ -->
     <div class="page active" id="page-stations">
       <!-- Hero summary -->
       <div class="hero">
@@ -2472,7 +2472,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           </div>
           <div class="hero-metric">
             <div class="hero-metric-label">BREW</div>
-            <div class="hero-metric-value" id="stations-hero-brew">—</div>
+            <div class="hero-metric-value" id="stations-hero-brew">â€”</div>
           </div>
         </div>
       </div>
@@ -2493,26 +2493,26 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="stat-card is-danger" id="stat-brew-card">
           <div class="stat-label">BREW</div>
           <div class="stat-value is-text" id="stat-brew-val">OFFLINE</div>
-          <div class="stat-sub" id="stat-brew-sub">—</div>
+          <div class="stat-sub" id="stat-brew-sub">â€”</div>
           <div class="stat-icon" data-icon="network"></div>
         </div>
       </div>
-      <!-- TETRA BTS Details — static cell + RF identity from config.toml -->
+      <!-- TETRA BTS Details â€” static cell + RF identity from config.toml -->
       <div class="card">
         <div class="card-head">
           <div class="card-title" data-i18n="bts_details">TETRA BTS Details</div>
           <div class="card-actions">
-            <span id="bts-neighbor" class="bts-chip">—</span>
-            <span id="bts-hang" class="bts-chip">—</span>
+            <span id="bts-neighbor" class="bts-chip">â€”</span>
+            <span id="bts-hang" class="bts-chip">â€”</span>
           </div>
         </div>
         <div class="bts-grid">
-          <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_tx">TX Freq</div><div class="bts-tile-value tx" id="bts-tx">—</div></div>
-          <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_rx">RX Freq</div><div class="bts-tile-value rx" id="bts-rx">—</div></div>
-          <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_shift">Duplex Shift</div><div class="bts-tile-value" id="bts-shift">—</div></div>
-          <div class="bts-tile"><div class="bts-tile-label">MCC</div><div class="bts-tile-value" id="bts-mcc">—</div></div>
-          <div class="bts-tile"><div class="bts-tile-label">MNC</div><div class="bts-tile-value" id="bts-mnc">—</div></div>
-          <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_carrier">Main Carrier</div><div class="bts-tile-value" id="bts-carrier">—</div></div>
+          <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_tx">TX Freq</div><div class="bts-tile-value tx" id="bts-tx">â€”</div></div>
+          <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_rx">RX Freq</div><div class="bts-tile-value rx" id="bts-rx">â€”</div></div>
+          <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_shift">Duplex Shift</div><div class="bts-tile-value" id="bts-shift">â€”</div></div>
+          <div class="bts-tile"><div class="bts-tile-label">MCC</div><div class="bts-tile-value" id="bts-mcc">â€”</div></div>
+          <div class="bts-tile"><div class="bts-tile-label">MNC</div><div class="bts-tile-value" id="bts-mnc">â€”</div></div>
+          <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_carrier">Main Carrier</div><div class="bts-tile-value" id="bts-carrier">â€”</div></div>
         </div>
         <div class="bts-access-bar">
           <div class="bts-access-info">
@@ -2521,12 +2521,12 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </span>
             <div>
               <div class="bts-access-title" data-i18n="bts_access">Registration Access</div>
-              <div class="bts-access-sub" id="bts-access-sub">—</div>
+              <div class="bts-access-sub" id="bts-access-sub">â€”</div>
             </div>
           </div>
-          <span id="bts-access" class="bts-access">—</span>
+          <span id="bts-access" class="bts-access">â€”</span>
         </div>
-        <!-- Dual-Carrier ON/OFF — applied via controlled service restart -->
+        <!-- Dual-Carrier ON/OFF â€” applied via controlled service restart -->
         <div class="bts-access-bar">
           <div class="bts-access-info">
             <span class="bts-access-icon">
@@ -2534,7 +2534,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </span>
             <div>
               <div class="bts-access-title" data-i18n="dual_carrier">Dual Carrier</div>
-              <div class="bts-access-sub" id="dc-sub">—</div>
+              <div class="bts-access-sub" id="dc-sub">â€”</div>
             </div>
           </div>
           <span class="sw"><input type="checkbox" id="dc-toggle" onchange="onDualCarrierToggle(this)"><i></i></span>
@@ -2544,7 +2544,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <!-- TS Visualizer -->
       <div class="card">
         <div class="card-head">
-          <div class="card-title">RF Channel — Timeslots</div>
+          <div class="card-title">RF Channel â€” Timeslots</div>
         </div>
         <div class="ts-grid" id="ts-grid">
           <div class="ts-block mcch" id="ts-block-1">
@@ -2577,7 +2577,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
               <div class="ts-wave-bar" style="height:3px"></div>
               <div class="ts-wave-bar" style="height:3px"></div>
             </div>
-            <div class="ts-label">—</div>
+            <div class="ts-label">â€”</div>
             <div class="ts-sub">Idle</div>
             <div class="ts-flash"></div>
             <div class="ts-duration-bar"></div>
@@ -2595,7 +2595,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
               <div class="ts-wave-bar" style="height:3px"></div>
               <div class="ts-wave-bar" style="height:3px"></div>
             </div>
-            <div class="ts-label">—</div>
+            <div class="ts-label">â€”</div>
             <div class="ts-sub">Idle</div>
             <div class="ts-flash"></div>
             <div class="ts-duration-bar"></div>
@@ -2613,7 +2613,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
               <div class="ts-wave-bar" style="height:3px"></div>
               <div class="ts-wave-bar" style="height:3px"></div>
             </div>
-            <div class="ts-label">—</div>
+            <div class="ts-label">â€”</div>
             <div class="ts-sub">Idle</div>
             <div class="ts-flash"></div>
             <div class="ts-duration-bar"></div>
@@ -2645,7 +2645,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── CALLS ── -->
+    <!-- â”€â”€ CALLS â”€â”€ -->
     <div class="page" id="page-calls">
       <div class="card">
         <div class="card-head">
@@ -2669,7 +2669,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── LAST HEARD ── -->
+    <!-- â”€â”€ LAST HEARD â”€â”€ -->
     <div class="page" id="page-lastheard">
       <div class="card">
         <div class="card-head">
@@ -2694,7 +2694,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── LOG ── -->
+    <!-- â”€â”€ LOG â”€â”€ -->
     <div class="page" id="page-log">
       <div class="card">
         <div class="card-head">
@@ -2720,7 +2720,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── SDS LOG ── -->
+    <!-- â”€â”€ SDS LOG â”€â”€ -->
     <!-- SDS messages sent/received locally on this BS. Backed by a persisted ring
          (sds_log.json) so the history survives restarts. Populated live over the WS
          and refetched from /api/sds-log when the tab opens. -->
@@ -2748,16 +2748,16 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </table>
           </div>
           <div class="log-controls">
-            <button class="btn btn-sm" onclick="sdsLogPrevPage()">‹ Prev</button>
+            <button class="btn btn-sm" onclick="sdsLogPrevPage()">â€¹ Prev</button>
             <span class="sds-empty" id="sdslog-page">Page 1 / 1</span>
-            <button class="btn btn-sm" onclick="sdsLogNextPage()">Next ›</button>
+            <button class="btn btn-sm" onclick="sdsLogNextPage()">Next â€º</button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ── RF ── -->
-    <!-- Live TX DSP monitor — works on any SDR because the analysis is done on the
+    <!-- â”€â”€ RF â”€â”€ -->
+    <!-- Live TX DSP monitor â€” works on any SDR because the analysis is done on the
          complex baseband samples FlowStation generates internally, BEFORE they reach
          the radio. We do not rely on receive-side feedback. -->
     <div class="page" id="page-rf">
@@ -2767,16 +2767,16 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <span class="hero-dot is-idle" id="rf-hero-dot"></span>
         <div class="hero-main">
           <div class="hero-title" data-i18n="rf_spectrum">TX DSP Spectrum (pre-PA)</div>
-          <div class="hero-sub" id="rf-hero-sub" data-i18n="rf_waiting">waiting…</div>
+          <div class="hero-sub" id="rf-hero-sub" data-i18n="rf_waiting">waitingâ€¦</div>
         </div>
         <div class="hero-metrics">
           <div class="hero-metric">
             <div class="hero-metric-label" data-i18n="rf_freq">Center freq</div>
-            <div class="hero-metric-value" id="rf-hero-freq">—</div>
+            <div class="hero-metric-value" id="rf-hero-freq">â€”</div>
           </div>
           <div class="hero-metric">
             <div class="hero-metric-label" data-i18n="rf_evm">EVM</div>
-            <div class="hero-metric-value" id="rf-hero-evm">—</div>
+            <div class="hero-metric-value" id="rf-hero-evm">â€”</div>
           </div>
         </div>
       </div>
@@ -2785,23 +2785,23 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <div class="rf-metrics">
         <div class="rf-metric">
           <div class="rf-metric-label" data-i18n="rf_freq">Center freq</div>
-          <div class="rf-metric-value" id="rf-freq">—</div>
+          <div class="rf-metric-value" id="rf-freq">â€”</div>
         </div>
         <div class="rf-metric">
           <div class="rf-metric-label" data-i18n="rf_rate">Sample rate</div>
-          <div class="rf-metric-value" id="rf-rate">—</div>
+          <div class="rf-metric-value" id="rf-rate">â€”</div>
         </div>
         <div class="rf-metric">
           <div class="rf-metric-label" data-i18n="rf_rms">RMS</div>
-          <div class="rf-metric-value" id="rf-rms">—</div>
+          <div class="rf-metric-value" id="rf-rms">â€”</div>
         </div>
         <div class="rf-metric">
           <div class="rf-metric-label" data-i18n="rf_peak">Peak</div>
-          <div class="rf-metric-value" id="rf-peak">—</div>
+          <div class="rf-metric-value" id="rf-peak">â€”</div>
         </div>
         <div class="rf-metric">
           <div class="rf-metric-label" data-i18n="rf_age">Snapshot</div>
-          <div class="rf-metric-value" id="rf-age" data-i18n="rf_waiting">waiting…</div>
+          <div class="rf-metric-value" id="rf-age" data-i18n="rf_waiting">waitingâ€¦</div>
         </div>
       </div>
 
@@ -2811,14 +2811,14 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="rf-panel">
           <div class="rf-panel-title">
             <span data-i18n="rf_spectrum">TX DSP Spectrum (pre-PA)</span>
-            <span class="rf-hint" id="rf-spectrum-hint" data-i18n="rf_hint_spectrum">live · 512-bin FFT</span>
+            <span class="rf-hint" id="rf-spectrum-hint" data-i18n="rf_hint_spectrum">live Â· 512-bin FFT</span>
           </div>
           <canvas id="rf-spectrum" class="rf-canvas" width="900" height="260"></canvas>
         </div>
         <div class="rf-panel">
           <div class="rf-panel-title">
             <span data-i18n="rf_constellation">TX DSP Constellation</span>
-            <span class="rf-hint" id="rf-constellation-hint" data-i18n="rf_hint_constellation">π/4-DQPSK</span>
+            <span class="rf-hint" id="rf-constellation-hint" data-i18n="rf_hint_constellation">Ï€/4-DQPSK</span>
           </div>
           <canvas id="rf-constellation" class="rf-canvas small" width="420" height="260"></canvas>
         </div>
@@ -2828,81 +2828,81 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <div class="rf-panel" style="margin-top:12px">
         <div class="rf-panel-title">
           <span data-i18n="rf_waterfall">TX Spectrum Waterfall</span>
-          <span class="rf-hint" id="rf-waterfall-hint" data-i18n="rf_hint_waterfall">rolling · viridis</span>
+          <span class="rf-hint" id="rf-waterfall-hint" data-i18n="rf_hint_waterfall">rolling Â· viridis</span>
         </div>
         <canvas id="rf-waterfall" class="rf-canvas tall"></canvas>
       </div>
 
       <div class="section-label" data-i18n="rf_quality">Signal Quality</div>
-      <!-- Signal Quality strip — derived metrics with health badges (good/warn/bad) -->
+      <!-- Signal Quality strip â€” derived metrics with health badges (good/warn/bad) -->
       <div class="rf-quality-card">
         <div class="rf-panel-title">
           <span data-i18n="rf_quality">Signal Quality</span>
-          <span class="rf-hint" id="rf-quality-hint" data-i18n="rf_hint_quality">measured pre-PA · derived from same DSP snapshot</span>
+          <span class="rf-hint" id="rf-quality-hint" data-i18n="rf_hint_quality">measured pre-PA Â· derived from same DSP snapshot</span>
         </div>
         <div class="rf-quality-grid">
           <div class="rf-qmetric" id="rf-q-evm-wrap">
             <div class="rf-qmetric-label" data-i18n="rf_evm">EVM</div>
-            <div class="rf-qmetric-value" id="rf-evm">—</div>
+            <div class="rf-qmetric-value" id="rf-evm">â€”</div>
             <div class="gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-evm-bar"></div></div></div>
           </div>
           <div class="rf-qmetric" id="rf-q-papr-wrap">
             <div class="rf-qmetric-label" data-i18n="rf_papr">PAPR</div>
-            <div class="rf-qmetric-value" id="rf-papr">—</div>
+            <div class="rf-qmetric-value" id="rf-papr">â€”</div>
             <div class="gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-papr-bar"></div></div></div>
           </div>
           <div class="rf-qmetric" id="rf-q-cl-wrap">
             <div class="rf-qmetric-label" data-i18n="rf_carrier">Carrier leak</div>
-            <div class="rf-qmetric-value" id="rf-carrier">—</div>
+            <div class="rf-qmetric-value" id="rf-carrier">â€”</div>
             <div class="gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-carrier-bar"></div></div></div>
           </div>
           <div class="rf-qmetric" id="rf-q-obw-wrap">
             <div class="rf-qmetric-label" data-i18n="rf_obw">Occupied BW (99%)</div>
-            <div class="rf-qmetric-value" id="rf-obw">—</div>
+            <div class="rf-qmetric-value" id="rf-obw">â€”</div>
             <div class="gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-obw-bar"></div></div></div>
           </div>
         </div>
       </div>
 
       <div class="section-label" data-i18n="rf_hw_health">Hardware Health</div>
-      <!-- Hardware Health — temperature + actual gain readback from the SDR. Updated every ~5s. -->
+      <!-- Hardware Health â€” temperature + actual gain readback from the SDR. Updated every ~5s. -->
       <div class="rf-quality-card">
         <div class="rf-panel-title">
           <span data-i18n="rf_hw_health">Hardware Health</span>
-          <span class="rf-hint"><span data-i18n="rf_hint_health">polled every 5s</span> · <span id="rf-hw-age">—</span></span>
+          <span class="rf-hint"><span data-i18n="rf_hint_health">polled every 5s</span> Â· <span id="rf-hw-age">â€”</span></span>
         </div>
         <div class="rf-hw-grid">
           <div class="rf-hw-temp">
             <div class="rf-qmetric-label" data-i18n="rf_temp">SDR Temperature</div>
-            <div class="rf-hw-temp-value" id="rf-temp">—</div>
-            <div class="rf-hw-temp-state" id="rf-temp-state">—</div>
+            <div class="rf-hw-temp-value" id="rf-temp">â€”</div>
+            <div class="rf-hw-temp-state" id="rf-temp-state">â€”</div>
             <div class="gauge" id="rf-temp-gauge"><div class="gauge-track"><div class="gauge-fill" id="rf-temp-bar"></div></div></div>
           </div>
           <div class="rf-hw-gain-block">
             <div class="rf-qmetric-label" data-i18n="rf_tx_gain">TX Gain Stages (actual)</div>
-            <div class="rf-hw-gain-list" id="rf-tx-gains">—</div>
+            <div class="rf-hw-gain-list" id="rf-tx-gains">â€”</div>
           </div>
           <div class="rf-hw-gain-block">
             <div class="rf-qmetric-label" data-i18n="rf_rx_gain">RX Gain Stages (actual)</div>
-            <div class="rf-hw-gain-list" id="rf-rx-gains">—</div>
+            <div class="rf-hw-gain-list" id="rf-rx-gains">â€”</div>
           </div>
         </div>
       </div>
 
     </div>
 
-    <!-- ── ASTERISK SIP ── -->
+    <!-- â”€â”€ ASTERISK SIP â”€â”€ -->
     <div class="page" id="page-asterisk">
       <div class="section-label" data-i18n="integrations">Integrations</div>
-      <!-- Connection hero — live REGISTER state as a calm status pill. -->
+      <!-- Connection hero â€” live REGISTER state as a calm status pill. -->
       <div class="hero">
         <span class="hero-dot is-idle" id="ast-hero-dot"></span>
         <div class="hero-main">
           <div class="hero-title" data-i18n="asterisk_title">Asterisk SIP</div>
-          <div class="hero-sub" id="ast-hero-sub">—</div>
+          <div class="hero-sub" id="ast-hero-sub">â€”</div>
         </div>
         <div class="hero-metrics">
-          <span class="pill pill-idle" id="ast-hero-pill">—</span>
+          <span class="pill pill-idle" id="ast-hero-pill">â€”</span>
         </div>
       </div>
       <div class="card">
@@ -2916,23 +2916,23 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           <div class="stat-grid" style="margin-bottom:14px">
             <div class="stat-card" id="ast-configured-card">
               <div class="stat-label" data-i18n="ast_configured">Configured</div>
-              <div class="stat-value is-text" id="ast-configured">—</div>
-              <div class="stat-sub" id="ast-enabled">—</div>
+              <div class="stat-value is-text" id="ast-configured">â€”</div>
+              <div class="stat-sub" id="ast-enabled">â€”</div>
             </div>
             <div class="stat-card blue" id="ast-register-card">
               <div class="stat-label" data-i18n="ast_register">REGISTER</div>
-              <div class="stat-value is-text blue" id="ast-register">—</div>
-              <div class="stat-sub" id="ast-dialogs">—</div>
+              <div class="stat-value is-text blue" id="ast-register">â€”</div>
+              <div class="stat-sub" id="ast-dialogs">â€”</div>
             </div>
           </div>
           <div class="info-grid">
-            <div class="info-row"><div class="info-key" data-i18n="ast_sip_listen">SIP listen</div><div class="info-val" id="ast-sip-listen">—</div></div>
-            <div class="info-row"><div class="info-key" data-i18n="ast_remote">Remote Asterisk</div><div class="info-val" id="ast-remote">—</div></div>
-            <div class="info-row"><div class="info-key" data-i18n="ast_rtp">RTP ports</div><div class="info-val" id="ast-rtp">—</div></div>
-            <div class="info-row"><div class="info-key" data-i18n="ast_codec">Codec</div><div class="info-val" id="ast-codec">—</div></div>
-            <div class="info-row"><div class="info-key" data-i18n="ast_last_rx">Last RX</div><div class="info-val" id="ast-last-rx">—</div></div>
-            <div class="info-row"><div class="info-key" data-i18n="ast_last_tx">Last TX</div><div class="info-val" id="ast-last-tx">—</div></div>
-            <div class="info-row"><div class="info-key" data-i18n="ast_last_error">Last error</div><div class="info-val" id="ast-last-error">—</div></div>
+            <div class="info-row"><div class="info-key" data-i18n="ast_sip_listen">SIP listen</div><div class="info-val" id="ast-sip-listen">â€”</div></div>
+            <div class="info-row"><div class="info-key" data-i18n="ast_remote">Remote Asterisk</div><div class="info-val" id="ast-remote">â€”</div></div>
+            <div class="info-row"><div class="info-key" data-i18n="ast_rtp">RTP ports</div><div class="info-val" id="ast-rtp">â€”</div></div>
+            <div class="info-row"><div class="info-key" data-i18n="ast_codec">Codec</div><div class="info-val" id="ast-codec">â€”</div></div>
+            <div class="info-row"><div class="info-key" data-i18n="ast_last_rx">Last RX</div><div class="info-val" id="ast-last-rx">â€”</div></div>
+            <div class="info-row"><div class="info-key" data-i18n="ast_last_tx">Last TX</div><div class="info-val" id="ast-last-tx">â€”</div></div>
+            <div class="info-row"><div class="info-key" data-i18n="ast_last_error">Last error</div><div class="info-val" id="ast-last-error">â€”</div></div>
           </div>
         </div>
       </div>
@@ -2999,18 +2999,18 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── DAPNET ── -->
+    <!-- â”€â”€ DAPNET â”€â”€ -->
     <div class="page" id="page-dapnet">
       <div class="section-label" data-i18n="integrations">Integrations</div>
-      <!-- Connection hero — DAPNET feed state as a calm status pill. -->
+      <!-- Connection hero â€” DAPNET feed state as a calm status pill. -->
       <div class="hero">
         <span class="hero-dot is-idle" id="dap-hero-dot"></span>
         <div class="hero-main">
           <div class="hero-title" data-i18n="dapnet_title">DAPNET</div>
-          <div class="hero-sub" id="dap-hero-sub">—</div>
+          <div class="hero-sub" id="dap-hero-sub">â€”</div>
         </div>
         <div class="hero-metrics">
-          <span class="pill pill-idle" id="dap-hero-pill">—</span>
+          <span class="pill pill-idle" id="dap-hero-pill">â€”</span>
         </div>
       </div>
       <div class="card">
@@ -3037,9 +3037,9 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </table>
           </div>
           <div class="log-controls">
-            <button class="btn btn-sm" onclick="dapnetLogPrevPage()">‹ Prev</button>
+            <button class="btn btn-sm" onclick="dapnetLogPrevPage()">â€¹ Prev</button>
             <span class="sds-empty" id="dapnetlog-page">Page 1 / 1</span>
-            <button class="btn btn-sm" onclick="dapnetLogNextPage()">Next ›</button>
+            <button class="btn btn-sm" onclick="dapnetLogNextPage()">Next â€º</button>
           </div>
         </div>
       </div>
@@ -3112,9 +3112,9 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
                 <input type="number" id="dap-sds-dest" class="form-input" min="0" max="16777215" placeholder="ISSI or GSSI">
                 <label class="h-flabel">Destination is group</label>
                 <label class="h-finline"><span class="sw"><input type="checkbox" id="dap-sds-group"><i></i></span><span class="h-flabel-sm">GSSI</span></label>
-                <label class="h-flabel top">RIC → ISSI</label>
+                <label class="h-flabel top">RIC â†’ ISSI</label>
                 <textarea id="dap-ric-routes" class="form-input" rows="3" placeholder="0632585=2632585"></textarea>
-                <label class="h-flabel top">RIC → GSSI</label>
+                <label class="h-flabel top">RIC â†’ GSSI</label>
                 <textarea id="dap-ric-group-routes" class="form-input" rows="3" placeholder="0004520=80"></textarea>
                 <label class="h-flabel top">SDS RIC filter</label>
                 <textarea id="dap-sds-rics" class="form-input" rows="3" placeholder="0004520&#10;0000200"></textarea>
@@ -3174,18 +3174,18 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── GEOALARM ── -->
+    <!-- â”€â”€ GEOALARM â”€â”€ -->
     <div class="page" id="page-geoalarm">
       <div class="section-label" data-i18n="integrations">Integrations</div>
-      <!-- Connection hero — GeoAlarm enabled state as a calm status pill. -->
+      <!-- Connection hero â€” GeoAlarm enabled state as a calm status pill. -->
       <div class="hero">
         <span class="hero-dot is-idle" id="geo-hero-dot"></span>
         <div class="hero-main">
           <div class="hero-title" data-i18n="geoalarm_title">GeoAlarm</div>
-          <div class="hero-sub" id="geo-hero-sub">—</div>
+          <div class="hero-sub" id="geo-hero-sub">â€”</div>
         </div>
         <div class="hero-metrics">
-          <span class="pill pill-idle" id="geo-hero-pill">—</span>
+          <span class="pill pill-idle" id="geo-hero-pill">â€”</span>
         </div>
       </div>
       <div class="card">
@@ -3201,18 +3201,18 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <div class="stat-card">
               <div class="stat-label">Positions</div>
               <div class="stat-value" id="geo-seen">0</div>
-              <div class="stat-sub" id="geo-center">—</div>
+              <div class="stat-sub" id="geo-center">â€”</div>
             </div>
             <div class="stat-card blue">
               <div class="stat-label">Alarms</div>
               <div class="stat-value blue" id="geo-alarms">0</div>
-              <div class="stat-sub" id="geo-radius">—</div>
+              <div class="stat-sub" id="geo-radius">â€”</div>
             </div>
           </div>
           <div class="info-grid" style="margin-bottom:14px">
-            <div class="info-row"><div class="info-key">Last position</div><div class="info-val" id="geo-last-position">—</div></div>
-            <div class="info-row"><div class="info-key">Last alarm</div><div class="info-val" id="geo-last-alarm">—</div></div>
-            <div class="info-row"><div class="info-key">Last error</div><div class="info-val" id="geo-last-error">—</div></div>
+            <div class="info-row"><div class="info-key">Last position</div><div class="info-val" id="geo-last-position">â€”</div></div>
+            <div class="info-row"><div class="info-key">Last alarm</div><div class="info-val" id="geo-last-alarm">â€”</div></div>
+            <div class="info-row"><div class="info-key">Last error</div><div class="info-val" id="geo-last-error">â€”</div></div>
           </div>
 
           <label class="sw-row">
@@ -3248,7 +3248,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           <div class="h-form wide" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
             <div>
               <label class="sw-row">
-                <span class="sw-text">Alarm → TPG2200</span>
+                <span class="sw-text">Alarm â†’ TPG2200</span>
                 <span class="sw"><input type="checkbox" id="geo-forward-tpg"><i></i></span>
               </label>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
@@ -3263,7 +3263,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </div>
             <div>
               <label class="sw-row">
-                <span class="sw-text">Alarm → SDS</span>
+                <span class="sw-text">Alarm â†’ SDS</span>
                 <span class="sw"><input type="checkbox" id="geo-forward-sds"><i></i></span>
               </label>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
@@ -3274,12 +3274,12 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </div>
             <div>
               <label class="sw-row">
-                <span class="sw-text">Alarm → SIP/Snom</span>
+                <span class="sw-text">Alarm â†’ SIP/Snom</span>
                 <span class="sw"><input type="checkbox" id="geo-forward-sip"><i></i></span>
               </label>
               <input type="text" id="geo-sip-prefix" class="form-input" placeholder="Snom title prefix" style="margin-top:10px">
               <label class="sw-row" style="margin-top:14px">
-                <span class="sw-text">Alarm → Telegram</span>
+                <span class="sw-text">Alarm â†’ Telegram</span>
                 <span class="sw"><input type="checkbox" id="geo-forward-telegram"><i></i></span>
               </label>
               <input type="text" id="geo-telegram-prefix" class="form-input" placeholder="Telegram prefix" style="margin-top:10px">
@@ -3335,15 +3335,15 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             </table>
           </div>
           <div class="log-controls">
-            <button class="btn btn-sm" onclick="geoPrevPage()">‹ Prev</button>
+            <button class="btn btn-sm" onclick="geoPrevPage()">â€¹ Prev</button>
             <span class="sds-empty" id="geo-events-page">Page 1 / 1</span>
-            <button class="btn btn-sm" onclick="geoNextPage()">Next ›</button>
+            <button class="btn btn-sm" onclick="geoNextPage()">Next â€º</button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ── CONFIG ── -->
+    <!-- â”€â”€ CONFIG â”€â”€ -->
     <div class="page" id="page-config">
       <div class="section-label" data-i18n="cfg_sec_configuration">Configuration</div>
       <div class="card">
@@ -3364,7 +3364,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </div>
       </div>
 
-      <!-- ── ISSI WHITELIST ──
+      <!-- â”€â”€ ISSI WHITELIST â”€â”€
            Editable access-control list. Empty list = open network (any ISSI may
            register). Changes apply immediately at runtime AND are written back to
            config.toml so they survive a restart. -->
@@ -3394,7 +3394,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </div>
       </div>
 
-      <!-- ── WX / METAR SERVICE ──
+      <!-- â”€â”€ WX / METAR SERVICE â”€â”€
            Built-in weather responder. On-demand: a radio SDSes "METAR <ICAO>" to the
            service ISSI and gets a decoded reply. Periodic: auto-sends a station's METAR
            to a chosen ISSI/GSSI at an interval. Toggles + targets editable here; applies
@@ -3457,7 +3457,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── TELEGRAM ALERTS ──
+    <!-- â”€â”€ TELEGRAM ALERTS â”€â”€
          Owner-facing push notifications via a Telegram bot. The owner pastes their
          @BotFather token, detects their chat ID with one click (getUpdates), picks
          which categories to receive, and saves. Applies instantly and persists to
@@ -3485,7 +3485,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
 
       <div class="card">
-        <div class="card-head"><div class="card-title" data-i18n="tg_howto_title">Setup — 4 steps</div></div>
+        <div class="card-head"><div class="card-title" data-i18n="tg_howto_title">Setup â€” 4 steps</div></div>
         <div class="card-body">
           <div class="steps">
             <div class="step"><span class="step-num"></span><span class="step-body" data-i18n="tg_step1">In Telegram, open @BotFather, send /newbot and copy the bot token.</span></div>
@@ -3503,7 +3503,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             The token from @BotFather looks like 123456789:AAExampleTokenString.
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input type="text" id="tg-token" class="form-input" placeholder="123456789:AA…"
+            <input type="text" id="tg-token" class="form-input" placeholder="123456789:AAâ€¦"
                    autocomplete="off" spellcheck="false" oninput="tgTokenDirty=true"
                    style="flex:1;min-width:220px">
             <button class="btn" onclick="verifyTelegram()"><span class="btn-icon" data-icon="search"></span><span data-i18n="tg_verify">Verify</span></button>
@@ -3543,7 +3543,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── WIFI ──
+    <!-- â”€â”€ WIFI â”€â”€
          Three cards: current status (with disconnect / radio toggle), saved
          profiles list, and visible networks scan. The whole tab is only
          attached to a nav button when /api/wifi/available reports true so
@@ -3567,7 +3567,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <div class="banner-body" data-i18n="wifi_warn_lose_access">If you're connected to the dashboard via WiFi, changing networks may temporarily disconnect you. Make sure you have a backup access path (Ethernet or known good network).</div>
           </div>
           <div class="wifi-status-grid" id="wifi-status-grid" style="padding:16px 18px">
-            <div class="wifi-status-loading" data-i18n="wifi_loading">Loading…</div>
+            <div class="wifi-status-loading" data-i18n="wifi_loading">Loadingâ€¦</div>
           </div>
         </div>
       </div>
@@ -3583,7 +3583,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </div>
         <div class="card-body">
           <div id="wifi-saved-list" class="wifi-list">
-            <div class="wifi-list-empty" data-i18n="wifi_loading">Loading…</div>
+            <div class="wifi-list-empty" data-i18n="wifi_loading">Loadingâ€¦</div>
           </div>
         </div>
       </div>
@@ -3600,13 +3600,13 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         </div>
         <div class="card-body">
           <div id="wifi-scan-list" class="wifi-list">
-            <div class="wifi-list-empty" data-i18n="wifi_loading">Loading…</div>
+            <div class="wifi-list-empty" data-i18n="wifi_loading">Loadingâ€¦</div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- WiFi password modal — used both when joining a visible network with
+    <!-- WiFi password modal â€” used both when joining a visible network with
          security and when adding a hidden network manually. Unified .sheet. -->
     <div id="wifi-modal" class="sheet-overlay">
       <div class="sheet">
@@ -3637,7 +3637,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
     </div>
 
-    <!-- ── SYSTEM ── -->
+    <!-- â”€â”€ SYSTEM â”€â”€ -->
     <div class="page" id="page-health">
       <div class="h-wrap">
         <div id="health-hero" class="h-hero">
@@ -3646,10 +3646,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           </div>
           <div class="h-hero-txt">
             <div id="health-hero-title" class="h-hero-title">Station health</div>
-            <div id="health-hero-sub" class="h-hero-sub">Waiting for the first health snapshot…</div>
+            <div id="health-hero-sub" class="h-hero-sub">Waiting for the first health snapshotâ€¦</div>
           </div>
           <div class="h-hero-meta">
-            <div id="health-uptime" class="hm-val">—</div>
+            <div id="health-uptime" class="hm-val">â€”</div>
             <div id="health-action" class="hm-sub"></div>
           </div>
         </div>
@@ -3657,32 +3657,32 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div id="health-grid" class="h-grid"></div>
         <div class="h-sec">Integrations</div>
         <div id="health-integrations-grid" class="h-grid">
-          <div class="sds-empty" style="padding:12px 0">Loading integration health…</div>
+          <div class="sds-empty" style="padding:12px 0">Loading integration healthâ€¦</div>
         </div>
         <div class="h-note">
           Auto-refreshes every few seconds. Levels:
-          <b class="ok">OK</b> · <b class="warn">DEGRADED</b> · <b class="bad">CRITICAL</b>.
+          <b class="ok">OK</b> Â· <b class="warn">DEGRADED</b> Â· <b class="bad">CRITICAL</b>.
           The software watchdog (auto-restart when the core loop stalls) is configured in the <code>[health]</code> section.
         </div>
       </div>
     </div>
 
     <div class="page" id="page-system">
-      <!-- System hero — at-a-glance BTS / Brew / uptime / CPU temp summary. -->
+      <!-- System hero â€” at-a-glance BTS / Brew / uptime / CPU temp summary. -->
       <div class="hero">
         <span class="hero-dot is-idle" id="sysHeroDot"></span>
         <div class="hero-main">
           <div class="hero-title" id="sysHeroTitle" data-i18n="sys_title">System</div>
-          <div class="hero-sub" id="sysHeroSub">—</div>
+          <div class="hero-sub" id="sysHeroSub">â€”</div>
         </div>
         <div class="hero-metrics">
           <div class="hero-metric">
             <div class="hero-metric-label" data-i18n="sys_uptime">Uptime</div>
-            <div class="hero-metric-value" id="sysHeroUptime">—</div>
+            <div class="hero-metric-value" id="sysHeroUptime">â€”</div>
           </div>
           <div class="hero-metric">
             <div class="hero-metric-label" data-i18n="sys_temp">CPU Temp</div>
-            <div class="hero-metric-value" id="sysHeroTemp">—</div>
+            <div class="hero-metric-value" id="sysHeroTemp">â€”</div>
           </div>
         </div>
       </div>
@@ -3693,30 +3693,30 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
         <div class="stat-card is-danger" id="sysBtsCard">
           <div class="stat-label" data-i18n="sys_bts">BTS Connection</div>
           <div class="stat-value is-text" id="sysBtsStatus">OFFLINE</div>
-          <div class="stat-sub" id="sysBtsIp">—</div>
+          <div class="stat-sub" id="sysBtsIp">â€”</div>
         </div>
         <div class="stat-card is-danger" id="sysBrewCard">
           <div class="stat-label">BREW</div>
           <div class="stat-value is-text" id="sysBrewStatus">OFFLINE</div>
-          <div class="stat-sub" id="sysBrewBadge">—</div>
+          <div class="stat-sub" id="sysBrewBadge">â€”</div>
         </div>
         <div class="stat-card is-idle">
           <div class="stat-label" data-i18n="sys_uptime">Uptime</div>
-          <div class="stat-value is-text" id="sysUptime">—</div>
-          <div class="stat-sub" id="sysHostname">—</div>
+          <div class="stat-value is-text" id="sysUptime">â€”</div>
+          <div class="stat-sub" id="sysHostname">â€”</div>
         </div>
         <div class="stat-card is-warn" id="cpu-temp-card" style="display:none">
           <div class="stat-label" data-i18n="sys_temp">CPU Temp</div>
-          <div class="stat-value is-text" id="sysCpuTemp">—</div>
-          <div class="stat-sub" id="sysCpuTempSub">—</div>
+          <div class="stat-value is-text" id="sysCpuTemp">â€”</div>
+          <div class="stat-sub" id="sysCpuTempSub">â€”</div>
         </div>
       </div>
 
-      <!-- Display brightness (FH-FEAT-008) — hidden unless a backlight panel exists -->
+      <!-- Display brightness (FH-FEAT-008) â€” hidden unless a backlight panel exists -->
       <div class="card" id="brightness-card" style="display:none">
         <div class="card-head">
           <div class="card-title">Display Brightness</div>
-          <div class="card-actions"><span id="brightness-val" style="font-family:var(--mono);font-size:13px;color:var(--text2)">—</span></div>
+          <div class="card-actions"><span id="brightness-val" style="font-family:var(--mono);font-size:13px;color:var(--text2)">â€”</span></div>
         </div>
         <div class="card-body" style="padding:16px 18px">
           <input type="range" id="brightness-slider" min="0" max="255" step="1" value="128" oninput="onBrightnessInput(this.value)" style="width:100%">
@@ -3737,16 +3737,16 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           </div>
         </div>
         <div class="card-body">
-          <div class="info-row"><div class="info-key" data-i18n="sys_version">FS Version</div><div class="info-val accent" id="sysVersion">—</div></div>
-          <div class="info-row"><div class="info-key" data-i18n="sys_os">OS</div><div class="info-val" id="sysOs">—</div></div>
-          <div class="info-row"><div class="info-key" data-i18n="sys_config">Active Config</div><div class="info-val" id="sysConfigPath">—</div></div>
-          <div class="info-row"><div class="info-key" data-i18n="sys_cpu">CPU</div><div class="info-val" id="sysCpu">—</div></div>
+          <div class="info-row"><div class="info-key" data-i18n="sys_version">FS Version</div><div class="info-val accent" id="sysVersion">â€”</div></div>
+          <div class="info-row"><div class="info-key" data-i18n="sys_os">OS</div><div class="info-val" id="sysOs">â€”</div></div>
+          <div class="info-row"><div class="info-key" data-i18n="sys_config">Active Config</div><div class="info-val" id="sysConfigPath">â€”</div></div>
+          <div class="info-row"><div class="info-key" data-i18n="sys_cpu">CPU</div><div class="info-val" id="sysCpu">â€”</div></div>
           <div class="info-row">
             <div class="info-key" data-i18n="sys_cpu_load">CPU Load</div>
             <div class="info-val" style="flex:1;max-width:220px">
               <div class="gauge" id="sysCpuGauge">
                 <div class="gauge-track"><div class="gauge-fill" id="sysCpuBar"></div></div>
-                <span class="gauge-value" id="sysCpuPct">—</span>
+                <span class="gauge-value" id="sysCpuPct">â€”</span>
               </div>
             </div>
           </div>
@@ -3755,7 +3755,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
             <div class="info-val" style="flex:1;max-width:260px">
               <div class="gauge is-info" id="sysRamGauge">
                 <div class="gauge-track"><div class="gauge-fill" id="sysRamBar"></div></div>
-                <span class="gauge-value" id="sysRamVal" style="min-width:118px">—</span>
+                <span class="gauge-value" id="sysRamVal" style="min-width:118px">â€”</span>
               </div>
             </div>
           </div>
@@ -3772,7 +3772,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
           </div>
         </div>
         <div class="card-body">
-          <pre id="sysSoapy" class="terminal">—</pre>
+          <pre id="sysSoapy" class="terminal">â€”</pre>
         </div>
       </div>
 
@@ -3825,7 +3825,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
               <input type="text" id="live-sds-text" class="form-input" maxlength="251" placeholder="e.g. Repeater test 18:00-20:00">
             </div>
             <div style="width:90px">
-              <label class="form-label" data-i18n="live_sds_repeat">Repeat (0=∞)</label>
+              <label class="form-label" data-i18n="live_sds_repeat">Repeat (0=âˆž)</label>
               <input type="number" id="live-sds-repeat" class="form-input" value="0" min="0" max="999" style="width:100%">
             </div>
             <button class="btn btn-primary" onclick="addLiveSds()"><span class="btn-icon" data-icon="broadcast"></span><span data-i18n="live_sds_send">Broadcast</span></button>
@@ -3838,7 +3838,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   </div><!-- /content -->
 </div><!-- /main -->
 
-<!-- ── Edit Profile Modal ── -->
+<!-- â”€â”€ Edit Profile Modal â”€â”€ -->
 <div class="modal-overlay" id="edit-profile-modal">
   <div class="modal" style="width:min(700px,95vw);max-height:90vh;display:flex;flex-direction:column">
     <div class="modal-title" style="display:flex;align-items:center;gap:7px">
@@ -3860,10 +3860,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   </div>
 </div>
 
-<!-- ── SDS Modal ── -->
+<!-- â”€â”€ SDS Modal â”€â”€ -->
 <div class="modal-overlay" id="sds-modal">
   <div class="modal">
-    <div class="modal-title" data-i18n="sds_title">⬡ Send SDS Message</div>
+    <div class="modal-title" data-i18n="sds_title">â¬¡ Send SDS Message</div>
     <div class="form-row">
       <label class="form-label" data-i18n="sds_dest">Destination ISSI</label>
       <input type="number" id="sds-dest" class="form-input" placeholder="e.g. 2260571">
@@ -3906,21 +3906,25 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   </div>
 </div>
 
-<!-- ── DGNA Modal (Dynamic Group Number Assignment) ── -->
+<!-- â”€â”€ DGNA Modal (Dynamic Group Number Assignment) â”€â”€ -->
 <div class="modal-overlay" id="dgna-modal">
   <div class="modal">
-    <div class="modal-title" data-i18n="dgna_modal_title">⬡ Dynamic Group Assignment</div>
+    <div class="modal-title" data-i18n="dgna_modal_title">â¬¡ Dynamic Group Assignment</div>
     <div class="form-row">
       <label class="form-label" data-i18n="dgna_issi">Terminal ISSI</label>
       <input type="number" id="dgna-issi" class="form-input" readonly>
     </div>
     <div class="form-row">
       <label class="form-label" data-i18n="dgna_current">Current groups</label>
-      <div id="dgna-current" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;align-items:center">—</div>
+      <div id="dgna-current" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;align-items:center">â€”</div>
     </div>
     <div class="form-row">
       <label class="form-label" data-i18n="dgna_gssi">Group (GSSI)</label>
       <input type="number" id="dgna-gssi" class="form-input" placeholder="e.g. 100" min="1">
+    </div>
+    <div class="form-row">
+      <label class="form-label" data-i18n="dgna_name">TG name</label>
+      <input type="text" id="dgna-name" class="form-input" maxlength="15" placeholder="Optional TG label">
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeDgnaModal()" data-i18n="cancel">Cancel</button>
@@ -3930,10 +3934,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
   </div>
 </div>
 
-<!-- ── Update Modal ── -->
+<!-- â”€â”€ Update Modal â”€â”€ -->
 <div class="modal-overlay" id="update-modal">
   <div class="modal">
-    <div class="modal-title" id="update-modal-title" data-i18n="update_title">⬆ OTA Update</div>
+    <div class="modal-title" id="update-modal-title" data-i18n="update_title">â¬† OTA Update</div>
     <div class="update-status running" id="update-status-msg"></div>
     <div class="update-terminal" id="update-terminal"></div>
     <div class="modal-actions">
@@ -3943,14 +3947,14 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
 </div>
 
 <script>
-// ── Icon system (SF-Symbols-style, design-language v3) ────────────────────
-// One cohesive family: 24×24 viewBox, fill=none, stroke=currentColor,
-// stroke-width 1.8, round caps/joins — monochrome so each glyph inherits the
+// â”€â”€ Icon system (SF-Symbols-style, design-language v3) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// One cohesive family: 24Ã—24 viewBox, fill=none, stroke=currentColor,
+// stroke-width 1.8, round caps/joins â€” monochrome so each glyph inherits the
 // adjacent text colour and auto-themes. svgIcon(name[,size]) returns an inline
 // <svg> string; status is conveyed by the dot, never the icon. The Tabs phase
 // reuses ICONS / svgIcon verbatim for every emoji site.
 const ICONS = {
-  // nav — monitor
+  // nav â€” monitor
   radios:'<path d="M5 14a9 9 0 0 1 9-9"/><path d="M5 14a5.5 5.5 0 0 1 5.5-5.5"/><circle cx="6.5" cy="12.5" r="1.6"/><path d="M7.5 13.5 13 19"/>',
   calls:'<path d="M6.5 4.5h3l1.2 3.2-1.7 1.3a11 11 0 0 0 4.7 4.7l1.3-1.7 3.2 1.2v3a1.5 1.5 0 0 1-1.6 1.5A13.5 13.5 0 0 1 5 6.1 1.5 1.5 0 0 1 6.5 4.5Z"/>',
   lastheard:'<path d="M4 12h2M8 8v8M12 5v14M16 8v8M20 12h-2"/>',
@@ -3958,7 +3962,7 @@ const ICONS = {
   sdslog:'<path d="M4.5 6.5A1.5 1.5 0 0 1 6 5h12a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 18 16H9l-4 3v-3a1.5 1.5 0 0 1-.5-1.1Z"/>',
   rf:'<circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 5a9 9 0 0 0 0 14M19 5a9 9 0 0 1 0 14"/>',
   health:'<path d="M3 12h3l2-5 3 10 2.5-7 1.5 2h6"/>',
-  // nav — integrations / system
+  // nav â€” integrations / system
   config:'<circle cx="12" cy="12" r="3"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8 6 18M18 6l1.8-1.8"/>',
   telegram:'<path d="M20 4 3.5 11.2l6 2.1M20 4l-2.8 14-7-3.6M20 4 9.6 13.6M9.6 13.6V18l2.6-2.6"/>',
   wifi:'<path d="M4.5 9a11 11 0 0 1 15 0M7.5 12.5a6.5 6.5 0 0 1 9 0"/><circle cx="12" cy="16.5" r="1.2" fill="currentColor" stroke="none"/>',
@@ -4002,7 +4006,7 @@ function svgIcon(name, size){
   return '<svg viewBox="0 0 24 24"'+px+' fill="none" stroke="currentColor" stroke-width="'+sw+
          '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+body+'</svg>';
 }
-// Filled selection marker (▶ in selected-TG rows) — own fill, no stroke.
+// Filled selection marker (â–¶ in selected-TG rows) â€” own fill, no stroke.
 const ICON_MARKER = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M8 5l11 7-11 7Z"/></svg>';
 // Paint every declarative icon slot ([data-icon="name"]) from the ICONS map.
 // Keeps the nav/header markup DRY; the Tabs phase can drop more [data-icon] slots.
@@ -4014,7 +4018,7 @@ function paintIcons(root){
   });
 }
 
-// ── i18n ─────────────────────────────────────────────────────────────────
+// â”€â”€ i18n â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const LANGS={
   en:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
@@ -4022,11 +4026,11 @@ const LANGS={
     stations:'Radios',calls:'Calls',lastheard:'Last Heard',log:'Log',rf:'RF',health:'Health',asterisk:'Asterisk SIP',dapnet:'DAPNET',echolink:'EchoLink',echolink_title:'EchoLink',meshcom:'MeshCom',meshcom_title:'MeshCom',geoalarm:'GeoAlarm',geoalarm_title:'GeoAlarm',config:'Config',
     sdslog:'SDS Log',th_dir:'Dir',th_from:'From',th_to:'To',th_message:'Message',no_sds:'No SDS messages yet',sds_refresh:'Refresh',
     rf_freq:'Center freq',rf_rate:'Sample rate',rf_rms:'RMS',rf_peak:'Peak',rf_age:'Snapshot',
-    rf_waiting:'waiting…',rf_live:'live',rf_stale:'stale',
+    rf_waiting:'waitingâ€¦',rf_live:'live',rf_stale:'stale',
     rf_visualizers:'Visualizers',rf_spectrum:'TX DSP Spectrum (pre-PA)',rf_constellation:'TX DSP Constellation',
-    rf_hint_spectrum:'live · 512-bin FFT',rf_hint_constellation:'π/4-DQPSK',
-    rf_waterfall:'TX Spectrum Waterfall',rf_hint_waterfall:'rolling · viridis',
-    rf_quality:'Signal Quality',rf_hint_quality:'measured pre-PA · derived from same DSP snapshot',
+    rf_hint_spectrum:'live Â· 512-bin FFT',rf_hint_constellation:'Ï€/4-DQPSK',
+    rf_waterfall:'TX Spectrum Waterfall',rf_hint_waterfall:'rolling Â· viridis',
+    rf_quality:'Signal Quality',rf_hint_quality:'measured pre-PA Â· derived from same DSP snapshot',
     rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'Carrier leak',rf_obw:'Occupied BW (99%)',
     rf_dc:'DC offset (I/Q)',rf_iqa:'IQ amplitude imbalance',rf_iqp:'IQ phase imbalance',
     rf_hw_health:'Hardware Health',rf_hint_health:'polled every 5s',
@@ -4037,30 +4041,30 @@ const LANGS={
     asterisk_title:'Asterisk SIP',ast_configured:'Configured',ast_register:'REGISTER',ast_sip_listen:'SIP listen',
     ast_remote:'Remote Asterisk',ast_rtp:'RTP ports',ast_codec:'Codec',ast_last_rx:'Last RX',
     ast_last_tx:'Last TX',ast_last_error:'Last error',
-    dapnet_title:'DAPNET',dapnet_log:'DAPNET Log',dapnet_routing:'Routing',dapnet_send:'Send DAPNET Message',dapnet_saved:'✓ Saved',
+    dapnet_title:'DAPNET',dapnet_log:'DAPNET Log',dapnet_routing:'Routing',dapnet_send:'Send DAPNET Message',dapnet_saved:'âœ“ Saved',
     terminals:'Radios',registered:'registered',
     active_calls:'Active Calls',circuits:'circuits in use',
     registered_terminals:'Registered Radios',
     bts_details:'TETRA BTS Details',bts_tx:'TX Freq',bts_rx:'RX Freq',bts_shift:'Duplex Shift',bts_rate:'Sample Rate',
-    dual_carrier:'Dual Carrier',dc_on_sub:'On · secondary carrier #{c}',dc_off_sub:'Off · single carrier',
-    dc_enter_carrier:'Secondary carrier number (e.g. main carrier ±1):',dc_bad_carrier:'Please enter a valid carrier number.',
+    dual_carrier:'Dual Carrier',dc_on_sub:'On Â· secondary carrier #{c}',dc_off_sub:'Off Â· single carrier',
+    dc_enter_carrier:'Secondary carrier number (e.g. main carrier Â±1):',dc_bad_carrier:'Please enter a valid carrier number.',
     dc_confirm_on:'Enable Dual Carrier? This RESTARTS the base station and briefly drops all active calls.',
     dc_confirm_off:'Disable Dual Carrier? This RESTARTS the base station and briefly drops all active calls.',
-    dc_applying:'Applying…',dc_restarting:'Restarting to apply… reconnecting shortly.',dc_failed:'Could not change Dual Carrier',
+    dc_applying:'Applyingâ€¦',dc_restarting:'Restarting to applyâ€¦ reconnecting shortly.',dc_failed:'Could not change Dual Carrier',
     bts_la:'Location Area',bts_cc:'Colour Code',bts_carrier:'Main Carrier',bts_band:'Band',
-    bts_access:'Registration Access',bts_wl_entries:'whitelisted ISSI',bts_wl_open:'Open — all ISSI may register',
-    readability:'Readability',size_small:'Small',size_small_d:'Compact · normal contrast',size_medium:'Medium',size_medium_d:'Default · comfortable',size_high:'High',size_high_d:'Larger · stronger contrast',size_ultra:'Ultra',size_ultra_d:'Largest · maximum contrast',sdr:'SDR',power:'Power',
+    bts_access:'Registration Access',bts_wl_entries:'whitelisted ISSI',bts_wl_open:'Open â€” all ISSI may register',
+    readability:'Readability',size_small:'Small',size_small_d:'Compact Â· normal contrast',size_medium:'Medium',size_medium_d:'Default Â· comfortable',size_high:'High',size_high_d:'Larger Â· stronger contrast',size_ultra:'Ultra',size_ultra_d:'Largest Â· maximum contrast',sdr:'SDR',power:'Power',
     no_terminals:'No radios registered',no_calls:'No active calls',
     live_log:'Live Log',autoscroll:'Auto-scroll',filter_all:'All',
     clear:'Clear',export:'Export',restart:'Restart',shutdown:'Shutdown',save:'Save',
-    cfg_sec_configuration:'Configuration',cfg_sec_access:'Access Control',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI Whitelist',whitelist_add:'Add ISSI',whitelist_empty:'List empty — open network (any radio may register).',
+    cfg_sec_configuration:'Configuration',cfg_sec_access:'Access Control',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI Whitelist',whitelist_add:'Add ISSI',whitelist_empty:'List empty â€” open network (any radio may register).',
     whitelist_help:'When the list is empty, any radio may register (open network). When non-empty, only the listed ISSIs are accepted; all others are rejected. Changes apply instantly and persist across restarts.',
-    whitelist_enforced:'ENFORCED',whitelist_open:'OPEN',whitelist_invalid:'Enter a valid ISSI (1–16777215).',
+    whitelist_enforced:'ENFORCED',whitelist_open:'OPEN',whitelist_invalid:'Enter a valid ISSI (1â€“16777215).',
     wx_title:'WX / METAR Service',wx_help:'Built-in weather service. Radios send an SDS like "METAR LROP" to the service ISSI to get a decoded report. Optionally auto-send a fixed station\'s METAR to an ISSI or talkgroup at a set interval. Data from aviationweather.gov.',
     wx_enabled:'Enable on-demand METAR responder',wx_service_issi:'Service ISSI',wx_periodic_enabled:'Enable periodic auto-broadcast',
     wx_periodic_icao:'Station ICAO',wx_periodic_dest:'Destination',wx_periodic_isgroup:'Destination is group',wx_periodic_isgroup_hint:'(GSSI instead of individual ISSI)',
     wx_periodic_interval:'Interval (seconds)',wx_interval_hint:'Minimum 300 s (5 min) to avoid hammering the weather API.',wx_periodic_incomplete:'Set both station ICAO and destination for periodic mode.',
-    sds_title:'⬡ Send SDS Message',sds_dest:'Destination ISSI',
+    sds_title:'â¬¡ Send SDS Message',sds_dest:'Destination ISSI',
     sds_callout_enable:'TPG2200 Call-Out / Send alarm',
     sds_callout_source:'Source ISSI',
     sds_callout_incident:'Incident number',
@@ -4068,10 +4072,10 @@ const LANGS={
     sds_callout_raw:'Raw Hex Payload optional',
     sds_callout_help:'Incidents 1-15 use the confirmed byte formula (N << 4) | 0x01: 1=11, 2=21, 3=31, 4=41. Incidents 16-256 use the extended one-byte selector. Raw Hex overrides automatic payload generation.',
     live_sds_desc:'Broadcast a text message to all radios on the cell, repeating at the Home Mode Display interval. Repeats until deleted or the repeat count is reached.',
-    live_sds_text:'Message text (max 251 chars)',live_sds_repeat:'Repeat (0=∞)',live_sds_send:'Broadcast',
+    live_sds_text:'Message text (max 251 chars)',live_sds_repeat:'Repeat (0=âˆž)',live_sds_send:'Broadcast',
     live_sds_clear_all:'Clear All',live_sds_empty:'No active broadcasts.',
-    live_sds_sent:'sent',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
-    fallback_title:'⚠ FALLBACK CONFIG ACTIVE — Primary config failed to load',
+    live_sds_sent:'sent',live_sds_times:'Ã—',live_sds_forever:'âˆž',live_sds_delete:'âœ•',
+    fallback_title:'âš  FALLBACK CONFIG ACTIVE â€” Primary config failed to load',
     sds_msg_label:'Message',cancel:'Cancel',send:'Send',
     th_issi:'ISSI',th_issi_cs:'ISSI / Callsign',th_groups:'Groups',th_ee:'Energy Economy',th_signal:'Signal',
     tg_selected:'Selected talkgroup (last keyed up)',
@@ -4086,23 +4090,24 @@ const LANGS={
     call_group:'GROUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'EMERGENCY',
     emg_banner_title:'EMERGENCY ACTIVE',integrations:'Integrations',integ_enabled:'Enabled',integ_disabled:'Disabled',integ_error:'Error',system_sec:'System',emg_chip:'EMERGENCY',bs_label:'BS',emg_clear:'Clear',confirm_clear_emergency:'Clear emergency for ISSI {issi}?',
     confirm_kick:'Kick ISSI {issi}?\nTerminal will be deregistered and forced to re-attach.',
-    dgna:'DGNA',dgna_title:'Dynamic group assignment',dgna_modal_title:'⬡ Dynamic Group Assignment',dgna_issi:'Terminal ISSI',dgna_current:'Current groups',dgna_gssi:'Group (GSSI)',dgna_assign:'Assign',dgna_deassign:'Deassign',
+    dgna:'DGNA',dgna_title:'Dynamic group assignment',dgna_modal_title:'â¬¡ Dynamic Group Assignment',dgna_issi:'Terminal ISSI',dgna_current:'Current groups',dgna_gssi:'Group (GSSI)',dgna_assign:'Assign',dgna_deassign:'Deassign',
+    dgna_name:'TG name',
     confirm_restart:'Restart FlowStation?\nAll active calls will be dropped.',
     confirm_shutdown:'Shutdown FlowStation?\nThe service will stop and must be restarted manually.',
     confirm_logout:'Log out?',
-    saved:'✓ Saved — restart to apply.',save_fail:'✗ Save failed',conn_error:'Connection error.',
-    update:'Update',update_available:'Update available',update_title:'OTA Update — github.com/razvanzeces/flowstation',
+    saved:'âœ“ Saved â€” restart to apply.',save_fail:'âœ— Save failed',conn_error:'Connection error.',
+    update:'Update',update_available:'Update available',update_title:'OTA Update â€” github.com/razvanzeces/flowstation',
     update_confirm:'Pull latest from main and rebuild?\nThe service will restart automatically.',
-    update_running:'Updating… do not close this window.',
-    update_done_ok:'✓ Update complete. Restarting…',
-    update_done_err:'✗ Update failed. See log below.',
+    update_running:'Updatingâ€¦ do not close this window.',
+    update_done_ok:'âœ“ Update complete. Restartingâ€¦',
+    update_done_err:'âœ— Update failed. See log below.',
     update_close:'Close',
     system:'System',sys_info:'System Info',sys_hostname:'Hostname',sys_uptime:'Uptime',
     sys_version:'FS Version',sys_os:'OS',sys_config:'Active Config',
     sys_cpu:'CPU',sys_cpu_load:'CPU Load',sys_ram:'RAM',sys_temp:'CPU Temp',
-    wifi:'WiFi',wifi_status:'Current connection',wifi_saved:'Saved networks',wifi_visible:'Available networks',wifi_loading:'Loading…',wifi_scanning:'Scanning…',wifi_no_device:'No WiFi device detected on this host.',wifi_radio_disabled:'WiFi radio is disabled.',wifi_not_connected:'Not connected to any network.',wifi_no_saved:'No saved networks.',wifi_no_networks:'No networks in range.',wifi_ssid:'Network',wifi_signal:'Signal',wifi_ip:'IP address',wifi_actions:'Actions',wifi_disconnect:'Disconnect',wifi_connect:'Connect',wifi_connect_to:'Connect to',wifi_connecting:'Connecting…',wifi_connected:'CONNECTED',wifi_connected_ok:'Connected.',wifi_saved_tag:'SAVED',wifi_open:'OPEN',wifi_forget:'Forget',wifi_confirm_forget:'Forget network',wifi_password:'Password',wifi_hidden:'Hidden network (SSID not broadcast)',wifi_add_hidden:'Hidden network',wifi_scan:'Scan',wifi_refresh:'Refresh',wifi_radio_off:'Disable WiFi',wifi_radio_on:'Enable WiFi',wifi_warn_lose_access:'If connected to the dashboard via WiFi, changing networks may temporarily disconnect you. Make sure you have a backup access path (Ethernet or known good network).',wifi_err_no_ssid:'SSID required',cancel:'Cancel',sys_sensors:'Host Hardware Sensors',sys_sensors_empty:'No sensors detected on this host.',sys_rf:'RF Hardware (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
+    wifi:'WiFi',wifi_status:'Current connection',wifi_saved:'Saved networks',wifi_visible:'Available networks',wifi_loading:'Loadingâ€¦',wifi_scanning:'Scanningâ€¦',wifi_no_device:'No WiFi device detected on this host.',wifi_radio_disabled:'WiFi radio is disabled.',wifi_not_connected:'Not connected to any network.',wifi_no_saved:'No saved networks.',wifi_no_networks:'No networks in range.',wifi_ssid:'Network',wifi_signal:'Signal',wifi_ip:'IP address',wifi_actions:'Actions',wifi_disconnect:'Disconnect',wifi_connect:'Connect',wifi_connect_to:'Connect to',wifi_connecting:'Connectingâ€¦',wifi_connected:'CONNECTED',wifi_connected_ok:'Connected.',wifi_saved_tag:'SAVED',wifi_open:'OPEN',wifi_forget:'Forget',wifi_confirm_forget:'Forget network',wifi_password:'Password',wifi_hidden:'Hidden network (SSID not broadcast)',wifi_add_hidden:'Hidden network',wifi_scan:'Scan',wifi_refresh:'Refresh',wifi_radio_off:'Disable WiFi',wifi_radio_on:'Enable WiFi',wifi_warn_lose_access:'If connected to the dashboard via WiFi, changing networks may temporarily disconnect you. Make sure you have a backup access path (Ethernet or known good network).',wifi_err_no_ssid:'SSID required',cancel:'Cancel',sys_sensors:'Host Hardware Sensors',sys_sensors_empty:'No sensors detected on this host.',sys_rf:'RF Hardware (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
     profile_edit_title:'Edit Config Profile',profile_edit_btn:'Edit',
-    profile_edit_save_ok:'✓ Saved',profile_edit_save_fail:'✗ Save failed',
+    profile_edit_save_ok:'âœ“ Saved',profile_edit_save_fail:'âœ— Save failed',
     sys_os:'OS',sys_version:'FS Version',sys_config:'Active Config',
     sys_profiles:'Config Profiles',sys_activate:'Activate & Restart',
     sys_active_badge:'ACTIVE',sys_no_profiles:'No .toml profiles found in config directory.',
@@ -4110,22 +4115,22 @@ const LANGS={
     sys_title:'System',sys_sec_status:'Status',sys_sec_host:'Host',sys_sec_radio:'Radio Hardware',sys_sec_sensors:'Sensors',sys_sec_profiles:'Profiles',sys_sec_sds:'SDS Broadcast',sys_refresh:'Refresh',sys_probe:'Probe',sys_temp_hot:'HOT',sys_temp_warm:'Warm',sys_temp_ok:'OK',
     sys_bts:'BTS Connection',
     telegram:'Telegram',tg_title:'Telegram Alerts',
-    tg_help:'Get instant Telegram messages when something happens on the station — a radio attaches or drops, the backhaul goes up or down, a position beacon arrives, or the stack logs a warning/error.',
+    tg_help:'Get instant Telegram messages when something happens on the station â€” a radio attaches or drops, the backhaul goes up or down, a position beacon arrives, or the stack logs a warning/error.',
     tg_enabled:'Enable Telegram alerts',
-    tg_test:'Send test',tg_testing:'Sending test…',tg_test_ok:'✓ Test sent to {n} chat(s)',
-    tg_howto_title:'Setup — 4 steps',
+    tg_test:'Send test',tg_testing:'Sending testâ€¦',tg_test_ok:'âœ“ Test sent to {n} chat(s)',
+    tg_howto_title:'Setup â€” 4 steps',
     tg_step1:'In Telegram, open @BotFather, send /newbot and follow the prompts. Copy the bot token it gives you.',
-    tg_step2:'Paste the token below and click Verify — you should see your bot\'s @username.',
+    tg_step2:'Paste the token below and click Verify â€” you should see your bot\'s @username.',
     tg_step3:'Open a chat with your new bot (or add it to a group) and send it any message, e.g. /start.',
     tg_step4:'Click "Detect Chat ID", add your chat to the recipients, then Save. Use "Send test" to confirm.',
     tg_bot_title:'Bot token',
     tg_bot_help:'The token from @BotFather looks like 123456789:AAExampleTokenString. It is stored masked and never shown in full again.',
-    tg_verify:'Verify',tg_verifying:'Verifying…',
+    tg_verify:'Verify',tg_verifying:'Verifyingâ€¦',
     tg_recipients_title:'Recipients (Chat IDs)',
     tg_recipients_help:'Every alert is sent to each recipient. A positive ID is a private chat; a negative ID is a group or channel.',
-    tg_detect:'Detect Chat ID',tg_detecting:'Reading recent messages…',
+    tg_detect:'Detect Chat ID',tg_detecting:'Reading recent messagesâ€¦',
     tg_detect_none:'No recent messages found. Send your bot a message first, then try again.',
-    tg_detect_found:'Chats that messaged your bot — click Add:',
+    tg_detect_found:'Chats that messaged your bot â€” click Add:',
     tg_add:'Add',tg_no_recipients:'No recipients yet.',tg_invalid_chat:'Enter a valid Chat ID.',
     tg_categories_title:'Alert categories',
     tg_cat_connect:'Radio connected',tg_cat_disconnect:'Radio disconnected',
@@ -4136,205 +4141,205 @@ const LANGS={
     bts_ip:'IP BTS',offline:'DECONECTAT',online:'CONECTAT',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
     stations:'Radiouri',calls:'Apeluri',lastheard:'Ultima Activitate',log:'Log',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Config',
-    sdslog:'Jurnal SDS',th_dir:'Dir',th_from:'De la',th_to:'Către',th_message:'Mesaj',no_sds:'Niciun mesaj SDS încă',sds_refresh:'Reîmprospătează',
-    rf_freq:'Frecvență centru',rf_rate:'Rată eșantion',rf_rms:'RMS',rf_peak:'Vârf',rf_age:'Captură',
-    rf_waiting:'în așteptare…',rf_live:'live',rf_stale:'expirat',
-    rf_visualizers:'Vizualizatoare',rf_spectrum:'Spectru TX DSP (pre-PA)',rf_constellation:'Constelație TX DSP',
-    rf_hint_spectrum:'live · FFT 512-bin',rf_hint_constellation:'π/4-DQPSK',
-    rf_waterfall:'Cascadă Spectru TX',rf_hint_waterfall:'derulant · viridis',
-    rf_quality:'Calitate Semnal',rf_hint_quality:'măsurat pre-PA · din același snapshot DSP',
-    rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'Scurgere portantă',rf_obw:'Bandă ocupată (99%)',
-    rf_dc:'Offset DC (I/Q)',rf_iqa:'Dezechilibru amplitudine IQ',rf_iqp:'Dezechilibru fază IQ',
+    sdslog:'Jurnal SDS',th_dir:'Dir',th_from:'De la',th_to:'CÄƒtre',th_message:'Mesaj',no_sds:'Niciun mesaj SDS Ã®ncÄƒ',sds_refresh:'ReÃ®mprospÄƒteazÄƒ',
+    rf_freq:'FrecvenÈ›Äƒ centru',rf_rate:'RatÄƒ eÈ™antion',rf_rms:'RMS',rf_peak:'VÃ¢rf',rf_age:'CapturÄƒ',
+    rf_waiting:'Ã®n aÈ™teptareâ€¦',rf_live:'live',rf_stale:'expirat',
+    rf_visualizers:'Vizualizatoare',rf_spectrum:'Spectru TX DSP (pre-PA)',rf_constellation:'ConstelaÈ›ie TX DSP',
+    rf_hint_spectrum:'live Â· FFT 512-bin',rf_hint_constellation:'Ï€/4-DQPSK',
+    rf_waterfall:'CascadÄƒ Spectru TX',rf_hint_waterfall:'derulant Â· viridis',
+    rf_quality:'Calitate Semnal',rf_hint_quality:'mÄƒsurat pre-PA Â· din acelaÈ™i snapshot DSP',
+    rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'Scurgere portantÄƒ',rf_obw:'BandÄƒ ocupatÄƒ (99%)',
+    rf_dc:'Offset DC (I/Q)',rf_iqa:'Dezechilibru amplitudine IQ',rf_iqp:'Dezechilibru fazÄƒ IQ',
     rf_hw_health:'Stare Hardware',rf_hint_health:'citit la 5s',
-    rf_temp:'Temperatură SDR',rf_tx_gain:'Câștig TX (actual)',rf_rx_gain:'Câștig RX (actual)',
-    rf_temp_cold:'rece',rf_temp_nominal:'nominal',rf_temp_warm:'cald',rf_temp_hot:'fierbinte',rf_temp_na:'fără senzor',
+    rf_temp:'TemperaturÄƒ SDR',rf_tx_gain:'CÃ¢È™tig TX (actual)',rf_rx_gain:'CÃ¢È™tig RX (actual)',
+    rf_temp_cold:'rece',rf_temp_nominal:'nominal',rf_temp_warm:'cald',rf_temp_hot:'fierbinte',rf_temp_na:'fÄƒrÄƒ senzor',
     rf_no_gains:'indisponibil',rf_just_now:'acum',
 
-    terminals:'Radiouri',registered:'înregistrate',
+    terminals:'Radiouri',registered:'Ã®nregistrate',
     active_calls:'Apeluri Active',circuits:'circuite active',
-    registered_terminals:'Radiouri Înregistrate',
-    bts_details:'Detalii BTS TETRA',bts_tx:'Frecvență TX',bts_rx:'Frecvență RX',bts_shift:'Decalaj Duplex',bts_rate:'Rată Eșantionare',
-    dual_carrier:'Dual Carrier',dc_on_sub:'Pornit · carrier secundar #{c}',dc_off_sub:'Oprit · un singur carrier',
-    dc_enter_carrier:'Numărul carrier-ului secundar (ex. carrier principal ±1):',dc_bad_carrier:'Introdu un număr de carrier valid.',
-    dc_confirm_on:'Pornești Dual Carrier? Asta REPORNEȘTE stația de bază și pică toate apelurile active câteva secunde.',
-    dc_confirm_off:'Oprești Dual Carrier? Asta REPORNEȘTE stația de bază și pică toate apelurile active câteva secunde.',
-    dc_applying:'Se aplică…',dc_restarting:'Repornește pentru aplicare… reconectare în scurt timp.',dc_failed:'Nu am putut schimba Dual Carrier',
-    bts_la:'Zonă (LA)',bts_cc:'Cod Culoare',bts_carrier:'Purtătoare Princ.',bts_band:'Bandă',
-    bts_access:'Acces Înregistrare',bts_wl_entries:'ISSI permise',bts_wl_open:'Deschis — orice ISSI se poate înregistra',
-    readability:'Lizibilitate',size_small:'Mic',size_small_d:'Compact · contrast normal',size_medium:'Mediu',size_medium_d:'Implicit · confortabil',size_high:'Mare',size_high_d:'Mai mare · contrast sporit',size_ultra:'Ultra',size_ultra_d:'Cel mai mare · contrast maxim',sdr:'SDR',power:'Consum',
-    no_terminals:'Niciun radio înregistrat',no_calls:'Niciun apel activ',
+    registered_terminals:'Radiouri ÃŽnregistrate',
+    bts_details:'Detalii BTS TETRA',bts_tx:'FrecvenÈ›Äƒ TX',bts_rx:'FrecvenÈ›Äƒ RX',bts_shift:'Decalaj Duplex',bts_rate:'RatÄƒ EÈ™antionare',
+    dual_carrier:'Dual Carrier',dc_on_sub:'Pornit Â· carrier secundar #{c}',dc_off_sub:'Oprit Â· un singur carrier',
+    dc_enter_carrier:'NumÄƒrul carrier-ului secundar (ex. carrier principal Â±1):',dc_bad_carrier:'Introdu un numÄƒr de carrier valid.',
+    dc_confirm_on:'PorneÈ™ti Dual Carrier? Asta REPORNEÈ˜TE staÈ›ia de bazÄƒ È™i picÄƒ toate apelurile active cÃ¢teva secunde.',
+    dc_confirm_off:'OpreÈ™ti Dual Carrier? Asta REPORNEÈ˜TE staÈ›ia de bazÄƒ È™i picÄƒ toate apelurile active cÃ¢teva secunde.',
+    dc_applying:'Se aplicÄƒâ€¦',dc_restarting:'ReporneÈ™te pentru aplicareâ€¦ reconectare Ã®n scurt timp.',dc_failed:'Nu am putut schimba Dual Carrier',
+    bts_la:'ZonÄƒ (LA)',bts_cc:'Cod Culoare',bts_carrier:'PurtÄƒtoare Princ.',bts_band:'BandÄƒ',
+    bts_access:'Acces ÃŽnregistrare',bts_wl_entries:'ISSI permise',bts_wl_open:'Deschis â€” orice ISSI se poate Ã®nregistra',
+    readability:'Lizibilitate',size_small:'Mic',size_small_d:'Compact Â· contrast normal',size_medium:'Mediu',size_medium_d:'Implicit Â· confortabil',size_high:'Mare',size_high_d:'Mai mare Â· contrast sporit',size_ultra:'Ultra',size_ultra_d:'Cel mai mare Â· contrast maxim',sdr:'SDR',power:'Consum',
+    no_terminals:'Niciun radio Ã®nregistrat',no_calls:'Niciun apel activ',
     live_log:'Log Live',autoscroll:'Auto-scroll',filter_all:'Toate',
-    clear:'Șterge',export:'Export',restart:'Repornire',shutdown:'Oprire',save:'Salvează',
-    cfg_sec_configuration:'Configurație',cfg_sec_access:'Control acces',cfg_sec_wx:'WX / METAR',whitelist_title:'Listă albă ISSI',whitelist_add:'Adaugă ISSI',whitelist_empty:'Listă goală — rețea deschisă (orice radio se poate înregistra).',
-    whitelist_help:'Când lista e goală, orice radio se poate înregistra (rețea deschisă). Când are intrări, doar ISSI-urile listate sunt acceptate; restul sunt respinse. Modificările se aplică instant și persistă după repornire.',
-    whitelist_enforced:'ACTIVĂ',whitelist_open:'DESCHISĂ',whitelist_invalid:'Introdu un ISSI valid (1–16777215).',
-    wx_title:'Serviciu WX / METAR',wx_help:'Serviciu meteo integrat. Radiourile trimit un SDS de forma "METAR LROP" către ISSI-ul serviciului și primesc raportul decodat. Opțional, trimite automat METAR-ul unei stații fixe către un ISSI sau grup la interval. Date de la aviationweather.gov.',
-    wx_enabled:'Activează răspunsul METAR la cerere',wx_service_issi:'ISSI serviciu',wx_periodic_enabled:'Activează trimiterea periodică',
-    wx_periodic_icao:'Cod ICAO stație',wx_periodic_dest:'Destinație',wx_periodic_isgroup:'Destinația e grup',wx_periodic_isgroup_hint:'(GSSI în loc de ISSI individual)',
-    wx_periodic_interval:'Interval (secunde)',wx_interval_hint:'Minim 300 s (5 min) ca să nu suprasolicităm API-ul meteo.',wx_periodic_incomplete:'Setează și ICAO stație și destinație pentru modul periodic.',
-    live_sds_desc:'Transmite un mesaj text către toate radiourile din celulă, repetând la intervalul Home Mode Display.',
-    live_sds_text:'Text mesaj (max 251 caractere)',live_sds_repeat:'Repetări (0=∞)',live_sds_send:'Broadcast',
-    live_sds_clear_all:'Șterge Tot',live_sds_empty:'Niciun broadcast activ.',
-    live_sds_sent:'trimis',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
-    fallback_title:'⚠ CONFIG DE REZERVĂ ACTIV — Config principal nu a putut fi încărcat',
-    sds_title:'⬡ Trimite Mesaj SDS',sds_dest:'ISSI Destinatar',
-    sds_msg_label:'Mesaj',cancel:'Anulează',send:'Trimite',
+    clear:'È˜terge',export:'Export',restart:'Repornire',shutdown:'Oprire',save:'SalveazÄƒ',
+    cfg_sec_configuration:'ConfiguraÈ›ie',cfg_sec_access:'Control acces',cfg_sec_wx:'WX / METAR',whitelist_title:'ListÄƒ albÄƒ ISSI',whitelist_add:'AdaugÄƒ ISSI',whitelist_empty:'ListÄƒ goalÄƒ â€” reÈ›ea deschisÄƒ (orice radio se poate Ã®nregistra).',
+    whitelist_help:'CÃ¢nd lista e goalÄƒ, orice radio se poate Ã®nregistra (reÈ›ea deschisÄƒ). CÃ¢nd are intrÄƒri, doar ISSI-urile listate sunt acceptate; restul sunt respinse. ModificÄƒrile se aplicÄƒ instant È™i persistÄƒ dupÄƒ repornire.',
+    whitelist_enforced:'ACTIVÄ‚',whitelist_open:'DESCHISÄ‚',whitelist_invalid:'Introdu un ISSI valid (1â€“16777215).',
+    wx_title:'Serviciu WX / METAR',wx_help:'Serviciu meteo integrat. Radiourile trimit un SDS de forma "METAR LROP" cÄƒtre ISSI-ul serviciului È™i primesc raportul decodat. OpÈ›ional, trimite automat METAR-ul unei staÈ›ii fixe cÄƒtre un ISSI sau grup la interval. Date de la aviationweather.gov.',
+    wx_enabled:'ActiveazÄƒ rÄƒspunsul METAR la cerere',wx_service_issi:'ISSI serviciu',wx_periodic_enabled:'ActiveazÄƒ trimiterea periodicÄƒ',
+    wx_periodic_icao:'Cod ICAO staÈ›ie',wx_periodic_dest:'DestinaÈ›ie',wx_periodic_isgroup:'DestinaÈ›ia e grup',wx_periodic_isgroup_hint:'(GSSI Ã®n loc de ISSI individual)',
+    wx_periodic_interval:'Interval (secunde)',wx_interval_hint:'Minim 300 s (5 min) ca sÄƒ nu suprasolicitÄƒm API-ul meteo.',wx_periodic_incomplete:'SeteazÄƒ È™i ICAO staÈ›ie È™i destinaÈ›ie pentru modul periodic.',
+    live_sds_desc:'Transmite un mesaj text cÄƒtre toate radiourile din celulÄƒ, repetÃ¢nd la intervalul Home Mode Display.',
+    live_sds_text:'Text mesaj (max 251 caractere)',live_sds_repeat:'RepetÄƒri (0=âˆž)',live_sds_send:'Broadcast',
+    live_sds_clear_all:'È˜terge Tot',live_sds_empty:'Niciun broadcast activ.',
+    live_sds_sent:'trimis',live_sds_times:'Ã—',live_sds_forever:'âˆž',live_sds_delete:'âœ•',
+    fallback_title:'âš  CONFIG DE REZERVÄ‚ ACTIV â€” Config principal nu a putut fi Ã®ncÄƒrcat',
+    sds_title:'â¬¡ Trimite Mesaj SDS',sds_dest:'ISSI Destinatar',
+    sds_msg_label:'Mesaj',cancel:'AnuleazÄƒ',send:'Trimite',
     th_issi:'ISSI',th_issi_cs:'ISSI / Indicativ',th_groups:'Grupuri',th_ee:'Economie Energie',th_signal:'Semnal',
     tg_selected:'Grup selectat (ultima transmisie)',
-    tg_affiliated_short:'afiliate',tg_affiliated_hint:'Alte grupuri la care radio-ul este afiliat (rămân atașate la BS chiar și când scan e oprit din statie)',
-    th_status:'Status',th_last_seen:'Văzut',th_actions:'Acțiuni',
+    tg_affiliated_short:'afiliate',tg_affiliated_hint:'Alte grupuri la care radio-ul este afiliat (rÄƒmÃ¢n ataÈ™ate la BS chiar È™i cÃ¢nd scan e oprit din statie)',
+    th_status:'Status',th_last_seen:'VÄƒzut',th_actions:'AcÈ›iuni',
     th_id:'ID',th_type:'Tip',th_caller:'Apelant',
-    th_dest:'Destinatar',th_speaker:'Vorbitor',th_duration:'Durată',
-    th_time:'Oră',th_activity:'Activitate',
-    last_heard_title:'Ultima Activitate',no_activity:'Nicio activitate încă',
+    th_dest:'Destinatar',th_speaker:'Vorbitor',th_duration:'DuratÄƒ',
+    th_time:'OrÄƒ',th_activity:'Activitate',
+    last_heard_title:'Ultima Activitate',no_activity:'Nicio activitate Ã®ncÄƒ',
     act_call_group:'Apel Grup',act_call_individual:'Apel P2P',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Kick',sds:'SDS',
-    call_group:'GRUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'URGENȚĂ',
-    emg_banner_title:'URGENȚĂ ACTIVĂ',integrations:'Integrări',integ_enabled:'Activat',integ_disabled:'Dezactivat',integ_error:'Eroare',system_sec:'Sistem',emg_chip:'URGENȚĂ',bs_label:'BS',emg_clear:'Anulează',confirm_clear_emergency:'Anulezi urgența pentru ISSI {issi}?',
-    confirm_kick:'Kick ISSI {issi}?\nTerminalul va fi deînregistrat și forțat să se reconecteze.',
-    dgna:'DGNA',dgna_title:'Atribuire dinamică de grup',dgna_modal_title:'⬡ Atribuire dinamică de grup',dgna_issi:'ISSI terminal',dgna_current:'Grupuri curente',dgna_gssi:'Grup (GSSI)',dgna_assign:'Atribuie',dgna_deassign:'Retrage',
-    confirm_restart:'Repornire FlowStation?\nToate apelurile active vor fi întrerupte.',
-    confirm_shutdown:'Oprire FlowStation?\nServiciul se va opri și trebuie repornit manual.',
+    call_group:'GRUP',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'URGENÈšÄ‚',
+    emg_banner_title:'URGENÈšÄ‚ ACTIVÄ‚',integrations:'IntegrÄƒri',integ_enabled:'Activat',integ_disabled:'Dezactivat',integ_error:'Eroare',system_sec:'Sistem',emg_chip:'URGENÈšÄ‚',bs_label:'BS',emg_clear:'AnuleazÄƒ',confirm_clear_emergency:'Anulezi urgenÈ›a pentru ISSI {issi}?',
+    confirm_kick:'Kick ISSI {issi}?\nTerminalul va fi deÃ®nregistrat È™i forÈ›at sÄƒ se reconecteze.',
+    dgna:'DGNA',dgna_title:'Atribuire dinamicÄƒ de grup',dgna_modal_title:'â¬¡ Atribuire dinamicÄƒ de grup',dgna_issi:'ISSI terminal',dgna_current:'Grupuri curente',dgna_gssi:'Grup (GSSI)',dgna_assign:'Atribuie',dgna_deassign:'Retrage',
+    confirm_restart:'Repornire FlowStation?\nToate apelurile active vor fi Ã®ntrerupte.',
+    confirm_shutdown:'Oprire FlowStation?\nServiciul se va opri È™i trebuie repornit manual.',
     confirm_logout:'Deconectare?',
-    saved:'✓ Salvat — repornire pentru aplicare.',save_fail:'✗ Salvare eșuată',conn_error:'Eroare de conexiune.',
-    update:'Update',update_available:'Actualizare disponibilă',update_title:'Update OTA — github.com/razvanzeces/flowstation',
-    update_confirm:'Descarcă ultima versiune din main și recompilează?\nServiciul va reporni automat.',
-    update_running:'Se actualizează… nu închide fereastra.',
-    update_done_ok:'✓ Update finalizat. Se repornește…',
-    update_done_err:'✗ Update eșuat. Vezi logul de mai jos.',
-    update_close:'Închide',
+    saved:'âœ“ Salvat â€” repornire pentru aplicare.',save_fail:'âœ— Salvare eÈ™uatÄƒ',conn_error:'Eroare de conexiune.',
+    update:'Update',update_available:'Actualizare disponibilÄƒ',update_title:'Update OTA â€” github.com/razvanzeces/flowstation',
+    update_confirm:'DescarcÄƒ ultima versiune din main È™i recompileazÄƒ?\nServiciul va reporni automat.',
+    update_running:'Se actualizeazÄƒâ€¦ nu Ã®nchide fereastra.',
+    update_done_ok:'âœ“ Update finalizat. Se reporneÈ™teâ€¦',
+    update_done_err:'âœ— Update eÈ™uat. Vezi logul de mai jos.',
+    update_close:'ÃŽnchide',
     system:'Sistem',sys_info:'Info Sistem',sys_hostname:'Hostname',sys_uptime:'Uptime',
     sys_os:'OS',sys_version:'Versiune FS',sys_config:'Config Activ',
-    sys_cpu:'CPU',sys_cpu_load:'Încărcare CPU',sys_ram:'RAM',sys_temp:'Temp CPU',
-    wifi:'WiFi',wifi_status:'Conexiunea curentă',wifi_saved:'Rețele salvate',wifi_visible:'Rețele disponibile',wifi_loading:'Se încarcă…',wifi_scanning:'Se scanează…',wifi_no_device:'Niciun dispozitiv WiFi detectat.',wifi_radio_disabled:'Radioul WiFi este dezactivat.',wifi_not_connected:'Neconectat la nicio rețea.',wifi_no_saved:'Nicio rețea salvată.',wifi_no_networks:'Nicio rețea în rază.',wifi_ssid:'Rețea',wifi_signal:'Semnal',wifi_ip:'Adresă IP',wifi_actions:'Acțiuni',wifi_disconnect:'Deconectează',wifi_connect:'Conectează',wifi_connect_to:'Conectează la',wifi_connecting:'Se conectează…',wifi_connected:'CONECTAT',wifi_connected_ok:'Conectat.',wifi_saved_tag:'SALVAT',wifi_open:'DESCHIS',wifi_forget:'Uită',wifi_confirm_forget:'Uită rețeaua',wifi_password:'Parolă',wifi_hidden:'Rețea ascunsă (SSID nedifuzat)',wifi_add_hidden:'Rețea ascunsă',wifi_scan:'Scanează',wifi_refresh:'Reîncarcă',wifi_radio_off:'Dezactivează WiFi',wifi_radio_on:'Activează WiFi',wifi_warn_lose_access:'Dacă ești conectat la dashboard prin WiFi, schimbarea rețelei te poate deconecta temporar. Asigură-te că ai o cale alternativă (Ethernet sau rețea de încredere).',wifi_err_no_ssid:'SSID necesar',cancel:'Anulează',sys_sensors:'Senzori Hardware Gazdă',sys_sensors_empty:'Niciun senzor detectat.',sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
-    profile_edit_title:'Editare Profil Config',profile_edit_btn:'Editează',
-    profile_edit_save_ok:'✓ Salvat',profile_edit_save_fail:'✗ Salvare eșuată',
-    sys_profiles:'Profile Config',sys_activate:'Activează & Repornire',
-    sys_active_badge:'ACTIV',sys_no_profiles:'Niciun profil .toml găsit în directorul config.',
-    sys_activate_confirm:'Comutare la profilul "{name}" și repornire?\nConfig-ul curent va fi salvat.',
-    sys_title:'Sistem',sys_sec_status:'Stare',sys_sec_host:'Gazdă',sys_sec_radio:'Hardware radio',sys_sec_sensors:'Senzori',sys_sec_profiles:'Profiluri',sys_sec_sds:'Difuzare SDS',sys_refresh:'Reîncarcă',sys_probe:'Sondează',sys_temp_hot:'FIERBINTE',sys_temp_warm:'Cald',sys_temp_ok:'OK',
+    sys_cpu:'CPU',sys_cpu_load:'ÃŽncÄƒrcare CPU',sys_ram:'RAM',sys_temp:'Temp CPU',
+    wifi:'WiFi',wifi_status:'Conexiunea curentÄƒ',wifi_saved:'ReÈ›ele salvate',wifi_visible:'ReÈ›ele disponibile',wifi_loading:'Se Ã®ncarcÄƒâ€¦',wifi_scanning:'Se scaneazÄƒâ€¦',wifi_no_device:'Niciun dispozitiv WiFi detectat.',wifi_radio_disabled:'Radioul WiFi este dezactivat.',wifi_not_connected:'Neconectat la nicio reÈ›ea.',wifi_no_saved:'Nicio reÈ›ea salvatÄƒ.',wifi_no_networks:'Nicio reÈ›ea Ã®n razÄƒ.',wifi_ssid:'ReÈ›ea',wifi_signal:'Semnal',wifi_ip:'AdresÄƒ IP',wifi_actions:'AcÈ›iuni',wifi_disconnect:'DeconecteazÄƒ',wifi_connect:'ConecteazÄƒ',wifi_connect_to:'ConecteazÄƒ la',wifi_connecting:'Se conecteazÄƒâ€¦',wifi_connected:'CONECTAT',wifi_connected_ok:'Conectat.',wifi_saved_tag:'SALVAT',wifi_open:'DESCHIS',wifi_forget:'UitÄƒ',wifi_confirm_forget:'UitÄƒ reÈ›eaua',wifi_password:'ParolÄƒ',wifi_hidden:'ReÈ›ea ascunsÄƒ (SSID nedifuzat)',wifi_add_hidden:'ReÈ›ea ascunsÄƒ',wifi_scan:'ScaneazÄƒ',wifi_refresh:'ReÃ®ncarcÄƒ',wifi_radio_off:'DezactiveazÄƒ WiFi',wifi_radio_on:'ActiveazÄƒ WiFi',wifi_warn_lose_access:'DacÄƒ eÈ™ti conectat la dashboard prin WiFi, schimbarea reÈ›elei te poate deconecta temporar. AsigurÄƒ-te cÄƒ ai o cale alternativÄƒ (Ethernet sau reÈ›ea de Ã®ncredere).',wifi_err_no_ssid:'SSID necesar',cancel:'AnuleazÄƒ',sys_sensors:'Senzori Hardware GazdÄƒ',sys_sensors_empty:'Niciun senzor detectat.',sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-refresh 5s',
+    profile_edit_title:'Editare Profil Config',profile_edit_btn:'EditeazÄƒ',
+    profile_edit_save_ok:'âœ“ Salvat',profile_edit_save_fail:'âœ— Salvare eÈ™uatÄƒ',
+    sys_profiles:'Profile Config',sys_activate:'ActiveazÄƒ & Repornire',
+    sys_active_badge:'ACTIV',sys_no_profiles:'Niciun profil .toml gÄƒsit Ã®n directorul config.',
+    sys_activate_confirm:'Comutare la profilul "{name}" È™i repornire?\nConfig-ul curent va fi salvat.',
+    sys_title:'Sistem',sys_sec_status:'Stare',sys_sec_host:'GazdÄƒ',sys_sec_radio:'Hardware radio',sys_sec_sensors:'Senzori',sys_sec_profiles:'Profiluri',sys_sec_sds:'Difuzare SDS',sys_refresh:'ReÃ®ncarcÄƒ',sys_probe:'SondeazÄƒ',sys_temp_hot:'FIERBINTE',sys_temp_warm:'Cald',sys_temp_ok:'OK',
     sys_bts:'Conexiune BTS',
     telegram:'Telegram',tg_title:'Alerte Telegram',
-    tg_help:'Primește mesaje Telegram instant când se întâmplă ceva pe stație — un radio se conectează sau cade, backhaul-ul urcă/coboară, sosește o baliză de poziție, sau stack-ul logează un avertisment/eroare.',
-    tg_enabled:'Activează alertele Telegram',
-    tg_test:'Trimite test',tg_testing:'Se trimite testul…',tg_test_ok:'✓ Test trimis către {n} conversație(i)',
-    tg_howto_title:'Configurare — 4 pași',
-    tg_step1:'În Telegram, deschide @BotFather, trimite /newbot și urmează pașii. Copiază token-ul botului.',
-    tg_step2:'Lipește token-ul mai jos și apasă Verifică — ar trebui să vezi @username-ul botului tău.',
-    tg_step3:'Deschide o conversație cu botul (sau adaugă-l într-un grup) și trimite-i orice mesaj, ex. /start.',
-    tg_step4:'Apasă „Detectează Chat ID", adaugă conversația la destinatari, apoi Salvează. Folosește „Trimite test" pentru confirmare.',
+    tg_help:'PrimeÈ™te mesaje Telegram instant cÃ¢nd se Ã®ntÃ¢mplÄƒ ceva pe staÈ›ie â€” un radio se conecteazÄƒ sau cade, backhaul-ul urcÄƒ/coboarÄƒ, soseÈ™te o balizÄƒ de poziÈ›ie, sau stack-ul logeazÄƒ un avertisment/eroare.',
+    tg_enabled:'ActiveazÄƒ alertele Telegram',
+    tg_test:'Trimite test',tg_testing:'Se trimite testulâ€¦',tg_test_ok:'âœ“ Test trimis cÄƒtre {n} conversaÈ›ie(i)',
+    tg_howto_title:'Configurare â€” 4 paÈ™i',
+    tg_step1:'ÃŽn Telegram, deschide @BotFather, trimite /newbot È™i urmeazÄƒ paÈ™ii. CopiazÄƒ token-ul botului.',
+    tg_step2:'LipeÈ™te token-ul mai jos È™i apasÄƒ VerificÄƒ â€” ar trebui sÄƒ vezi @username-ul botului tÄƒu.',
+    tg_step3:'Deschide o conversaÈ›ie cu botul (sau adaugÄƒ-l Ã®ntr-un grup) È™i trimite-i orice mesaj, ex. /start.',
+    tg_step4:'ApasÄƒ â€žDetecteazÄƒ Chat ID", adaugÄƒ conversaÈ›ia la destinatari, apoi SalveazÄƒ. FoloseÈ™te â€žTrimite test" pentru confirmare.',
     tg_bot_title:'Token bot',
-    tg_bot_help:'Token-ul de la @BotFather arată ca 123456789:AAExempluToken. Este stocat mascat și nu mai e afișat integral.',
-    tg_verify:'Verifică',tg_verifying:'Se verifică…',
+    tg_bot_help:'Token-ul de la @BotFather aratÄƒ ca 123456789:AAExempluToken. Este stocat mascat È™i nu mai e afiÈ™at integral.',
+    tg_verify:'VerificÄƒ',tg_verifying:'Se verificÄƒâ€¦',
     tg_recipients_title:'Destinatari (Chat ID-uri)',
-    tg_recipients_help:'Fiecare alertă e trimisă către toți destinatarii. Un ID pozitiv e o conversație privată; unul negativ e un grup sau canal.',
-    tg_detect:'Detectează Chat ID',tg_detecting:'Se citesc mesajele recente…',
-    tg_detect_none:'Niciun mesaj recent. Trimite întâi un mesaj botului, apoi încearcă din nou.',
-    tg_detect_found:'Conversații care au scris botului — apasă Adaugă:',
-    tg_add:'Adaugă',tg_no_recipients:'Niciun destinatar încă.',tg_invalid_chat:'Introdu un Chat ID valid.',
+    tg_recipients_help:'Fiecare alertÄƒ e trimisÄƒ cÄƒtre toÈ›i destinatarii. Un ID pozitiv e o conversaÈ›ie privatÄƒ; unul negativ e un grup sau canal.',
+    tg_detect:'DetecteazÄƒ Chat ID',tg_detecting:'Se citesc mesajele recenteâ€¦',
+    tg_detect_none:'Niciun mesaj recent. Trimite Ã®ntÃ¢i un mesaj botului, apoi Ã®ncearcÄƒ din nou.',
+    tg_detect_found:'ConversaÈ›ii care au scris botului â€” apasÄƒ AdaugÄƒ:',
+    tg_add:'AdaugÄƒ',tg_no_recipients:'Niciun destinatar Ã®ncÄƒ.',tg_invalid_chat:'Introdu un Chat ID valid.',
     tg_categories_title:'Categorii de alerte',
     tg_cat_connect:'Radio conectat',tg_cat_disconnect:'Radio deconectat',
-    tg_cat_t351:'Radio căzut (fără răspuns T351)',tg_cat_lip:'Baliză poziție LIP/APRS',
+    tg_cat_t351:'Radio cÄƒzut (fÄƒrÄƒ rÄƒspuns T351)',tg_cat_lip:'BalizÄƒ poziÈ›ie LIP/APRS',
     tg_cat_backhaul:'Backhaul Brew up/down',tg_cat_logs:'Log critic (avertismente/erori)',
   },
   de:{
     bts_ip:'BTS-IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'Radios',calls:'Anrufe',lastheard:'Zuletzt Gehört',log:'Log',rf:'RF',health:'Health',asterisk:'Asterisk SIP',dapnet:'DAPNET',echolink:'EchoLink',echolink_title:'EchoLink',meshcom:'MeshCom',meshcom_title:'MeshCom',geoalarm:'GeoAlarm',geoalarm_title:'GeoAlarm',config:'Config',
+    stations:'Radios',calls:'Anrufe',lastheard:'Zuletzt GehÃ¶rt',log:'Log',rf:'RF',health:'Health',asterisk:'Asterisk SIP',dapnet:'DAPNET',echolink:'EchoLink',echolink_title:'EchoLink',meshcom:'MeshCom',meshcom_title:'MeshCom',geoalarm:'GeoAlarm',geoalarm_title:'GeoAlarm',config:'Config',
     sdslog:'SDS-Log',th_dir:'Ri.',th_from:'Von',th_to:'An',th_message:'Nachricht',no_sds:'Noch keine SDS-Nachrichten',sds_refresh:'Aktualisieren',
     rf_freq:'Mittenfrequenz',rf_rate:'Abtastrate',rf_rms:'RMS',rf_peak:'Spitze',rf_age:'Aufnahme',
-    rf_waiting:'wartet…',rf_live:'live',rf_stale:'veraltet',
+    rf_waiting:'wartetâ€¦',rf_live:'live',rf_stale:'veraltet',
     rf_visualizers:'Visualisierungen',rf_spectrum:'TX-DSP-Spektrum (vor PA)',rf_constellation:'TX-DSP-Konstellation',
-    rf_hint_spectrum:'live · 512-bin FFT',rf_hint_constellation:'π/4-DQPSK',
-    rf_waterfall:'TX-Spektrum-Wasserfall',rf_hint_waterfall:'rollend · viridis',
-    rf_quality:'Signalqualität',rf_hint_quality:'gemessen vor PA · aus selbem DSP-Snapshot',
-    rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'Trägerleckage',rf_obw:'Belegte BW (99%)',
+    rf_hint_spectrum:'live Â· 512-bin FFT',rf_hint_constellation:'Ï€/4-DQPSK',
+    rf_waterfall:'TX-Spektrum-Wasserfall',rf_hint_waterfall:'rollend Â· viridis',
+    rf_quality:'SignalqualitÃ¤t',rf_hint_quality:'gemessen vor PA Â· aus selbem DSP-Snapshot',
+    rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'TrÃ¤gerleckage',rf_obw:'Belegte BW (99%)',
     rf_dc:'DC-Offset (I/Q)',rf_iqa:'IQ-Amplitudenungleichgewicht',rf_iqp:'IQ-Phasenungleichgewicht',
     rf_hw_health:'Hardware-Zustand',rf_hint_health:'alle 5s abgefragt',
-    rf_temp:'SDR-Temperatur',rf_tx_gain:'TX-Verstärkung (aktuell)',rf_rx_gain:'RX-Verstärkung (aktuell)',
-    rf_temp_cold:'kalt',rf_temp_nominal:'nominal',rf_temp_warm:'warm',rf_temp_hot:'heiß',rf_temp_na:'kein Sensor',
-    rf_no_gains:'nicht verfügbar',rf_just_now:'gerade eben',
+    rf_temp:'SDR-Temperatur',rf_tx_gain:'TX-VerstÃ¤rkung (aktuell)',rf_rx_gain:'RX-VerstÃ¤rkung (aktuell)',
+    rf_temp_cold:'kalt',rf_temp_nominal:'nominal',rf_temp_warm:'warm',rf_temp_hot:'heiÃŸ',rf_temp_na:'kein Sensor',
+    rf_no_gains:'nicht verfÃ¼gbar',rf_just_now:'gerade eben',
 
-    asterisk_title:'Asterisk SIP',ast_configured:'Konfiguriert',ast_register:'REGISTER',ast_sip_listen:'SIP hört auf',
+    asterisk_title:'Asterisk SIP',ast_configured:'Konfiguriert',ast_register:'REGISTER',ast_sip_listen:'SIP hÃ¶rt auf',
     ast_remote:'Remote Asterisk',ast_rtp:'RTP-Ports',ast_codec:'Codec',ast_last_rx:'Letztes RX',
     ast_last_tx:'Letztes TX',ast_last_error:'Letzter Fehler',
-    dapnet_title:'DAPNET',dapnet_log:'DAPNET-Log',dapnet_routing:'Routing',dapnet_send:'DAPNET-Nachricht senden',dapnet_saved:'✓ Gespeichert',
+    dapnet_title:'DAPNET',dapnet_log:'DAPNET-Log',dapnet_routing:'Routing',dapnet_send:'DAPNET-Nachricht senden',dapnet_saved:'âœ“ Gespeichert',
     terminals:'Radios',registered:'registriert',
     active_calls:'Aktive Anrufe',circuits:'Schaltkreise aktiv',
     registered_terminals:'Registrierte Radios',
     no_terminals:'Keine Radios registriert',no_calls:'Keine aktiven Anrufe',
     live_log:'Live-Log',autoscroll:'Auto-Scroll',filter_all:'Alle',
-    clear:'Löschen',export:'Exportieren',restart:'Neustart',shutdown:'Herunterfahren',save:'Speichern',
-    cfg_sec_configuration:'Konfiguration',cfg_sec_access:'Zugriffskontrolle',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI-Whitelist',whitelist_add:'ISSI hinzufügen',whitelist_empty:'Liste leer — offenes Netz (jedes Funkgerät darf sich anmelden).',
-    whitelist_help:'Ist die Liste leer, darf sich jedes Funkgerät anmelden (offenes Netz). Bei Einträgen werden nur die gelisteten ISSIs akzeptiert; alle anderen werden abgewiesen. Änderungen wirken sofort und bleiben nach Neustart erhalten.',
-    whitelist_enforced:'AKTIV',whitelist_open:'OFFEN',whitelist_invalid:'Gültige ISSI eingeben (1–16777215).',
-    wx_title:'WX / METAR-Dienst',wx_help:'Integrierter Wetterdienst. Funkgeräte senden eine SDS wie "METAR LROP" an die Dienst-ISSI und erhalten einen dekodierten Bericht. Optional automatisches Senden des METAR einer festen Station an eine ISSI oder Gruppe in Intervallen. Daten von aviationweather.gov.',
+    clear:'LÃ¶schen',export:'Exportieren',restart:'Neustart',shutdown:'Herunterfahren',save:'Speichern',
+    cfg_sec_configuration:'Konfiguration',cfg_sec_access:'Zugriffskontrolle',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI-Whitelist',whitelist_add:'ISSI hinzufÃ¼gen',whitelist_empty:'Liste leer â€” offenes Netz (jedes FunkgerÃ¤t darf sich anmelden).',
+    whitelist_help:'Ist die Liste leer, darf sich jedes FunkgerÃ¤t anmelden (offenes Netz). Bei EintrÃ¤gen werden nur die gelisteten ISSIs akzeptiert; alle anderen werden abgewiesen. Ã„nderungen wirken sofort und bleiben nach Neustart erhalten.',
+    whitelist_enforced:'AKTIV',whitelist_open:'OFFEN',whitelist_invalid:'GÃ¼ltige ISSI eingeben (1â€“16777215).',
+    wx_title:'WX / METAR-Dienst',wx_help:'Integrierter Wetterdienst. FunkgerÃ¤te senden eine SDS wie "METAR LROP" an die Dienst-ISSI und erhalten einen dekodierten Bericht. Optional automatisches Senden des METAR einer festen Station an eine ISSI oder Gruppe in Intervallen. Daten von aviationweather.gov.',
     wx_enabled:'METAR-Antwort auf Anfrage aktivieren',wx_service_issi:'Dienst-ISSI',wx_periodic_enabled:'Periodisches Senden aktivieren',
     wx_periodic_icao:'Stations-ICAO',wx_periodic_dest:'Ziel',wx_periodic_isgroup:'Ziel ist Gruppe',wx_periodic_isgroup_hint:'(GSSI statt einzelner ISSI)',
-    wx_periodic_interval:'Intervall (Sekunden)',wx_interval_hint:'Mindestens 300 s (5 Min), um die Wetter-API nicht zu überlasten.',wx_periodic_incomplete:'Stations-ICAO und Ziel für den periodischen Modus setzen.',
-    live_sds_desc:'Sendet eine Textnachricht an alle Funkgeräte der Zelle, wiederholt im Home-Mode-Display-Intervall.',
-    live_sds_text:'Nachrichtentext (max. 251 Zeichen)',live_sds_repeat:'Wiederh. (0=∞)',live_sds_send:'Senden',
-    live_sds_clear_all:'Alle löschen',live_sds_empty:'Keine aktiven Broadcasts.',
-    live_sds_sent:'gesendet',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
-    fallback_title:'⚠ FALLBACK-KONFIGURATION AKTIV — Primäre Konfiguration konnte nicht geladen werden',
-    sds_title:'⬡ SDS-Nachricht senden',sds_dest:'Ziel-ISSI',
+    wx_periodic_interval:'Intervall (Sekunden)',wx_interval_hint:'Mindestens 300 s (5 Min), um die Wetter-API nicht zu Ã¼berlasten.',wx_periodic_incomplete:'Stations-ICAO und Ziel fÃ¼r den periodischen Modus setzen.',
+    live_sds_desc:'Sendet eine Textnachricht an alle FunkgerÃ¤te der Zelle, wiederholt im Home-Mode-Display-Intervall.',
+    live_sds_text:'Nachrichtentext (max. 251 Zeichen)',live_sds_repeat:'Wiederh. (0=âˆž)',live_sds_send:'Senden',
+    live_sds_clear_all:'Alle lÃ¶schen',live_sds_empty:'Keine aktiven Broadcasts.',
+    live_sds_sent:'gesendet',live_sds_times:'Ã—',live_sds_forever:'âˆž',live_sds_delete:'âœ•',
+    fallback_title:'âš  FALLBACK-KONFIGURATION AKTIV â€” PrimÃ¤re Konfiguration konnte nicht geladen werden',
+    sds_title:'â¬¡ SDS-Nachricht senden',sds_dest:'Ziel-ISSI',
     sds_callout_enable:'TPG2200 Call-Out / Alarm senden',
     sds_callout_source:'Source ISSI',
     sds_callout_incident:'Vorfallnummer',
     sds_callout_text:'Alarmtext',
     sds_callout_raw:'Raw Hex Payload optional',
-    sds_callout_help:'Vorfall 1-15 nutzen die bestätigte Byte-Formel (N << 4) | 0x01: 1=11, 2=21, 3=31, 4=41. Vorfall 16-256 nutzen den erweiterten Ein-Byte-Selector. Raw Hex überschreibt die automatische Payload.',
+    sds_callout_help:'Vorfall 1-15 nutzen die bestÃ¤tigte Byte-Formel (N << 4) | 0x01: 1=11, 2=21, 3=31, 4=41. Vorfall 16-256 nutzen den erweiterten Ein-Byte-Selector. Raw Hex Ã¼berschreibt die automatische Payload.',
     sds_msg_label:'Nachricht',cancel:'Abbrechen',send:'Senden',
     th_issi:'ISSI',th_groups:'Gruppen',th_ee:'Energiesparen',th_signal:'Signal',
     th_status:'Status',th_last_seen:'Zuletzt',th_actions:'Aktionen',
     th_id:'ID',th_type:'Typ',th_caller:'Anrufer',
     th_dest:'Ziel',th_speaker:'Sprecher',th_duration:'Dauer',
-    th_time:'Zeit',th_activity:'Aktivität',
-    last_heard_title:'Zuletzt Gehört',no_activity:'Noch keine Aktivität',
+    th_time:'Zeit',th_activity:'AktivitÃ¤t',
+    last_heard_title:'Zuletzt GehÃ¶rt',no_activity:'Noch keine AktivitÃ¤t',
     act_call_group:'Gruppenruf',act_call_individual:'P2P-Ruf',act_sds:'SDS',
     online_badge:'ONLINE',kick:'Entfernen',sds:'SDS',
     call_group:'GRUPPE',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'NOTRUF',
-    emg_banner_title:'NOTFALL AKTIV',integrations:'Integrationen',integ_enabled:'Aktiviert',integ_disabled:'Deaktiviert',integ_error:'Fehler',system_sec:'System',emg_chip:'NOTFALL',bs_label:'BS',emg_clear:'Löschen',confirm_clear_emergency:'Notfall für ISSI {issi} löschen?',
+    emg_banner_title:'NOTFALL AKTIV',integrations:'Integrationen',integ_enabled:'Aktiviert',integ_disabled:'Deaktiviert',integ_error:'Fehler',system_sec:'System',emg_chip:'NOTFALL',bs_label:'BS',emg_clear:'LÃ¶schen',confirm_clear_emergency:'Notfall fÃ¼r ISSI {issi} lÃ¶schen?',
     confirm_kick:'ISSI {issi} entfernen?\nDas Terminal wird abgemeldet und zur Neuanmeldung gezwungen.',
-    dgna:'DGNA',dgna_title:'Dynamische Gruppenzuweisung',dgna_modal_title:'⬡ Dynamische Gruppenzuweisung',dgna_issi:'Terminal-ISSI',dgna_current:'Aktuelle Gruppen',dgna_gssi:'Gruppe (GSSI)',dgna_assign:'Zuweisen',dgna_deassign:'Entfernen',
+    dgna:'DGNA',dgna_title:'Dynamische Gruppenzuweisung',dgna_modal_title:'â¬¡ Dynamische Gruppenzuweisung',dgna_issi:'Terminal-ISSI',dgna_current:'Aktuelle Gruppen',dgna_gssi:'Gruppe (GSSI)',dgna_assign:'Zuweisen',dgna_deassign:'Entfernen',
     confirm_restart:'FlowStation neu starten?\nAlle aktiven Anrufe werden beendet.',
     confirm_shutdown:'FlowStation herunterfahren?\nDer Dienst wird gestoppt und muss manuell neu gestartet werden.',
     confirm_logout:'Abmelden?',
-    saved:'✓ Gespeichert — Neustart zum Anwenden.',save_fail:'✗ Fehler beim Speichern',conn_error:'Verbindungsfehler.',
-    update:'Update',update_available:'Update verfügbar',update_title:'OTA-Update — github.com/razvanzeces/flowstation',
+    saved:'âœ“ Gespeichert â€” Neustart zum Anwenden.',save_fail:'âœ— Fehler beim Speichern',conn_error:'Verbindungsfehler.',
+    update:'Update',update_available:'Update verfÃ¼gbar',update_title:'OTA-Update â€” github.com/razvanzeces/flowstation',
     update_confirm:'Neueste Version von main holen und neu bauen?\nDer Dienst startet automatisch neu.',
-    update_running:'Aktualisierung läuft… Fenster nicht schließen.',
-    update_done_ok:'✓ Update abgeschlossen. Neustart…',
-    update_done_err:'✗ Update fehlgeschlagen. Siehe Log unten.',
-    update_close:'Schließen',
+    update_running:'Aktualisierung lÃ¤uftâ€¦ Fenster nicht schlieÃŸen.',
+    update_done_ok:'âœ“ Update abgeschlossen. Neustartâ€¦',
+    update_done_err:'âœ— Update fehlgeschlagen. Siehe Log unten.',
+    update_close:'SchlieÃŸen',
     system:'System',sys_info:'Systeminfo',sys_hostname:'Hostname',sys_uptime:'Laufzeit',
     sys_os:'OS',sys_version:'FS-Version',sys_config:'Aktive Konfig',
     sys_cpu:'CPU',sys_cpu_load:'CPU-Auslastung',sys_ram:'RAM',sys_temp:'CPU-Temp',
-    wifi:'WLAN',wifi_status:'Aktuelle Verbindung',wifi_saved:'Gespeicherte Netzwerke',wifi_visible:'Verfügbare Netzwerke',wifi_loading:'Wird geladen…',wifi_scanning:'Suche läuft…',wifi_no_device:'Kein WLAN-Gerät erkannt.',wifi_radio_disabled:'WLAN-Funk ist deaktiviert.',wifi_not_connected:'Mit keinem Netzwerk verbunden.',wifi_no_saved:'Keine gespeicherten Netzwerke.',wifi_no_networks:'Keine Netzwerke in Reichweite.',wifi_ssid:'Netzwerk',wifi_signal:'Signal',wifi_ip:'IP-Adresse',wifi_actions:'Aktionen',wifi_disconnect:'Trennen',wifi_connect:'Verbinden',wifi_connect_to:'Verbinden mit',wifi_connecting:'Verbinde…',wifi_connected:'VERBUNDEN',wifi_connected_ok:'Verbunden.',wifi_saved_tag:'GESPEICHERT',wifi_open:'OFFEN',wifi_forget:'Vergessen',wifi_confirm_forget:'Netzwerk vergessen',wifi_password:'Passwort',wifi_hidden:'Verstecktes Netzwerk (SSID nicht gesendet)',wifi_add_hidden:'Verstecktes Netzwerk',wifi_scan:'Suchen',wifi_refresh:'Aktualisieren',wifi_radio_off:'WLAN deaktivieren',wifi_radio_on:'WLAN aktivieren',wifi_warn_lose_access:'Wenn Sie über WLAN mit dem Dashboard verbunden sind, kann ein Netzwerkwechsel die Verbindung trennen. Stellen Sie sicher, dass Sie einen alternativen Zugang haben.',wifi_err_no_ssid:'SSID erforderlich',cancel:'Abbrechen',sys_sensors:'Host-Hardware-Sensoren',sys_sensors_empty:'Keine Sensoren erkannt.',sys_rf:'RF-Hardware (SoapySDR)',sys_autorefresh:'Auto-Aktualisierung 5s',
+    wifi:'WLAN',wifi_status:'Aktuelle Verbindung',wifi_saved:'Gespeicherte Netzwerke',wifi_visible:'VerfÃ¼gbare Netzwerke',wifi_loading:'Wird geladenâ€¦',wifi_scanning:'Suche lÃ¤uftâ€¦',wifi_no_device:'Kein WLAN-GerÃ¤t erkannt.',wifi_radio_disabled:'WLAN-Funk ist deaktiviert.',wifi_not_connected:'Mit keinem Netzwerk verbunden.',wifi_no_saved:'Keine gespeicherten Netzwerke.',wifi_no_networks:'Keine Netzwerke in Reichweite.',wifi_ssid:'Netzwerk',wifi_signal:'Signal',wifi_ip:'IP-Adresse',wifi_actions:'Aktionen',wifi_disconnect:'Trennen',wifi_connect:'Verbinden',wifi_connect_to:'Verbinden mit',wifi_connecting:'Verbindeâ€¦',wifi_connected:'VERBUNDEN',wifi_connected_ok:'Verbunden.',wifi_saved_tag:'GESPEICHERT',wifi_open:'OFFEN',wifi_forget:'Vergessen',wifi_confirm_forget:'Netzwerk vergessen',wifi_password:'Passwort',wifi_hidden:'Verstecktes Netzwerk (SSID nicht gesendet)',wifi_add_hidden:'Verstecktes Netzwerk',wifi_scan:'Suchen',wifi_refresh:'Aktualisieren',wifi_radio_off:'WLAN deaktivieren',wifi_radio_on:'WLAN aktivieren',wifi_warn_lose_access:'Wenn Sie Ã¼ber WLAN mit dem Dashboard verbunden sind, kann ein Netzwerkwechsel die Verbindung trennen. Stellen Sie sicher, dass Sie einen alternativen Zugang haben.',wifi_err_no_ssid:'SSID erforderlich',cancel:'Abbrechen',sys_sensors:'Host-Hardware-Sensoren',sys_sensors_empty:'Keine Sensoren erkannt.',sys_rf:'RF-Hardware (SoapySDR)',sys_autorefresh:'Auto-Aktualisierung 5s',
     profile_edit_title:'Konfigprofil bearbeiten',profile_edit_btn:'Bearbeiten',
-    profile_edit_save_ok:'✓ Gespeichert',profile_edit_save_fail:'✗ Speichern fehlgeschlagen',
+    profile_edit_save_ok:'âœ“ Gespeichert',profile_edit_save_fail:'âœ— Speichern fehlgeschlagen',
     sys_profiles:'Konfigprofile',sys_activate:'Aktivieren & Neustart',
     sys_active_badge:'AKTIV',sys_no_profiles:'Keine .toml-Profile im Konfigverzeichnis gefunden.',
     sys_activate_confirm:'Zum Profil "{name}" wechseln und neu starten?\nAktuelle Konfig wird gesichert.',
-    sys_title:'System',sys_sec_status:'Status',sys_sec_host:'Host',sys_sec_radio:'Funk-Hardware',sys_sec_sensors:'Sensoren',sys_sec_profiles:'Profile',sys_sec_sds:'SDS-Rundsendung',sys_refresh:'Aktualisieren',sys_probe:'Prüfen',sys_temp_hot:'HEISS',sys_temp_warm:'Warm',sys_temp_ok:'OK',
+    sys_title:'System',sys_sec_status:'Status',sys_sec_host:'Host',sys_sec_radio:'Funk-Hardware',sys_sec_sensors:'Sensoren',sys_sec_profiles:'Profile',sys_sec_sds:'SDS-Rundsendung',sys_refresh:'Aktualisieren',sys_probe:'PrÃ¼fen',sys_temp_hot:'HEISS',sys_temp_warm:'Warm',sys_temp_ok:'OK',
     sys_bts:'BTS-Verbindung',
   },
   es:{
-    bts_ip:'IP BTS',offline:'SIN CONEXIÓN',online:'EN LÍNEA',
-    brew_online:'EN LÍNEA',brew_offline:'SIN CONEXIÓN',
-    stations:'Radios',calls:'Llamadas',lastheard:'Última Actividad',log:'Log',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Config',
-    sdslog:'Registro SDS',th_dir:'Dir',th_from:'De',th_to:'Para',th_message:'Mensaje',no_sds:'Aún no hay mensajes SDS',sds_refresh:'Actualizar',
+    bts_ip:'IP BTS',offline:'SIN CONEXIÃ“N',online:'EN LÃNEA',
+    brew_online:'EN LÃNEA',brew_offline:'SIN CONEXIÃ“N',
+    stations:'Radios',calls:'Llamadas',lastheard:'Ãšltima Actividad',log:'Log',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Config',
+    sdslog:'Registro SDS',th_dir:'Dir',th_from:'De',th_to:'Para',th_message:'Mensaje',no_sds:'AÃºn no hay mensajes SDS',sds_refresh:'Actualizar',
     rf_freq:'Frecuencia central',rf_rate:'Tasa de muestreo',rf_rms:'RMS',rf_peak:'Pico',rf_age:'Captura',
-    rf_waiting:'esperando…',rf_live:'en vivo',rf_stale:'obsoleto',
-    rf_visualizers:'Visualizadores',rf_spectrum:'Espectro TX DSP (pre-PA)',rf_constellation:'Constelación TX DSP',
-    rf_hint_spectrum:'en vivo · FFT 512-bin',rf_hint_constellation:'π/4-DQPSK',
-    rf_waterfall:'Cascada Espectro TX',rf_hint_waterfall:'desplazándose · viridis',
-    rf_quality:'Calidad de Señal',rf_hint_quality:'medido pre-PA · del mismo snapshot DSP',
+    rf_waiting:'esperandoâ€¦',rf_live:'en vivo',rf_stale:'obsoleto',
+    rf_visualizers:'Visualizadores',rf_spectrum:'Espectro TX DSP (pre-PA)',rf_constellation:'ConstelaciÃ³n TX DSP',
+    rf_hint_spectrum:'en vivo Â· FFT 512-bin',rf_hint_constellation:'Ï€/4-DQPSK',
+    rf_waterfall:'Cascada Espectro TX',rf_hint_waterfall:'desplazÃ¡ndose Â· viridis',
+    rf_quality:'Calidad de SeÃ±al',rf_hint_quality:'medido pre-PA Â· del mismo snapshot DSP',
     rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'Fuga portadora',rf_obw:'BW ocupada (99%)',
     rf_dc:'Offset DC (I/Q)',rf_iqa:'Desequilibrio amplitud IQ',rf_iqp:'Desequilibrio fase IQ',
     rf_hw_health:'Estado Hardware',rf_hint_health:'consultado cada 5s',
     rf_temp:'Temperatura SDR',rf_tx_gain:'Ganancia TX (real)',rf_rx_gain:'Ganancia RX (real)',
-    rf_temp_cold:'frío',rf_temp_nominal:'nominal',rf_temp_warm:'caliente',rf_temp_hot:'muy caliente',rf_temp_na:'sin sensor',
+    rf_temp_cold:'frÃ­o',rf_temp_nominal:'nominal',rf_temp_warm:'caliente',rf_temp_hot:'muy caliente',rf_temp_na:'sin sensor',
     rf_no_gains:'no disponible',rf_just_now:'ahora',
 
     terminals:'Radios',registered:'registrados',
@@ -4343,189 +4348,189 @@ const LANGS={
     no_terminals:'No hay radios registrados',no_calls:'No hay llamadas activas',
     live_log:'Log en Vivo',autoscroll:'Auto-desplaz.',filter_all:'Todos',
     clear:'Limpiar',export:'Exportar',restart:'Reiniciar',shutdown:'Apagar',save:'Guardar',
-    cfg_sec_configuration:'Configuración',cfg_sec_access:'Control de acceso',cfg_sec_wx:'WX / METAR',whitelist_title:'Lista blanca ISSI',whitelist_add:'Añadir ISSI',whitelist_empty:'Lista vacía — red abierta (cualquier radio puede registrarse).',
-    whitelist_help:'Cuando la lista está vacía, cualquier radio puede registrarse (red abierta). Con entradas, solo se aceptan los ISSI listados; el resto se rechazan. Los cambios se aplican al instante y persisten tras reiniciar.',
-    whitelist_enforced:'ACTIVA',whitelist_open:'ABIERTA',whitelist_invalid:'Introduce un ISSI válido (1–16777215).',
-    wx_title:'Servicio WX / METAR',wx_help:'Servicio meteorológico integrado. Las radios envían un SDS como "METAR LROP" al ISSI del servicio y reciben un informe decodificado. Opcionalmente envía automáticamente el METAR de una estación fija a un ISSI o grupo a intervalos. Datos de aviationweather.gov.',
-    wx_enabled:'Activar respuesta METAR a petición',wx_service_issi:'ISSI del servicio',wx_periodic_enabled:'Activar envío periódico',
-    wx_periodic_icao:'ICAO de estación',wx_periodic_dest:'Destino',wx_periodic_isgroup:'El destino es grupo',wx_periodic_isgroup_hint:'(GSSI en vez de ISSI individual)',
-    wx_periodic_interval:'Intervalo (segundos)',wx_interval_hint:'Mínimo 300 s (5 min) para no saturar la API meteorológica.',wx_periodic_incomplete:'Indica ICAO de estación y destino para el modo periódico.',
-    live_sds_desc:'Transmite un mensaje de texto a todos los radios de la celda, repitiéndose al intervalo de Home Mode Display.',
-    live_sds_text:'Texto del mensaje (máx. 251 caracteres)',live_sds_repeat:'Repetir (0=∞)',live_sds_send:'Difundir',
+    cfg_sec_configuration:'ConfiguraciÃ³n',cfg_sec_access:'Control de acceso',cfg_sec_wx:'WX / METAR',whitelist_title:'Lista blanca ISSI',whitelist_add:'AÃ±adir ISSI',whitelist_empty:'Lista vacÃ­a â€” red abierta (cualquier radio puede registrarse).',
+    whitelist_help:'Cuando la lista estÃ¡ vacÃ­a, cualquier radio puede registrarse (red abierta). Con entradas, solo se aceptan los ISSI listados; el resto se rechazan. Los cambios se aplican al instante y persisten tras reiniciar.',
+    whitelist_enforced:'ACTIVA',whitelist_open:'ABIERTA',whitelist_invalid:'Introduce un ISSI vÃ¡lido (1â€“16777215).',
+    wx_title:'Servicio WX / METAR',wx_help:'Servicio meteorolÃ³gico integrado. Las radios envÃ­an un SDS como "METAR LROP" al ISSI del servicio y reciben un informe decodificado. Opcionalmente envÃ­a automÃ¡ticamente el METAR de una estaciÃ³n fija a un ISSI o grupo a intervalos. Datos de aviationweather.gov.',
+    wx_enabled:'Activar respuesta METAR a peticiÃ³n',wx_service_issi:'ISSI del servicio',wx_periodic_enabled:'Activar envÃ­o periÃ³dico',
+    wx_periodic_icao:'ICAO de estaciÃ³n',wx_periodic_dest:'Destino',wx_periodic_isgroup:'El destino es grupo',wx_periodic_isgroup_hint:'(GSSI en vez de ISSI individual)',
+    wx_periodic_interval:'Intervalo (segundos)',wx_interval_hint:'MÃ­nimo 300 s (5 min) para no saturar la API meteorolÃ³gica.',wx_periodic_incomplete:'Indica ICAO de estaciÃ³n y destino para el modo periÃ³dico.',
+    live_sds_desc:'Transmite un mensaje de texto a todos los radios de la celda, repitiÃ©ndose al intervalo de Home Mode Display.',
+    live_sds_text:'Texto del mensaje (mÃ¡x. 251 caracteres)',live_sds_repeat:'Repetir (0=âˆž)',live_sds_send:'Difundir',
     live_sds_clear_all:'Borrar Todo',live_sds_empty:'No hay difusiones activas.',
-    live_sds_sent:'enviado',live_sds_times:'×',live_sds_forever:'∞',live_sds_delete:'✕',
-    fallback_title:'⚠ CONFIGURACIÓN DE RESERVA ACTIVA — No se pudo cargar la configuración principal',
-    sds_title:'⬡ Enviar Mensaje SDS',sds_dest:'ISSI Destino',
+    live_sds_sent:'enviado',live_sds_times:'Ã—',live_sds_forever:'âˆž',live_sds_delete:'âœ•',
+    fallback_title:'âš  CONFIGURACIÃ“N DE RESERVA ACTIVA â€” No se pudo cargar la configuraciÃ³n principal',
+    sds_title:'â¬¡ Enviar Mensaje SDS',sds_dest:'ISSI Destino',
     sds_msg_label:'Mensaje',cancel:'Cancelar',send:'Enviar',
-    th_issi:'ISSI',th_groups:'Grupos',th_ee:'Ahorro Energía',th_signal:'Señal',
+    th_issi:'ISSI',th_groups:'Grupos',th_ee:'Ahorro EnergÃ­a',th_signal:'SeÃ±al',
     th_status:'Estado',th_last_seen:'Visto',th_actions:'Acciones',
     th_id:'ID',th_type:'Tipo',th_caller:'Llamante',
-    th_dest:'Destino',th_speaker:'Hablante',th_duration:'Duración',
+    th_dest:'Destino',th_speaker:'Hablante',th_duration:'DuraciÃ³n',
     th_time:'Hora',th_activity:'Actividad',
-    last_heard_title:'Última Actividad',no_activity:'Sin actividad aún',
+    last_heard_title:'Ãšltima Actividad',no_activity:'Sin actividad aÃºn',
     act_call_group:'Llamada Grupo',act_call_individual:'Llamada P2P',act_sds:'SDS',
-    online_badge:'EN LÍNEA',kick:'Expulsar',sds:'SDS',
+    online_badge:'EN LÃNEA',kick:'Expulsar',sds:'SDS',
     call_group:'GRUPO',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'EMERGENCIA',
-    emg_banner_title:'EMERGENCIA ACTIVA',integrations:'Integraciones',integ_enabled:'Activado',integ_disabled:'Desactivado',integ_error:'Error',system_sec:'Sistema',emg_chip:'EMERGENCIA',bs_label:'BS',emg_clear:'Borrar',confirm_clear_emergency:'¿Borrar emergencia para ISSI {issi}?',
-    confirm_kick:'¿Expulsar ISSI {issi}?\nEl terminal será desregistrado y forzado a reconectarse.',
-    dgna:'DGNA',dgna_title:'Asignación dinámica de grupo',dgna_modal_title:'⬡ Asignación dinámica de grupo',dgna_issi:'ISSI del terminal',dgna_current:'Grupos actuales',dgna_gssi:'Grupo (GSSI)',dgna_assign:'Asignar',dgna_deassign:'Quitar',
-    confirm_restart:'¿Reiniciar FlowStation?\nTodas las llamadas activas se interrumpirán.',
-    confirm_shutdown:'¿Apagar FlowStation?\nEl servicio se detendrá y deberá reiniciarse manualmente.',
-    confirm_logout:'¿Cerrar sesión?',
-    saved:'✓ Guardado — reinicia para aplicar.',save_fail:'✗ Error al guardar',conn_error:'Error de conexión.',
-    update:'Update',update_available:'Actualización disponible',update_title:'Actualización OTA — github.com/razvanzeces/flowstation',
-    update_confirm:'¿Obtener la última versión de main y recompilar?\nEl servicio se reiniciará automáticamente.',
-    update_running:'Actualizando… no cierres esta ventana.',
-    update_done_ok:'✓ Actualización completa. Reiniciando…',
-    update_done_err:'✗ Actualización fallida. Ver log abajo.',
+    emg_banner_title:'EMERGENCIA ACTIVA',integrations:'Integraciones',integ_enabled:'Activado',integ_disabled:'Desactivado',integ_error:'Error',system_sec:'Sistema',emg_chip:'EMERGENCIA',bs_label:'BS',emg_clear:'Borrar',confirm_clear_emergency:'Â¿Borrar emergencia para ISSI {issi}?',
+    confirm_kick:'Â¿Expulsar ISSI {issi}?\nEl terminal serÃ¡ desregistrado y forzado a reconectarse.',
+    dgna:'DGNA',dgna_title:'AsignaciÃ³n dinÃ¡mica de grupo',dgna_modal_title:'â¬¡ AsignaciÃ³n dinÃ¡mica de grupo',dgna_issi:'ISSI del terminal',dgna_current:'Grupos actuales',dgna_gssi:'Grupo (GSSI)',dgna_assign:'Asignar',dgna_deassign:'Quitar',
+    confirm_restart:'Â¿Reiniciar FlowStation?\nTodas las llamadas activas se interrumpirÃ¡n.',
+    confirm_shutdown:'Â¿Apagar FlowStation?\nEl servicio se detendrÃ¡ y deberÃ¡ reiniciarse manualmente.',
+    confirm_logout:'Â¿Cerrar sesiÃ³n?',
+    saved:'âœ“ Guardado â€” reinicia para aplicar.',save_fail:'âœ— Error al guardar',conn_error:'Error de conexiÃ³n.',
+    update:'Update',update_available:'ActualizaciÃ³n disponible',update_title:'ActualizaciÃ³n OTA â€” github.com/razvanzeces/flowstation',
+    update_confirm:'Â¿Obtener la Ãºltima versiÃ³n de main y recompilar?\nEl servicio se reiniciarÃ¡ automÃ¡ticamente.',
+    update_running:'Actualizandoâ€¦ no cierres esta ventana.',
+    update_done_ok:'âœ“ ActualizaciÃ³n completa. Reiniciandoâ€¦',
+    update_done_err:'âœ— ActualizaciÃ³n fallida. Ver log abajo.',
     update_close:'Cerrar',
     system:'Sistema',sys_info:'Info del Sistema',sys_hostname:'Hostname',sys_uptime:'Tiempo activo',
-    sys_os:'OS',sys_version:'Versión FS',sys_config:'Config Activa',
+    sys_os:'OS',sys_version:'VersiÃ³n FS',sys_config:'Config Activa',
     sys_cpu:'CPU',sys_cpu_load:'Carga CPU',sys_ram:'RAM',sys_temp:'Temp CPU',
-    wifi:'WiFi',wifi_status:'Conexión actual',wifi_saved:'Redes guardadas',wifi_visible:'Redes disponibles',wifi_loading:'Cargando…',wifi_scanning:'Escaneando…',wifi_no_device:'No se detectó dispositivo WiFi.',wifi_radio_disabled:'Radio WiFi desactivada.',wifi_not_connected:'No conectado a ninguna red.',wifi_no_saved:'Sin redes guardadas.',wifi_no_networks:'Sin redes en rango.',wifi_ssid:'Red',wifi_signal:'Señal',wifi_ip:'Dirección IP',wifi_actions:'Acciones',wifi_disconnect:'Desconectar',wifi_connect:'Conectar',wifi_connect_to:'Conectar a',wifi_connecting:'Conectando…',wifi_connected:'CONECTADO',wifi_connected_ok:'Conectado.',wifi_saved_tag:'GUARDADO',wifi_open:'ABIERTO',wifi_forget:'Olvidar',wifi_confirm_forget:'Olvidar red',wifi_password:'Contraseña',wifi_hidden:'Red oculta (SSID no difundido)',wifi_add_hidden:'Red oculta',wifi_scan:'Escanear',wifi_refresh:'Actualizar',wifi_radio_off:'Desactivar WiFi',wifi_radio_on:'Activar WiFi',wifi_warn_lose_access:'Si estás conectado al dashboard vía WiFi, cambiar de red puede desconectarte temporalmente. Asegúrate de tener una vía de acceso alternativa.',wifi_err_no_ssid:'SSID requerido',cancel:'Cancelar',sys_sensors:'Sensores del Sistema',sys_sensors_empty:'No se detectaron sensores.',sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-actualización 5s',
+    wifi:'WiFi',wifi_status:'ConexiÃ³n actual',wifi_saved:'Redes guardadas',wifi_visible:'Redes disponibles',wifi_loading:'Cargandoâ€¦',wifi_scanning:'Escaneandoâ€¦',wifi_no_device:'No se detectÃ³ dispositivo WiFi.',wifi_radio_disabled:'Radio WiFi desactivada.',wifi_not_connected:'No conectado a ninguna red.',wifi_no_saved:'Sin redes guardadas.',wifi_no_networks:'Sin redes en rango.',wifi_ssid:'Red',wifi_signal:'SeÃ±al',wifi_ip:'DirecciÃ³n IP',wifi_actions:'Acciones',wifi_disconnect:'Desconectar',wifi_connect:'Conectar',wifi_connect_to:'Conectar a',wifi_connecting:'Conectandoâ€¦',wifi_connected:'CONECTADO',wifi_connected_ok:'Conectado.',wifi_saved_tag:'GUARDADO',wifi_open:'ABIERTO',wifi_forget:'Olvidar',wifi_confirm_forget:'Olvidar red',wifi_password:'ContraseÃ±a',wifi_hidden:'Red oculta (SSID no difundido)',wifi_add_hidden:'Red oculta',wifi_scan:'Escanear',wifi_refresh:'Actualizar',wifi_radio_off:'Desactivar WiFi',wifi_radio_on:'Activar WiFi',wifi_warn_lose_access:'Si estÃ¡s conectado al dashboard vÃ­a WiFi, cambiar de red puede desconectarte temporalmente. AsegÃºrate de tener una vÃ­a de acceso alternativa.',wifi_err_no_ssid:'SSID requerido',cancel:'Cancelar',sys_sensors:'Sensores del Sistema',sys_sensors_empty:'No se detectaron sensores.',sys_rf:'Hardware RF (SoapySDR)',sys_autorefresh:'Auto-actualizaciÃ³n 5s',
     profile_edit_title:'Editar Perfil Config',profile_edit_btn:'Editar',
-    profile_edit_save_ok:'✓ Guardado',profile_edit_save_fail:'✗ Error al guardar',
+    profile_edit_save_ok:'âœ“ Guardado',profile_edit_save_fail:'âœ— Error al guardar',
     sys_profiles:'Perfiles de Config',sys_activate:'Activar y Reiniciar',
     sys_active_badge:'ACTIVO',sys_no_profiles:'No se encontraron perfiles .toml en el directorio.',
-    sys_activate_confirm:'¿Cambiar al perfil "{name}" y reiniciar?\nLa config actual será respaldada.',
-    sys_title:'Sistema',sys_sec_status:'Estado',sys_sec_host:'Host',sys_sec_radio:'Hardware de radio',sys_sec_sensors:'Sensores',sys_sec_profiles:'Perfiles',sys_sec_sds:'Difusión SDS',sys_refresh:'Actualizar',sys_probe:'Sondear',sys_temp_hot:'CALIENTE',sys_temp_warm:'Templado',sys_temp_ok:'OK',
-    sys_bts:'Conexión BTS',
+    sys_activate_confirm:'Â¿Cambiar al perfil "{name}" y reiniciar?\nLa config actual serÃ¡ respaldada.',
+    sys_title:'Sistema',sys_sec_status:'Estado',sys_sec_host:'Host',sys_sec_radio:'Hardware de radio',sys_sec_sensors:'Sensores',sys_sec_profiles:'Perfiles',sys_sec_sds:'DifusiÃ³n SDS',sys_refresh:'Actualizar',sys_probe:'Sondear',sys_temp_hot:'CALIENTE',sys_temp_warm:'Templado',sys_temp_ok:'OK',
+    sys_bts:'ConexiÃ³n BTS',
   },
   hu:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
-    stations:'Rádiók',calls:'Hívások',lastheard:'Utoljára Hallott',log:'Napló',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Konfig',
-    sdslog:'SDS Napló',th_dir:'Irány',th_from:'Feladó',th_to:'Címzett',th_message:'Üzenet',no_sds:'Még nincs SDS üzenet',sds_refresh:'Frissítés',
-    rf_freq:'Központi frekvencia',rf_rate:'Mintavételezési ráta',rf_rms:'RMS',rf_peak:'Csúcs',rf_age:'Pillanatkép',
-    rf_waiting:'várakozás…',rf_live:'élő',rf_stale:'elavult',
-    rf_visualizers:'Vizualizációk',rf_spectrum:'TX DSP spektrum (PA előtt)',rf_constellation:'TX DSP konstelláció',
-    rf_hint_spectrum:'élő · 512-bin FFT',rf_hint_constellation:'π/4-DQPSK',
-    rf_waterfall:'TX Spektrum Vízesés',rf_hint_waterfall:'gördülő · viridis',
-    rf_quality:'Jelminőség',rf_hint_quality:'PA előtt mérve · ugyanazon DSP pillanatképből',
-    rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'Vivőszivárgás',rf_obw:'Foglalt sávszélesség (99%)',
-    rf_dc:'DC eltolás (I/Q)',rf_iqa:'IQ amplitúdó egyensúlytalanság',rf_iqp:'IQ fázis egyensúlytalanság',
-    rf_hw_health:'Hardver állapot',rf_hint_health:'5 másodpercenként',
-    rf_temp:'SDR hőmérséklet',rf_tx_gain:'TX erősítés (aktuális)',rf_rx_gain:'RX erősítés (aktuális)',
-    rf_temp_cold:'hideg',rf_temp_nominal:'normál',rf_temp_warm:'meleg',rf_temp_hot:'forró',rf_temp_na:'nincs szenzor',
-    rf_no_gains:'nem elérhető',rf_just_now:'most',
+    stations:'RÃ¡diÃ³k',calls:'HÃ­vÃ¡sok',lastheard:'UtoljÃ¡ra Hallott',log:'NaplÃ³',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Konfig',
+    sdslog:'SDS NaplÃ³',th_dir:'IrÃ¡ny',th_from:'FeladÃ³',th_to:'CÃ­mzett',th_message:'Ãœzenet',no_sds:'MÃ©g nincs SDS Ã¼zenet',sds_refresh:'FrissÃ­tÃ©s',
+    rf_freq:'KÃ¶zponti frekvencia',rf_rate:'MintavÃ©telezÃ©si rÃ¡ta',rf_rms:'RMS',rf_peak:'CsÃºcs',rf_age:'PillanatkÃ©p',
+    rf_waiting:'vÃ¡rakozÃ¡sâ€¦',rf_live:'Ã©lÅ‘',rf_stale:'elavult',
+    rf_visualizers:'VizualizÃ¡ciÃ³k',rf_spectrum:'TX DSP spektrum (PA elÅ‘tt)',rf_constellation:'TX DSP konstellÃ¡ciÃ³',
+    rf_hint_spectrum:'Ã©lÅ‘ Â· 512-bin FFT',rf_hint_constellation:'Ï€/4-DQPSK',
+    rf_waterfall:'TX Spektrum VÃ­zesÃ©s',rf_hint_waterfall:'gÃ¶rdÃ¼lÅ‘ Â· viridis',
+    rf_quality:'JelminÅ‘sÃ©g',rf_hint_quality:'PA elÅ‘tt mÃ©rve Â· ugyanazon DSP pillanatkÃ©pbÅ‘l',
+    rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'VivÅ‘szivÃ¡rgÃ¡s',rf_obw:'Foglalt sÃ¡vszÃ©lessÃ©g (99%)',
+    rf_dc:'DC eltolÃ¡s (I/Q)',rf_iqa:'IQ amplitÃºdÃ³ egyensÃºlytalansÃ¡g',rf_iqp:'IQ fÃ¡zis egyensÃºlytalansÃ¡g',
+    rf_hw_health:'Hardver Ã¡llapot',rf_hint_health:'5 mÃ¡sodpercenkÃ©nt',
+    rf_temp:'SDR hÅ‘mÃ©rsÃ©klet',rf_tx_gain:'TX erÅ‘sÃ­tÃ©s (aktuÃ¡lis)',rf_rx_gain:'RX erÅ‘sÃ­tÃ©s (aktuÃ¡lis)',
+    rf_temp_cold:'hideg',rf_temp_nominal:'normÃ¡l',rf_temp_warm:'meleg',rf_temp_hot:'forrÃ³',rf_temp_na:'nincs szenzor',
+    rf_no_gains:'nem elÃ©rhetÅ‘',rf_just_now:'most',
 
-    terminals:'Rádiók',registered:'regisztrált',
-    active_calls:'Aktív hívások',circuits:'aktív áramkör',
-    registered_terminals:'Regisztrált rádiók',
-    no_terminals:'Nincs regisztrált rádió',no_calls:'Nincs aktív hívás',
-    live_log:'Élő napló',autoscroll:'Automatikus görgetés',filter_all:'Mind',
-    clear:'Törlés',export:'Exportálás',restart:'Újraindítás',shutdown:'Leállítás',save:'Mentés',
-    cfg_sec_configuration:'Konfiguráció',cfg_sec_access:'Hozzáférés-vezérlés',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI engedélyezőlista',whitelist_add:'ISSI hozzáadása',whitelist_empty:'Üres lista — nyílt hálózat (bármely rádió regisztrálhat).',
-    whitelist_help:'Ha a lista üres, bármely rádió regisztrálhat (nyílt hálózat). Ha vannak elemek, csak a listázott ISSI-k engedélyezettek; a többit elutasítja. A módosítások azonnal érvénybe lépnek és újraindítás után is megmaradnak.',
-    whitelist_enforced:'AKTÍV',whitelist_open:'NYÍLT',whitelist_invalid:'Adjon meg érvényes ISSI-t (1–16777215).',
-    wx_title:'WX / METAR szolgáltatás',wx_help:'Beépített időjárás-szolgáltatás. A rádiók "METAR LROP" formájú SDS-t küldenek a szolgáltatás ISSI-jére, és dekódolt jelentést kapnak. Opcionálisan automatikusan elküldi egy rögzített állomás METAR-ját egy ISSI-re vagy csoportra adott időközönként. Adatok: aviationweather.gov.',
-    wx_enabled:'METAR válasz kérésre engedélyezése',wx_service_issi:'Szolgáltatás ISSI',wx_periodic_enabled:'Időszakos küldés engedélyezése',
-    wx_periodic_icao:'Állomás ICAO',wx_periodic_dest:'Cél',wx_periodic_isgroup:'A cél csoport',wx_periodic_isgroup_hint:'(GSSI egyedi ISSI helyett)',
-    wx_periodic_interval:'Időköz (másodperc)',wx_interval_hint:'Legalább 300 mp (5 perc), hogy ne terhelje túl az időjárás API-t.',wx_periodic_incomplete:'Add meg az állomás ICAO-t és a célt az időszakos módhoz.',
-    sds_title:'⬡ SDS üzenet küldése',sds_dest:'Cél ISSI',
-    sds_msg_label:'Üzenet',cancel:'Mégse',send:'Küldés',
-    th_issi:'ISSI',th_groups:'Csoportok',th_ee:'Energiatakarékos',th_signal:'Jelerősség',
-    th_status:'Állapot',th_last_seen:'Utoljára látva',th_actions:'Műveletek',
-    th_id:'ID',th_type:'Típus',th_caller:'Hívó',
-    th_dest:'Cél',th_speaker:'Beszélő',th_duration:'Időtartam',
-    th_time:'Idő',th_activity:'Tevékenység',
-    last_heard_title:'Utoljára hallott',no_activity:'Még nincs tevékenység',
-    act_call_group:'Csoportos hívás',act_call_individual:'P2P hívás',act_sds:'SDS',
-    online_badge:'ONLINE',kick:'Kizárás',sds:'SDS',
-    call_group:'CSOPORT',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'VÉSZHÍVÁS',
-    emg_banner_title:'VÉSZHELYZET AKTÍV',integrations:'Integrációk',integ_enabled:'Engedélyezve',integ_disabled:'Letiltva',integ_error:'Hiba',system_sec:'Rendszer',emg_chip:'VÉSZHELYZET',bs_label:'BS',emg_clear:'Törlés',confirm_clear_emergency:'Vészhelyzet törlése ISSI {issi}?',
-    confirm_kick:'ISSI {issi} kizárása?\nA terminál törlésre kerül és újra kell csatlakoznia.',
-    dgna:'DGNA',dgna_title:'Dinamikus csoport-hozzárendelés',dgna_modal_title:'⬡ Dinamikus csoport-hozzárendelés',dgna_issi:'Terminál ISSI',dgna_current:'Jelenlegi csoportok',dgna_gssi:'Csoport (GSSI)',dgna_assign:'Hozzárendel',dgna_deassign:'Eltávolít',
-    confirm_restart:'Újraindítja a FlowStation-t?\nAz összes aktív hívás megszakad.',
-    confirm_shutdown:'Leállítja a FlowStation-t?\nA szolgáltatást kézzel kell újraindítani.',
+    terminals:'RÃ¡diÃ³k',registered:'regisztrÃ¡lt',
+    active_calls:'AktÃ­v hÃ­vÃ¡sok',circuits:'aktÃ­v Ã¡ramkÃ¶r',
+    registered_terminals:'RegisztrÃ¡lt rÃ¡diÃ³k',
+    no_terminals:'Nincs regisztrÃ¡lt rÃ¡diÃ³',no_calls:'Nincs aktÃ­v hÃ­vÃ¡s',
+    live_log:'Ã‰lÅ‘ naplÃ³',autoscroll:'Automatikus gÃ¶rgetÃ©s',filter_all:'Mind',
+    clear:'TÃ¶rlÃ©s',export:'ExportÃ¡lÃ¡s',restart:'ÃšjraindÃ­tÃ¡s',shutdown:'LeÃ¡llÃ­tÃ¡s',save:'MentÃ©s',
+    cfg_sec_configuration:'KonfigurÃ¡ciÃ³',cfg_sec_access:'HozzÃ¡fÃ©rÃ©s-vezÃ©rlÃ©s',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI engedÃ©lyezÅ‘lista',whitelist_add:'ISSI hozzÃ¡adÃ¡sa',whitelist_empty:'Ãœres lista â€” nyÃ­lt hÃ¡lÃ³zat (bÃ¡rmely rÃ¡diÃ³ regisztrÃ¡lhat).',
+    whitelist_help:'Ha a lista Ã¼res, bÃ¡rmely rÃ¡diÃ³ regisztrÃ¡lhat (nyÃ­lt hÃ¡lÃ³zat). Ha vannak elemek, csak a listÃ¡zott ISSI-k engedÃ©lyezettek; a tÃ¶bbit elutasÃ­tja. A mÃ³dosÃ­tÃ¡sok azonnal Ã©rvÃ©nybe lÃ©pnek Ã©s ÃºjraindÃ­tÃ¡s utÃ¡n is megmaradnak.',
+    whitelist_enforced:'AKTÃV',whitelist_open:'NYÃLT',whitelist_invalid:'Adjon meg Ã©rvÃ©nyes ISSI-t (1â€“16777215).',
+    wx_title:'WX / METAR szolgÃ¡ltatÃ¡s',wx_help:'BeÃ©pÃ­tett idÅ‘jÃ¡rÃ¡s-szolgÃ¡ltatÃ¡s. A rÃ¡diÃ³k "METAR LROP" formÃ¡jÃº SDS-t kÃ¼ldenek a szolgÃ¡ltatÃ¡s ISSI-jÃ©re, Ã©s dekÃ³dolt jelentÃ©st kapnak. OpcionÃ¡lisan automatikusan elkÃ¼ldi egy rÃ¶gzÃ­tett Ã¡llomÃ¡s METAR-jÃ¡t egy ISSI-re vagy csoportra adott idÅ‘kÃ¶zÃ¶nkÃ©nt. Adatok: aviationweather.gov.',
+    wx_enabled:'METAR vÃ¡lasz kÃ©rÃ©sre engedÃ©lyezÃ©se',wx_service_issi:'SzolgÃ¡ltatÃ¡s ISSI',wx_periodic_enabled:'IdÅ‘szakos kÃ¼ldÃ©s engedÃ©lyezÃ©se',
+    wx_periodic_icao:'ÃllomÃ¡s ICAO',wx_periodic_dest:'CÃ©l',wx_periodic_isgroup:'A cÃ©l csoport',wx_periodic_isgroup_hint:'(GSSI egyedi ISSI helyett)',
+    wx_periodic_interval:'IdÅ‘kÃ¶z (mÃ¡sodperc)',wx_interval_hint:'LegalÃ¡bb 300 mp (5 perc), hogy ne terhelje tÃºl az idÅ‘jÃ¡rÃ¡s API-t.',wx_periodic_incomplete:'Add meg az Ã¡llomÃ¡s ICAO-t Ã©s a cÃ©lt az idÅ‘szakos mÃ³dhoz.',
+    sds_title:'â¬¡ SDS Ã¼zenet kÃ¼ldÃ©se',sds_dest:'CÃ©l ISSI',
+    sds_msg_label:'Ãœzenet',cancel:'MÃ©gse',send:'KÃ¼ldÃ©s',
+    th_issi:'ISSI',th_groups:'Csoportok',th_ee:'EnergiatakarÃ©kos',th_signal:'JelerÅ‘ssÃ©g',
+    th_status:'Ãllapot',th_last_seen:'UtoljÃ¡ra lÃ¡tva',th_actions:'MÅ±veletek',
+    th_id:'ID',th_type:'TÃ­pus',th_caller:'HÃ­vÃ³',
+    th_dest:'CÃ©l',th_speaker:'BeszÃ©lÅ‘',th_duration:'IdÅ‘tartam',
+    th_time:'IdÅ‘',th_activity:'TevÃ©kenysÃ©g',
+    last_heard_title:'UtoljÃ¡ra hallott',no_activity:'MÃ©g nincs tevÃ©kenysÃ©g',
+    act_call_group:'Csoportos hÃ­vÃ¡s',act_call_individual:'P2P hÃ­vÃ¡s',act_sds:'SDS',
+    online_badge:'ONLINE',kick:'KizÃ¡rÃ¡s',sds:'SDS',
+    call_group:'CSOPORT',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'VÃ‰SZHÃVÃS',
+    emg_banner_title:'VÃ‰SZHELYZET AKTÃV',integrations:'IntegrÃ¡ciÃ³k',integ_enabled:'EngedÃ©lyezve',integ_disabled:'Letiltva',integ_error:'Hiba',system_sec:'Rendszer',emg_chip:'VÃ‰SZHELYZET',bs_label:'BS',emg_clear:'TÃ¶rlÃ©s',confirm_clear_emergency:'VÃ©szhelyzet tÃ¶rlÃ©se ISSI {issi}?',
+    confirm_kick:'ISSI {issi} kizÃ¡rÃ¡sa?\nA terminÃ¡l tÃ¶rlÃ©sre kerÃ¼l Ã©s Ãºjra kell csatlakoznia.',
+    dgna:'DGNA',dgna_title:'Dinamikus csoport-hozzÃ¡rendelÃ©s',dgna_modal_title:'â¬¡ Dinamikus csoport-hozzÃ¡rendelÃ©s',dgna_issi:'TerminÃ¡l ISSI',dgna_current:'Jelenlegi csoportok',dgna_gssi:'Csoport (GSSI)',dgna_assign:'HozzÃ¡rendel',dgna_deassign:'EltÃ¡volÃ­t',
+    confirm_restart:'ÃšjraindÃ­tja a FlowStation-t?\nAz Ã¶sszes aktÃ­v hÃ­vÃ¡s megszakad.',
+    confirm_shutdown:'LeÃ¡llÃ­tja a FlowStation-t?\nA szolgÃ¡ltatÃ¡st kÃ©zzel kell ÃºjraindÃ­tani.',
     confirm_logout:'Kijelentkezik?',
-    saved:'✓ Mentve — újraindítás szükséges az alkalmazáshoz.',save_fail:'✗ Mentési hiba',conn_error:'Kapcsolódási hiba.',
-    update:'Frissítés',update_available:'Elérhető frissítés',update_title:'OTA frissítés — github.com/razvanzeces/flowstation',
-    update_confirm:'Letölti a legújabb verziót a main ágból és újraépíti?\nA szolgáltatás automatikusan újraindul.',
-    update_running:'Frissítés folyamatban… ne zárja be az ablakot.',
-    update_done_ok:'✓ Frissítés kész. Újraindul…',
-    update_done_err:'✗ Frissítés sikertelen. Lásd a naplót.',
-    update_close:'Bezárás',
-    system:'Rendszer',sys_info:'Rendszerinfó',sys_hostname:'Hostname',sys_uptime:'Üzemidő',
-    sys_os:'OS',sys_version:'FS verzió',sys_config:'Aktív konfig',
-    sys_profiles:'Konfig profilok',sys_activate:'Aktiválás és újraindítás',
-    sys_active_badge:'AKTÍV',sys_no_profiles:'Nem található .toml profil a könyvtárban.',
-    sys_activate_confirm:'Váltás a(z) "{name}" profilra és újraindítás?\nAz aktuális konfig mentésre kerül.',
-    sys_title:'Rendszer',sys_sec_status:'Állapot',sys_sec_host:'Gazda',sys_sec_radio:'Rádió hardver',sys_sec_sensors:'Szenzorok',sys_sec_profiles:'Profilok',sys_sec_sds:'SDS sugárzás',sys_refresh:'Frissítés',sys_probe:'Vizsgálat',sys_temp_hot:'FORRÓ',sys_temp_warm:'Meleg',sys_temp_ok:'OK',
+    saved:'âœ“ Mentve â€” ÃºjraindÃ­tÃ¡s szÃ¼ksÃ©ges az alkalmazÃ¡shoz.',save_fail:'âœ— MentÃ©si hiba',conn_error:'KapcsolÃ³dÃ¡si hiba.',
+    update:'FrissÃ­tÃ©s',update_available:'ElÃ©rhetÅ‘ frissÃ­tÃ©s',update_title:'OTA frissÃ­tÃ©s â€” github.com/razvanzeces/flowstation',
+    update_confirm:'LetÃ¶lti a legÃºjabb verziÃ³t a main Ã¡gbÃ³l Ã©s ÃºjraÃ©pÃ­ti?\nA szolgÃ¡ltatÃ¡s automatikusan Ãºjraindul.',
+    update_running:'FrissÃ­tÃ©s folyamatbanâ€¦ ne zÃ¡rja be az ablakot.',
+    update_done_ok:'âœ“ FrissÃ­tÃ©s kÃ©sz. Ãšjraindulâ€¦',
+    update_done_err:'âœ— FrissÃ­tÃ©s sikertelen. LÃ¡sd a naplÃ³t.',
+    update_close:'BezÃ¡rÃ¡s',
+    system:'Rendszer',sys_info:'RendszerinfÃ³',sys_hostname:'Hostname',sys_uptime:'ÃœzemidÅ‘',
+    sys_os:'OS',sys_version:'FS verziÃ³',sys_config:'AktÃ­v konfig',
+    sys_profiles:'Konfig profilok',sys_activate:'AktivÃ¡lÃ¡s Ã©s ÃºjraindÃ­tÃ¡s',
+    sys_active_badge:'AKTÃV',sys_no_profiles:'Nem talÃ¡lhatÃ³ .toml profil a kÃ¶nyvtÃ¡rban.',
+    sys_activate_confirm:'VÃ¡ltÃ¡s a(z) "{name}" profilra Ã©s ÃºjraindÃ­tÃ¡s?\nAz aktuÃ¡lis konfig mentÃ©sre kerÃ¼l.',
+    sys_title:'Rendszer',sys_sec_status:'Ãllapot',sys_sec_host:'Gazda',sys_sec_radio:'RÃ¡diÃ³ hardver',sys_sec_sensors:'Szenzorok',sys_sec_profiles:'Profilok',sys_sec_sds:'SDS sugÃ¡rzÃ¡s',sys_refresh:'FrissÃ­tÃ©s',sys_probe:'VizsgÃ¡lat',sys_temp_hot:'FORRÃ“',sys_temp_warm:'Meleg',sys_temp_ok:'OK',
     sys_bts:'BTS kapcsolat',
-    wifi:'WiFi',wifi_status:'Jelenlegi kapcsolat',wifi_saved:'Mentett hálózatok',wifi_visible:'Elérhető hálózatok',wifi_loading:'Betöltés…',wifi_scanning:'Keresés…',wifi_no_device:'Nem észlelhető WiFi eszköz.',wifi_radio_disabled:'WiFi rádió letiltva.',wifi_not_connected:'Nincs kapcsolat hálózathoz.',wifi_no_saved:'Nincs mentett hálózat.',wifi_no_networks:'Nincs hálózat hatótávolságon belül.',wifi_ssid:'Hálózat',wifi_signal:'Jelerősség',wifi_ip:'IP-cím',wifi_actions:'Műveletek',wifi_disconnect:'Bontás',wifi_connect:'Csatlakozás',wifi_connect_to:'Csatlakozás:',wifi_connecting:'Csatlakozás…',wifi_connected:'KAPCSOLÓDVA',wifi_connected_ok:'Csatlakoztatva.',wifi_saved_tag:'MENTETT',wifi_open:'NYITOTT',wifi_forget:'Elfelejtés',wifi_confirm_forget:'Hálózat elfelejtése',wifi_password:'Jelszó',wifi_hidden:'Rejtett hálózat (SSID nem sugárzott)',wifi_add_hidden:'Rejtett hálózat',wifi_scan:'Keresés',wifi_refresh:'Frissítés',wifi_radio_off:'WiFi letiltása',wifi_radio_on:'WiFi engedélyezése',wifi_warn_lose_access:'Ha WiFi-n keresztül csatlakozol a vezérlőpulthoz, a hálózat módosítása lecsatlakoztathat. Biztosíts alternatív hozzáférést.',wifi_err_no_ssid:'SSID szükséges',cancel:'Mégse',sys_sensors:'Gazdagép szenzorok',sys_sensors_empty:'Nem észlelhetők szenzorok.',
+    wifi:'WiFi',wifi_status:'Jelenlegi kapcsolat',wifi_saved:'Mentett hÃ¡lÃ³zatok',wifi_visible:'ElÃ©rhetÅ‘ hÃ¡lÃ³zatok',wifi_loading:'BetÃ¶ltÃ©sâ€¦',wifi_scanning:'KeresÃ©sâ€¦',wifi_no_device:'Nem Ã©szlelhetÅ‘ WiFi eszkÃ¶z.',wifi_radio_disabled:'WiFi rÃ¡diÃ³ letiltva.',wifi_not_connected:'Nincs kapcsolat hÃ¡lÃ³zathoz.',wifi_no_saved:'Nincs mentett hÃ¡lÃ³zat.',wifi_no_networks:'Nincs hÃ¡lÃ³zat hatÃ³tÃ¡volsÃ¡gon belÃ¼l.',wifi_ssid:'HÃ¡lÃ³zat',wifi_signal:'JelerÅ‘ssÃ©g',wifi_ip:'IP-cÃ­m',wifi_actions:'MÅ±veletek',wifi_disconnect:'BontÃ¡s',wifi_connect:'CsatlakozÃ¡s',wifi_connect_to:'CsatlakozÃ¡s:',wifi_connecting:'CsatlakozÃ¡sâ€¦',wifi_connected:'KAPCSOLÃ“DVA',wifi_connected_ok:'Csatlakoztatva.',wifi_saved_tag:'MENTETT',wifi_open:'NYITOTT',wifi_forget:'ElfelejtÃ©s',wifi_confirm_forget:'HÃ¡lÃ³zat elfelejtÃ©se',wifi_password:'JelszÃ³',wifi_hidden:'Rejtett hÃ¡lÃ³zat (SSID nem sugÃ¡rzott)',wifi_add_hidden:'Rejtett hÃ¡lÃ³zat',wifi_scan:'KeresÃ©s',wifi_refresh:'FrissÃ­tÃ©s',wifi_radio_off:'WiFi letiltÃ¡sa',wifi_radio_on:'WiFi engedÃ©lyezÃ©se',wifi_warn_lose_access:'Ha WiFi-n keresztÃ¼l csatlakozol a vezÃ©rlÅ‘pulthoz, a hÃ¡lÃ³zat mÃ³dosÃ­tÃ¡sa lecsatlakoztathat. BiztosÃ­ts alternatÃ­v hozzÃ¡fÃ©rÃ©st.',wifi_err_no_ssid:'SSID szÃ¼ksÃ©ges',cancel:'MÃ©gse',sys_sensors:'GazdagÃ©p szenzorok',sys_sensors_empty:'Nem Ã©szlelhetÅ‘k szenzorok.',
   },
   zh:{
-    bts_ip:'BTS IP',offline:'离线',online:'在线',
-    brew_online:'在线',brew_offline:'离线',
-    stations:'终端',calls:'通话',lastheard:'最近通话',log:'日志',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'配置',
-    sdslog:'SDS日志',th_dir:'方向',th_from:'发件',th_to:'收件',th_message:'消息',no_sds:'暂无SDS消息',sds_refresh:'刷新',
-    rf_freq:'中心频率',rf_rate:'采样率',rf_rms:'RMS',rf_peak:'峰值',rf_age:'快照',
-    rf_waiting:'等待中…',rf_live:'实时',rf_stale:'已过期',
-    rf_visualizers:'可视化',rf_spectrum:'TX DSP 频谱（功放前）',rf_constellation:'TX DSP 星座图',
-    rf_hint_spectrum:'实时 · 512 点 FFT',rf_hint_constellation:'π/4-DQPSK',
-    rf_waterfall:'TX 频谱瀑布图',rf_hint_waterfall:'滚动 · viridis 配色',
-    rf_quality:'信号质量',rf_hint_quality:'功放前测量 · 来自同一 DSP 快照',
-    rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'载波泄漏',rf_obw:'占用带宽 (99%)',
-    rf_dc:'直流偏置 (I/Q)',rf_iqa:'IQ 幅度不平衡',rf_iqp:'IQ 相位不平衡',
-    rf_hw_health:'硬件状态',rf_hint_health:'每 5 秒轮询',
-    rf_temp:'SDR 温度',rf_tx_gain:'TX 增益（实际）',rf_rx_gain:'RX 增益（实际）',
-    rf_temp_cold:'冷',rf_temp_nominal:'正常',rf_temp_warm:'温',rf_temp_hot:'热',rf_temp_na:'无传感器',
-    rf_no_gains:'不可用',rf_just_now:'刚刚',
+    bts_ip:'BTS IP',offline:'ç¦»çº¿',online:'åœ¨çº¿',
+    brew_online:'åœ¨çº¿',brew_offline:'ç¦»çº¿',
+    stations:'ç»ˆç«¯',calls:'é€šè¯',lastheard:'æœ€è¿‘é€šè¯',log:'æ—¥å¿—',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'é…ç½®',
+    sdslog:'SDSæ—¥å¿—',th_dir:'æ–¹å‘',th_from:'å‘ä»¶',th_to:'æ”¶ä»¶',th_message:'æ¶ˆæ¯',no_sds:'æš‚æ— SDSæ¶ˆæ¯',sds_refresh:'åˆ·æ–°',
+    rf_freq:'ä¸­å¿ƒé¢‘çŽ‡',rf_rate:'é‡‡æ ·çŽ‡',rf_rms:'RMS',rf_peak:'å³°å€¼',rf_age:'å¿«ç…§',
+    rf_waiting:'ç­‰å¾…ä¸­â€¦',rf_live:'å®žæ—¶',rf_stale:'å·²è¿‡æœŸ',
+    rf_visualizers:'å¯è§†åŒ–',rf_spectrum:'TX DSP é¢‘è°±ï¼ˆåŠŸæ”¾å‰ï¼‰',rf_constellation:'TX DSP æ˜Ÿåº§å›¾',
+    rf_hint_spectrum:'å®žæ—¶ Â· 512 ç‚¹ FFT',rf_hint_constellation:'Ï€/4-DQPSK',
+    rf_waterfall:'TX é¢‘è°±ç€‘å¸ƒå›¾',rf_hint_waterfall:'æ»šåŠ¨ Â· viridis é…è‰²',
+    rf_quality:'ä¿¡å·è´¨é‡',rf_hint_quality:'åŠŸæ”¾å‰æµ‹é‡ Â· æ¥è‡ªåŒä¸€ DSP å¿«ç…§',
+    rf_evm:'EVM',rf_papr:'PAPR',rf_carrier:'è½½æ³¢æ³„æ¼',rf_obw:'å ç”¨å¸¦å®½ (99%)',
+    rf_dc:'ç›´æµåç½® (I/Q)',rf_iqa:'IQ å¹…åº¦ä¸å¹³è¡¡',rf_iqp:'IQ ç›¸ä½ä¸å¹³è¡¡',
+    rf_hw_health:'ç¡¬ä»¶çŠ¶æ€',rf_hint_health:'æ¯ 5 ç§’è½®è¯¢',
+    rf_temp:'SDR æ¸©åº¦',rf_tx_gain:'TX å¢žç›Šï¼ˆå®žé™…ï¼‰',rf_rx_gain:'RX å¢žç›Šï¼ˆå®žé™…ï¼‰',
+    rf_temp_cold:'å†·',rf_temp_nominal:'æ­£å¸¸',rf_temp_warm:'æ¸©',rf_temp_hot:'çƒ­',rf_temp_na:'æ— ä¼ æ„Ÿå™¨',
+    rf_no_gains:'ä¸å¯ç”¨',rf_just_now:'åˆšåˆš',
 
-    terminals:'终端',registered:'已注册',
-    active_calls:'活跃通话',circuits:'占用信道',
-    registered_terminals:'已注册终端',
-    no_terminals:'暂无终端注册',no_calls:'无活跃通话',
-    live_log:'实时日志',autoscroll:'自动滚动',filter_all:'全部',
-    clear:'清除',export:'导出',restart:'重启',shutdown:'关机',save:'保存',
-    cfg_sec_configuration:'配置',cfg_sec_access:'访问控制',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI 白名单',whitelist_add:'添加 ISSI',whitelist_empty:'列表为空 — 开放网络（任何电台均可注册）。',
-    whitelist_help:'列表为空时，任何电台均可注册（开放网络）。有条目时，仅接受列出的 ISSI，其余一律拒绝。更改即时生效并在重启后保留。',
-    whitelist_enforced:'已启用',whitelist_open:'开放',whitelist_invalid:'请输入有效的 ISSI（1–16777215）。',
-    wx_title:'WX / METAR 服务',wx_help:'内置气象服务。电台向服务 ISSI 发送如 "METAR LROP" 的 SDS 即可获得解码报告。可选择按间隔自动向 ISSI 或群组发送固定台站的 METAR。数据来自 aviationweather.gov。',
-    wx_enabled:'启用按需 METAR 响应',wx_service_issi:'服务 ISSI',wx_periodic_enabled:'启用定时广播',
-    wx_periodic_icao:'台站 ICAO',wx_periodic_dest:'目标',wx_periodic_isgroup:'目标为群组',wx_periodic_isgroup_hint:'（GSSI 而非单个 ISSI）',
-    wx_periodic_interval:'间隔（秒）',wx_interval_hint:'最少 300 秒（5 分钟），以免频繁请求气象 API。',wx_periodic_incomplete:'定时模式需同时设置台站 ICAO 和目标。',
-    sds_title:'⬡ 发送 SDS 短消息',sds_dest:'目标 ISSI',
-    live_sds_desc:'向本小区所有终端广播文本消息，按 Home Mode Display 间隔重复发送。直到删除或达到重复次数为止。',
-    live_sds_text:'消息内容（最多 251 字符）',live_sds_repeat:'重复次数 (0=无限)',live_sds_send:'广播',
-    live_sds_clear_all:'清除全部',live_sds_empty:'暂无广播任务。',
-    live_sds_sent:'已发送',live_sds_times:'次',live_sds_forever:'∞',live_sds_delete:'删除',
-    fallback_title:'⚠ 正在使用后备配置 — 主配置加载失败',
-    sds_msg_label:'消息内容',cancel:'取消',send:'发送',
-    th_issi:'ISSI',th_groups:'群组',th_ee:'节能',th_signal:'信号',
-    th_status:'状态',th_last_seen:'最后在线',th_actions:'操作',
-    th_id:'ID',th_type:'类型',th_caller:'主叫',
-    th_dest:'被叫',th_speaker:'讲话者',th_duration:'时长',
-    th_time:'时间',th_activity:'活动',
-    last_heard_title:'最近通话记录',no_activity:'暂无活动记录',
-    act_call_group:'组呼',act_call_individual:'点对点',act_sds:'SDS',
-    online_badge:'在线',kick:'踢下线',sds:'SDS',
-    call_group:'组呼',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'紧急呼叫',
-    emg_banner_title:'紧急状态激活',integrations:'集成',integ_enabled:'已启用',integ_disabled:'已禁用',integ_error:'错误',system_sec:'系统',emg_chip:'紧急',bs_label:'BS',emg_clear:'清除',confirm_clear_emergency:'清除 ISSI {issi} 的紧急状态？',
-    confirm_kick:'确定踢下 ISSI {issi}？\n终端将被注销并强制重新注册。',
-    dgna:'DGNA',dgna_title:'动态组分配',dgna_modal_title:'⬡ 动态组分配',dgna_issi:'终端 ISSI',dgna_current:'当前组',dgna_gssi:'组 (GSSI)',dgna_assign:'分配',dgna_deassign:'移除',
-    confirm_restart:'确定重启 FlowStation？\n所有正在进行的通话将被中断。',
-    confirm_shutdown:'确定关闭 FlowStation？\n服务将停止，需要手动重启。',
-    confirm_logout:'确定注销吗？',
-    saved:'✓ 已保存 — 重启后生效',save_fail:'✗ 保存失败',conn_error:'连接错误',
-    update:'更新',update_available:'有可用更新',update_title:'OTA 在线更新 — github.com/razvanzeces/flowstation',
-    update_confirm:'是否从 main 分支拉取最新代码并重新构建？\n服务将自动重启。',
-    update_running:'正在更新… 请不要关闭此窗口',
-    update_done_ok:'✓ 更新完成，正在重启…',
-    update_done_err:'✗ 更新失败，请查看下方日志',
-    update_close:'关闭',
-    system:'系统',sys_info:'系统信息',sys_hostname:'主机名',sys_uptime:'运行时间',
-    sys_version:'FS 版本',sys_os:'操作系统',sys_config:'当前配置',
-    sys_cpu:'CPU',sys_cpu_load:'CPU 负载',sys_ram:'内存',sys_temp:'CPU 温度',
-    wifi:'WiFi',wifi_status:'当前连接',wifi_saved:'已保存的网络',wifi_visible:'可用网络',wifi_loading:'加载中…',wifi_scanning:'扫描中…',wifi_no_device:'未检测到 WiFi 设备。',wifi_radio_disabled:'WiFi 已禁用。',wifi_not_connected:'未连接任何网络。',wifi_no_saved:'无已保存的网络。',wifi_no_networks:'范围内无可用网络。',wifi_ssid:'网络',wifi_signal:'信号',wifi_ip:'IP 地址',wifi_actions:'操作',wifi_disconnect:'断开',wifi_connect:'连接',wifi_connect_to:'连接到',wifi_connecting:'连接中…',wifi_connected:'已连接',wifi_connected_ok:'已连接。',wifi_saved_tag:'已保存',wifi_open:'开放',wifi_forget:'忘记',wifi_confirm_forget:'忘记网络',wifi_password:'密码',wifi_hidden:'隐藏网络 (SSID 不广播)',wifi_add_hidden:'隐藏网络',wifi_scan:'扫描',wifi_refresh:'刷新',wifi_radio_off:'禁用 WiFi',wifi_radio_on:'启用 WiFi',wifi_warn_lose_access:'如果您通过 WiFi 连接到仪表板,更换网络可能会暂时断开您的连接。请确保有备用访问方式。',wifi_err_no_ssid:'需要 SSID',cancel:'取消',sys_sensors:'主机硬件传感器',sys_sensors_empty:'未检测到传感器。',sys_rf:'RF 硬件 (SoapySDR)',sys_autorefresh:'自动刷新 5秒',
-    profile_edit_title:'编辑配置文件',profile_edit_btn:'编辑',
-    profile_edit_save_ok:'✓ 已保存',profile_edit_save_fail:'✗ 保存失败',
-    sys_profiles:'配置文件',sys_activate:'激活并重启',
-    sys_active_badge:'当前使用',sys_no_profiles:'配置目录中未找到 .toml 配置文件。',
-    sys_activate_confirm:'切换到配置文件 "{name}" 并重启？\n当前配置将被备份。',
-    sys_title:'系统',sys_sec_status:'状态',sys_sec_host:'主机',sys_sec_radio:'射频硬件',sys_sec_sensors:'传感器',sys_sec_profiles:'配置档案',sys_sec_sds:'SDS 广播',sys_refresh:'刷新',sys_probe:'探测',sys_temp_hot:'过热',sys_temp_warm:'温热',sys_temp_ok:'正常',
-    sys_bts:'BTS 连接',
+    terminals:'ç»ˆç«¯',registered:'å·²æ³¨å†Œ',
+    active_calls:'æ´»è·ƒé€šè¯',circuits:'å ç”¨ä¿¡é“',
+    registered_terminals:'å·²æ³¨å†Œç»ˆç«¯',
+    no_terminals:'æš‚æ— ç»ˆç«¯æ³¨å†Œ',no_calls:'æ— æ´»è·ƒé€šè¯',
+    live_log:'å®žæ—¶æ—¥å¿—',autoscroll:'è‡ªåŠ¨æ»šåŠ¨',filter_all:'å…¨éƒ¨',
+    clear:'æ¸…é™¤',export:'å¯¼å‡º',restart:'é‡å¯',shutdown:'å…³æœº',save:'ä¿å­˜',
+    cfg_sec_configuration:'é…ç½®',cfg_sec_access:'è®¿é—®æŽ§åˆ¶',cfg_sec_wx:'WX / METAR',whitelist_title:'ISSI ç™½åå•',whitelist_add:'æ·»åŠ  ISSI',whitelist_empty:'åˆ—è¡¨ä¸ºç©º â€” å¼€æ”¾ç½‘ç»œï¼ˆä»»ä½•ç”µå°å‡å¯æ³¨å†Œï¼‰ã€‚',
+    whitelist_help:'åˆ—è¡¨ä¸ºç©ºæ—¶ï¼Œä»»ä½•ç”µå°å‡å¯æ³¨å†Œï¼ˆå¼€æ”¾ç½‘ç»œï¼‰ã€‚æœ‰æ¡ç›®æ—¶ï¼Œä»…æŽ¥å—åˆ—å‡ºçš„ ISSIï¼Œå…¶ä½™ä¸€å¾‹æ‹’ç»ã€‚æ›´æ”¹å³æ—¶ç”Ÿæ•ˆå¹¶åœ¨é‡å¯åŽä¿ç•™ã€‚',
+    whitelist_enforced:'å·²å¯ç”¨',whitelist_open:'å¼€æ”¾',whitelist_invalid:'è¯·è¾“å…¥æœ‰æ•ˆçš„ ISSIï¼ˆ1â€“16777215ï¼‰ã€‚',
+    wx_title:'WX / METAR æœåŠ¡',wx_help:'å†…ç½®æ°”è±¡æœåŠ¡ã€‚ç”µå°å‘æœåŠ¡ ISSI å‘é€å¦‚ "METAR LROP" çš„ SDS å³å¯èŽ·å¾—è§£ç æŠ¥å‘Šã€‚å¯é€‰æ‹©æŒ‰é—´éš”è‡ªåŠ¨å‘ ISSI æˆ–ç¾¤ç»„å‘é€å›ºå®šå°ç«™çš„ METARã€‚æ•°æ®æ¥è‡ª aviationweather.govã€‚',
+    wx_enabled:'å¯ç”¨æŒ‰éœ€ METAR å“åº”',wx_service_issi:'æœåŠ¡ ISSI',wx_periodic_enabled:'å¯ç”¨å®šæ—¶å¹¿æ’­',
+    wx_periodic_icao:'å°ç«™ ICAO',wx_periodic_dest:'ç›®æ ‡',wx_periodic_isgroup:'ç›®æ ‡ä¸ºç¾¤ç»„',wx_periodic_isgroup_hint:'ï¼ˆGSSI è€Œéžå•ä¸ª ISSIï¼‰',
+    wx_periodic_interval:'é—´éš”ï¼ˆç§’ï¼‰',wx_interval_hint:'æœ€å°‘ 300 ç§’ï¼ˆ5 åˆ†é’Ÿï¼‰ï¼Œä»¥å…é¢‘ç¹è¯·æ±‚æ°”è±¡ APIã€‚',wx_periodic_incomplete:'å®šæ—¶æ¨¡å¼éœ€åŒæ—¶è®¾ç½®å°ç«™ ICAO å’Œç›®æ ‡ã€‚',
+    sds_title:'â¬¡ å‘é€ SDS çŸ­æ¶ˆæ¯',sds_dest:'ç›®æ ‡ ISSI',
+    live_sds_desc:'å‘æœ¬å°åŒºæ‰€æœ‰ç»ˆç«¯å¹¿æ’­æ–‡æœ¬æ¶ˆæ¯ï¼ŒæŒ‰ Home Mode Display é—´éš”é‡å¤å‘é€ã€‚ç›´åˆ°åˆ é™¤æˆ–è¾¾åˆ°é‡å¤æ¬¡æ•°ä¸ºæ­¢ã€‚',
+    live_sds_text:'æ¶ˆæ¯å†…å®¹ï¼ˆæœ€å¤š 251 å­—ç¬¦ï¼‰',live_sds_repeat:'é‡å¤æ¬¡æ•° (0=æ— é™)',live_sds_send:'å¹¿æ’­',
+    live_sds_clear_all:'æ¸…é™¤å…¨éƒ¨',live_sds_empty:'æš‚æ— å¹¿æ’­ä»»åŠ¡ã€‚',
+    live_sds_sent:'å·²å‘é€',live_sds_times:'æ¬¡',live_sds_forever:'âˆž',live_sds_delete:'åˆ é™¤',
+    fallback_title:'âš  æ­£åœ¨ä½¿ç”¨åŽå¤‡é…ç½® â€” ä¸»é…ç½®åŠ è½½å¤±è´¥',
+    sds_msg_label:'æ¶ˆæ¯å†…å®¹',cancel:'å–æ¶ˆ',send:'å‘é€',
+    th_issi:'ISSI',th_groups:'ç¾¤ç»„',th_ee:'èŠ‚èƒ½',th_signal:'ä¿¡å·',
+    th_status:'çŠ¶æ€',th_last_seen:'æœ€åŽåœ¨çº¿',th_actions:'æ“ä½œ',
+    th_id:'ID',th_type:'ç±»åž‹',th_caller:'ä¸»å«',
+    th_dest:'è¢«å«',th_speaker:'è®²è¯è€…',th_duration:'æ—¶é•¿',
+    th_time:'æ—¶é—´',th_activity:'æ´»åŠ¨',
+    last_heard_title:'æœ€è¿‘é€šè¯è®°å½•',no_activity:'æš‚æ— æ´»åŠ¨è®°å½•',
+    act_call_group:'ç»„å‘¼',act_call_individual:'ç‚¹å¯¹ç‚¹',act_sds:'SDS',
+    online_badge:'åœ¨çº¿',kick:'è¸¢ä¸‹çº¿',sds:'SDS',
+    call_group:'ç»„å‘¼',call_p2p_s:'P2P-S',call_p2p_d:'P2P-D',call_emergency:'ç´§æ€¥å‘¼å«',
+    emg_banner_title:'ç´§æ€¥çŠ¶æ€æ¿€æ´»',integrations:'é›†æˆ',integ_enabled:'å·²å¯ç”¨',integ_disabled:'å·²ç¦ç”¨',integ_error:'é”™è¯¯',system_sec:'ç³»ç»Ÿ',emg_chip:'ç´§æ€¥',bs_label:'BS',emg_clear:'æ¸…é™¤',confirm_clear_emergency:'æ¸…é™¤ ISSI {issi} çš„ç´§æ€¥çŠ¶æ€ï¼Ÿ',
+    confirm_kick:'ç¡®å®šè¸¢ä¸‹ ISSI {issi}ï¼Ÿ\nç»ˆç«¯å°†è¢«æ³¨é”€å¹¶å¼ºåˆ¶é‡æ–°æ³¨å†Œã€‚',
+    dgna:'DGNA',dgna_title:'åŠ¨æ€ç»„åˆ†é…',dgna_modal_title:'â¬¡ åŠ¨æ€ç»„åˆ†é…',dgna_issi:'ç»ˆç«¯ ISSI',dgna_current:'å½“å‰ç»„',dgna_gssi:'ç»„ (GSSI)',dgna_assign:'åˆ†é…',dgna_deassign:'ç§»é™¤',
+    confirm_restart:'ç¡®å®šé‡å¯ FlowStationï¼Ÿ\næ‰€æœ‰æ­£åœ¨è¿›è¡Œçš„é€šè¯å°†è¢«ä¸­æ–­ã€‚',
+    confirm_shutdown:'ç¡®å®šå…³é—­ FlowStationï¼Ÿ\næœåŠ¡å°†åœæ­¢ï¼Œéœ€è¦æ‰‹åŠ¨é‡å¯ã€‚',
+    confirm_logout:'ç¡®å®šæ³¨é”€å—ï¼Ÿ',
+    saved:'âœ“ å·²ä¿å­˜ â€” é‡å¯åŽç”Ÿæ•ˆ',save_fail:'âœ— ä¿å­˜å¤±è´¥',conn_error:'è¿žæŽ¥é”™è¯¯',
+    update:'æ›´æ–°',update_available:'æœ‰å¯ç”¨æ›´æ–°',update_title:'OTA åœ¨çº¿æ›´æ–° â€” github.com/razvanzeces/flowstation',
+    update_confirm:'æ˜¯å¦ä»Ž main åˆ†æ”¯æ‹‰å–æœ€æ–°ä»£ç å¹¶é‡æ–°æž„å»ºï¼Ÿ\næœåŠ¡å°†è‡ªåŠ¨é‡å¯ã€‚',
+    update_running:'æ­£åœ¨æ›´æ–°â€¦ è¯·ä¸è¦å…³é—­æ­¤çª—å£',
+    update_done_ok:'âœ“ æ›´æ–°å®Œæˆï¼Œæ­£åœ¨é‡å¯â€¦',
+    update_done_err:'âœ— æ›´æ–°å¤±è´¥ï¼Œè¯·æŸ¥çœ‹ä¸‹æ–¹æ—¥å¿—',
+    update_close:'å…³é—­',
+    system:'ç³»ç»Ÿ',sys_info:'ç³»ç»Ÿä¿¡æ¯',sys_hostname:'ä¸»æœºå',sys_uptime:'è¿è¡Œæ—¶é—´',
+    sys_version:'FS ç‰ˆæœ¬',sys_os:'æ“ä½œç³»ç»Ÿ',sys_config:'å½“å‰é…ç½®',
+    sys_cpu:'CPU',sys_cpu_load:'CPU è´Ÿè½½',sys_ram:'å†…å­˜',sys_temp:'CPU æ¸©åº¦',
+    wifi:'WiFi',wifi_status:'å½“å‰è¿žæŽ¥',wifi_saved:'å·²ä¿å­˜çš„ç½‘ç»œ',wifi_visible:'å¯ç”¨ç½‘ç»œ',wifi_loading:'åŠ è½½ä¸­â€¦',wifi_scanning:'æ‰«æä¸­â€¦',wifi_no_device:'æœªæ£€æµ‹åˆ° WiFi è®¾å¤‡ã€‚',wifi_radio_disabled:'WiFi å·²ç¦ç”¨ã€‚',wifi_not_connected:'æœªè¿žæŽ¥ä»»ä½•ç½‘ç»œã€‚',wifi_no_saved:'æ— å·²ä¿å­˜çš„ç½‘ç»œã€‚',wifi_no_networks:'èŒƒå›´å†…æ— å¯ç”¨ç½‘ç»œã€‚',wifi_ssid:'ç½‘ç»œ',wifi_signal:'ä¿¡å·',wifi_ip:'IP åœ°å€',wifi_actions:'æ“ä½œ',wifi_disconnect:'æ–­å¼€',wifi_connect:'è¿žæŽ¥',wifi_connect_to:'è¿žæŽ¥åˆ°',wifi_connecting:'è¿žæŽ¥ä¸­â€¦',wifi_connected:'å·²è¿žæŽ¥',wifi_connected_ok:'å·²è¿žæŽ¥ã€‚',wifi_saved_tag:'å·²ä¿å­˜',wifi_open:'å¼€æ”¾',wifi_forget:'å¿˜è®°',wifi_confirm_forget:'å¿˜è®°ç½‘ç»œ',wifi_password:'å¯†ç ',wifi_hidden:'éšè—ç½‘ç»œ (SSID ä¸å¹¿æ’­)',wifi_add_hidden:'éšè—ç½‘ç»œ',wifi_scan:'æ‰«æ',wifi_refresh:'åˆ·æ–°',wifi_radio_off:'ç¦ç”¨ WiFi',wifi_radio_on:'å¯ç”¨ WiFi',wifi_warn_lose_access:'å¦‚æžœæ‚¨é€šè¿‡ WiFi è¿žæŽ¥åˆ°ä»ªè¡¨æ¿,æ›´æ¢ç½‘ç»œå¯èƒ½ä¼šæš‚æ—¶æ–­å¼€æ‚¨çš„è¿žæŽ¥ã€‚è¯·ç¡®ä¿æœ‰å¤‡ç”¨è®¿é—®æ–¹å¼ã€‚',wifi_err_no_ssid:'éœ€è¦ SSID',cancel:'å–æ¶ˆ',sys_sensors:'ä¸»æœºç¡¬ä»¶ä¼ æ„Ÿå™¨',sys_sensors_empty:'æœªæ£€æµ‹åˆ°ä¼ æ„Ÿå™¨ã€‚',sys_rf:'RF ç¡¬ä»¶ (SoapySDR)',sys_autorefresh:'è‡ªåŠ¨åˆ·æ–° 5ç§’',
+    profile_edit_title:'ç¼–è¾‘é…ç½®æ–‡ä»¶',profile_edit_btn:'ç¼–è¾‘',
+    profile_edit_save_ok:'âœ“ å·²ä¿å­˜',profile_edit_save_fail:'âœ— ä¿å­˜å¤±è´¥',
+    sys_profiles:'é…ç½®æ–‡ä»¶',sys_activate:'æ¿€æ´»å¹¶é‡å¯',
+    sys_active_badge:'å½“å‰ä½¿ç”¨',sys_no_profiles:'é…ç½®ç›®å½•ä¸­æœªæ‰¾åˆ° .toml é…ç½®æ–‡ä»¶ã€‚',
+    sys_activate_confirm:'åˆ‡æ¢åˆ°é…ç½®æ–‡ä»¶ "{name}" å¹¶é‡å¯ï¼Ÿ\nå½“å‰é…ç½®å°†è¢«å¤‡ä»½ã€‚',
+    sys_title:'ç³»ç»Ÿ',sys_sec_status:'çŠ¶æ€',sys_sec_host:'ä¸»æœº',sys_sec_radio:'å°„é¢‘ç¡¬ä»¶',sys_sec_sensors:'ä¼ æ„Ÿå™¨',sys_sec_profiles:'é…ç½®æ¡£æ¡ˆ',sys_sec_sds:'SDS å¹¿æ’­',sys_refresh:'åˆ·æ–°',sys_probe:'æŽ¢æµ‹',sys_temp_hot:'è¿‡çƒ­',sys_temp_warm:'æ¸©çƒ­',sys_temp_ok:'æ­£å¸¸',
+    sys_bts:'BTS è¿žæŽ¥',
   },
 };
 
@@ -4558,7 +4563,7 @@ function setTheme(theme,btn){
   else document.querySelectorAll('.theme-btn').forEach(d=>{if(d.dataset.t===theme)d.classList.add('active');});
 }
 
-// ── Readability (text size + contrast) ───────────────────────────────────────
+// â”€â”€ Readability (text size + contrast) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // One multiplier --ts on <html data-uisize>, consumed by the curated readability
 // block via calc(). Default = Medium (bigger out of the box). Persisted: fs_uisize.
 let currentUiSize=localStorage.getItem('fs_uisize')||'m';
@@ -4589,7 +4594,7 @@ document.addEventListener('click',e=>{
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeReadPop();});
 
-// ── Touch mode (FH-FEAT-008) ─────────────────────────────────────────────────
+// â”€â”€ Touch mode (FH-FEAT-008) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // '1' = forced on, '0' = forced off, null = auto (on for coarse pointers).
 let touchMode=localStorage.getItem('fs_touch');
 function applyTouchMode(){
@@ -4607,7 +4612,7 @@ function toggleTouchMode(){
   applyTouchMode();
 }
 
-// ── Sidebar ───────────────────────────────────────────────────────────────
+// â”€â”€ Sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let sidebarCollapsed=localStorage.getItem('sb_collapsed')==='1';
 function toggleSidebar(){
   sidebarCollapsed=!sidebarCollapsed;
@@ -4623,7 +4628,7 @@ function closeMobileSidebar(){
   document.getElementById('mobile-overlay').style.display='none';
 }
 
-// ── Page navigation ───────────────────────────────────────────────────────
+// â”€â”€ Page navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const PAGE_TITLES={stations:'stations',calls:'calls',lastheard:'lastheard',log:'log',sdslog:'sdslog',rf:'rf',health:'health',asterisk:'asterisk',dapnet:'dapnet',echolink:'echolink',meshcom:'meshcom',geoalarm:'geoalarm',config:'config',system:'system'};
 function showPage(name,el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -4646,18 +4651,18 @@ function showPage(name,el){
   if(window.innerWidth<=700)closeMobileSidebar();
 }
 
-// ── WiFi management ────────────────────────────────────────────────────────
+// â”€â”€ WiFi management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // All WiFi state mutations are last-write-wins and idempotent on the server,
-// so we don't bother with optimistic UI updates — just fire the request,
+// so we don't bother with optimistic UI updates â€” just fire the request,
 // wait for completion, then refresh the displayed state. This is the only
 // safe approach since nmcli can take a few seconds to actually associate
-// and a brief "Connecting…" state is more honest than fake instant success.
+// and a brief "Connectingâ€¦" state is more honest than fake instant success.
 
 let wifiState = { status: null, saved: [], scan: [], modalMode: null, modalSsid: null };
 
 /// One-shot probe at boot: is nmcli installed on this host? Toggles the
 /// sidebar nav item visibility. Falls back to hidden if the request fails
-/// for any reason — better to not advertise than to crash on click.
+/// for any reason â€” better to not advertise than to crash on click.
 async function wifiProbeAvailable(){
   try{
     const res = await fetch('/api/wifi/available');
@@ -4670,7 +4675,7 @@ async function wifiProbeAvailable(){
 }
 
 async function wifiRefresh(){
-  // Run status / saved / scan in parallel — they hit nmcli independently.
+  // Run status / saved / scan in parallel â€” they hit nmcli independently.
   await Promise.all([wifiLoadStatus(), wifiLoadSaved(), wifiScan()]);
 }
 
@@ -4689,7 +4694,7 @@ function wifiRenderStatus(){
   const radioBtn = document.getElementById('wifi-radio-btn');
   if(!el) return;
   const s = wifiState.status;
-  if(!s){ el.innerHTML = '<div class="wifi-status-loading">'+(t('wifi_loading')||'Loading…')+'</div>'; return; }
+  if(!s){ el.innerHTML = '<div class="wifi-status-loading">'+(t('wifi_loading')||'Loadingâ€¦')+'</div>'; return; }
 
   // The radio toggle label flips based on current state so the button reads
   // as the *action* it will perform, not the current state.
@@ -4718,11 +4723,11 @@ function wifiRenderStatus(){
     </div>
     <div class="wifi-status-item">
       <div class="wifi-status-label">${t('wifi_signal')||'Signal'}</div>
-      <div class="wifi-status-value">${s.signal != null ? s.signal+'%' : '—'}</div>
+      <div class="wifi-status-value">${s.signal != null ? s.signal+'%' : 'â€”'}</div>
     </div>
     <div class="wifi-status-item">
       <div class="wifi-status-label">${t('wifi_ip')||'IP address'}</div>
-      <div class="wifi-status-value">${s.ip_address ? escHtml(s.ip_address) : '—'}</div>
+      <div class="wifi-status-value">${s.ip_address ? escHtml(s.ip_address) : 'â€”'}</div>
     </div>
     <div class="wifi-status-item">
       <div class="wifi-status-label">${t('wifi_actions')||'Actions'}</div>
@@ -4782,7 +4787,7 @@ async function wifiLoadSaved(){
 async function wifiScan(){
   const el = document.getElementById('wifi-scan-list');
   if(!el) return;
-  el.innerHTML = `<div class="wifi-list-empty">${t('wifi_scanning')||'Scanning…'}</div>`;
+  el.innerHTML = `<div class="wifi-list-empty">${t('wifi_scanning')||'Scanningâ€¦'}</div>`;
   try{
     const r = await fetch('/api/wifi/scan');
     const j = await r.json();
@@ -4793,7 +4798,7 @@ async function wifiScan(){
       return;
     }
     // Build rows with the DOM. A scanned SSID is raw 802.11 data from whoever is broadcasting in
-    // range, so it must never enter an inline handler string — textContent + onclick closures keep it
+    // range, so it must never enter an inline handler string â€” textContent + onclick closures keep it
     // inert. wifiSignalBars() is static, trusted markup, so it stays as innerHTML on its own cell.
     el.innerHTML = '';
     wifiState.scan.forEach(n => {
@@ -4835,7 +4840,7 @@ async function wifiScan(){
 
 function wifiSignalBars(signal){
   // 4-bar signal indicator. Thresholds picked to roughly match what most
-  // OS WiFi icons use: <25 = 1 bar, <50 = 2, <75 = 3, ≥75 = 4.
+  // OS WiFi icons use: <25 = 1 bar, <50 = 2, <75 = 3, â‰¥75 = 4.
   const lit = signal >= 75 ? 4 : signal >= 50 ? 3 : signal >= 25 ? 2 : signal > 0 ? 1 : 0;
   return `<span class="wifi-bars">
     <span class="b1 ${lit>=1?'lit':''}"></span>
@@ -4851,7 +4856,7 @@ async function wifiConnectSaved(uuid){
 }
 
 // "Connect by SSID" path is for networks already saved but visible in the
-// scan — we have the credentials, just need to bring up the right profile.
+// scan â€” we have the credentials, just need to bring up the right profile.
 async function wifiConnectBySsid(ssid){
   const p = wifiState.saved.find(p => p.name === ssid);
   if(p){ await wifiConnectSaved(p.uuid); return; }
@@ -4922,7 +4927,7 @@ async function wifiModalSubmit(){
     return;
   }
   okBtn.disabled = true;
-  msg.textContent = t('wifi_connecting')||'Connecting…';
+  msg.textContent = t('wifi_connecting')||'Connectingâ€¦';
   msg.className = 'wifi-modal-msg ok';
   const r = await wifiCall('/api/wifi/connect', { ssid, psk, hidden });
   okBtn.disabled = false;
@@ -4969,11 +4974,11 @@ async function wifiCall(url, body){
 
 function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
 
-// ── State + WS ────────────────────────────────────────────────────────────
+// â”€â”€ State + WS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let ws=null,state={ms:{},calls:{},emergencies:{},lastHeard:[],sdsLog:[],dapnetLog:[],geoalarmEvents:[],brewOnline:false,brewVer:0},sdsDest=0;
 
-// ── RadioID callsigns (indicativ) ──────────────────────────────────────────────
-// issi -> {cs:"CALLSIGN", fl:"🇷🇴"} (found; fl is the country flag emoji from the prefix, or "")
+// â”€â”€ RadioID callsigns (indicativ) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// issi -> {cs:"CALLSIGN", fl:"ðŸ‡·ðŸ‡´"} (found; fl is the country flag emoji from the prefix, or "")
 //       | "" (looked up, none). A missing key means unresolved.
 let callsigns={};
 let _csInflight=false;
@@ -5012,7 +5017,7 @@ function showFallbackBanner(reason){
   if(reasonEl)reasonEl.textContent=reason;
 }
 
-// Persistent emergency banner — shown while >=1 ISSI is in active emergency. Each active ISSI
+// Persistent emergency banner â€” shown while >=1 ISSI is in active emergency. Each active ISSI
 // gets a chip with a Clear button (operator clear). Driven by state.emergencies.
 function renderEmergencyBanner(){
   const b=document.getElementById('emergency-banner'),list=document.getElementById('emergency-banner-list');
@@ -5029,13 +5034,13 @@ function renderEmergencyBanner(){
     const fl=(c&&c.fl)?c.fl+' ':'';
     // Escape the callsign before it goes into innerHTML below, mirroring idCell. The issi is numeric
     // and fl is a flag emoji derived from the prefix, so only the callsign needs escaping.
-    const who=(c&&c.cs)?(e.issi+' · '+fl+escHtml(c.cs)):(''+e.issi);
+    const who=(c&&c.cs)?(e.issi+' Â· '+fl+escHtml(c.cs)):(''+e.issi);
     return `<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.18);border-radius:4px;padding:2px 8px"><code style="color:#fff">${who}</code><button onclick="clearEmergency(${e.issi})" style="padding:1px 7px;background:#fff;color:var(--danger);border:none;border-radius:3px;font-weight:600;cursor:pointer;font-size:11px">${t('emg_clear')}</button></span>`;
   }).join('');
 }
 function clearEmergency(issi){if(!confirm(t('confirm_clear_emergency',{issi})))return;wsSend({type:'emergency_clear',issi});}
 
-// ── Topbar status chips (BS / Brew / Emergency) — calm always-visible state.
+// â”€â”€ Topbar status chips (BS / Brew / Emergency) â€” calm always-visible state.
 // Mirrors the footer LEDs + emergency state onto the .pill chips in the header.
 function syncTopbarChips(){
   const led=document.getElementById('connLed');
@@ -5074,13 +5079,13 @@ function setBrewStatus(online,version){
     led.classList.remove('on');txt.textContent=t('brew_offline');txt.style.color='';
     if(vbadge)vbadge.style.display='none';
   }
-  // Update stat card — state via ONE class (kills inline color split).
+  // Update stat card â€” state via ONE class (kills inline color split).
   const bv=document.getElementById('stat-brew-val');
   const bs=document.getElementById('stat-brew-sub');
   const bcard=document.getElementById('stat-brew-card');
   if(bv){bv.textContent=online?t('brew_online'):t('brew_offline');}
   if(bcard){bcard.classList.remove('is-info','is-danger');bcard.classList.add(online?'is-info':'is-danger');}
-  if(bs)bs.textContent=online?`Brew v${version||0}`:'—';
+  if(bs)bs.textContent=online?`Brew v${version||0}`:'â€”';
   const hb=document.getElementById('stations-hero-brew');
   if(hb)hb.textContent=online?`v${version||0}`:t('brew_offline');
   // System panel
@@ -5142,7 +5147,7 @@ function handleMsg(msg){
     case 'ms_registered':
       // Defaults include selected_group:null so a re-register event doesn't strip the
       // property off an existing entry (Object.assign with a defaults object that omits the
-      // key would otherwise just leave whatever was there — that part is fine — but freshly
+      // key would otherwise just leave whatever was there â€” that part is fine â€” but freshly
       // registered entries must have a defined-but-null selected_group so the equality
       // comparison `g === sel` in renderStations behaves consistently with the server-side
       // None initialiser in server.rs.
@@ -5177,7 +5182,7 @@ function handleMsg(msg){
       state.calls[msg.call_id]={...msg,started_at:Date.now()};
       if(msg.carrier_num!=null)tsEnsureCarrierInfo(msg.carrier_num);
       if(msg.peer_carrier_num!=null)tsEnsureCarrierInfo(msg.peer_carrier_num);
-      // The caller keyed up on this GSSI → it's their actively-selected TG.
+      // The caller keyed up on this GSSI â†’ it's their actively-selected TG.
       if(msg.call_type==='group'&&msg.gssi!=null&&state.ms[msg.caller_issi]){state.ms[msg.caller_issi].selected_group=msg.gssi;renderStations();}
       if(msg.last_heard)pushLastHeard(msg.last_heard);
       if(tsCanRenderAssignedCarrier(msg.carrier_num,msg.ts)){
@@ -5234,20 +5239,20 @@ function handleMsg(msg){
   }
 }
 
-// ── Render helpers ────────────────────────────────────────────────────────
-// Small battery-with-bolt glyph — conveys "Energy Economy" (power-saving) at a glance.
+// â”€â”€ Render helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Small battery-with-bolt glyph â€” conveys "Energy Economy" (power-saving) at a glance.
 const EE_ICON='<svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;flex-shrink:0"><rect x="2" y="7" width="16" height="10" rx="2"/><path d="M22 10v4" stroke-linecap="round"/><path d="M10.5 9.5 8 13h3l-2.5 3.5" fill="none" stroke-linecap="round"/></svg>';
 function eeLabel(mode){
-  if(!mode||mode===0)return '<span class="muted" style="font-size:10px">—</span>';
+  if(!mode||mode===0)return '<span class="muted" style="font-size:10px">â€”</span>';
   const labels=['','EG1','EG2','EG3','EG4','EG5','EG6','EG7'];
-  // Severity tier → .pill variant (no inline color literals).
+  // Severity tier â†’ .pill variant (no inline color literals).
   const variants=['','pill-ok','pill-ok','pill-info','pill-info','pill-warn','pill-danger','pill-danger'];
   const tips=['','~1s','~2s','~3s','~4s','~5s','~6s','~7s'];
   const v=variants[mode]||'pill-idle';
-  return `<span class="pill ${v} no-dot" title="Energy Economy Mode ${mode} — wake ${tips[mode]}"><span class="pill-icon">${EE_ICON}</span>${labels[mode]}</span>`;
+  return `<span class="pill ${v} no-dot" title="Energy Economy Mode ${mode} â€” wake ${tips[mode]}"><span class="pill-icon">${EE_ICON}</span>${labels[mode]}</span>`;
 }
 function lastSeenLabel(secs){
-  if(secs==null)return'<span class="muted num">—</span>';
+  if(secs==null)return'<span class="muted num">â€”</span>';
   if(secs<5)return'<span class="num" style="color:var(--ok)">now</span>';
   if(secs<60)return`<span class="num accent">${secs}s</span>`;
   if(secs<3600)return`<span class="num">${Math.floor(secs/60)}m${secs%60}s</span>`;
@@ -5276,11 +5281,11 @@ function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function escHtmlAttr(s){return escHtml(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function renderAll(){renderStations();renderCalls();renderLastHeard();updateTsBlocksCarrier();}
 
-// ── TS Visualizer ─────────────────────────────────────────────────────────
+// â”€â”€ TS Visualizer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // tsState[ts-1]: {call_id, call_type, label, sub, voice_ts, started_at}
 const tsState=[null,null,null,null];
 const TS_VOICE_DECAY_MS=800;
-// Random wave heights per bar per TS — regenerated on each voice frame
+// Random wave heights per bar per TS â€” regenerated on each voice frame
 const tsWaveHeights=[[],[],[],[]];
 
 function tsRandWave(ts){
@@ -5323,7 +5328,7 @@ function updateTsBlocks(){
     const timer=block.querySelector('.ts-timer');
     if(!st){
       block.className='ts-block';
-      label.textContent='—';
+      label.textContent='â€”';
       sub.textContent='Idle';
       tsApplyWave(ts,false);
       if(timer)timer.textContent='';
@@ -5339,7 +5344,7 @@ function updateTsBlocks(){
 
     if(voiceRecent){
       block.className='ts-block voice';
-      sub.textContent=lines.bottom?('▶ '+lines.bottom):'▶ TX';
+      sub.textContent=lines.bottom?('â–¶ '+lines.bottom):'â–¶ TX';
     } else {
       block.className='ts-block call';
       sub.textContent=lines.bottom||(st.sub||'Alloc');
@@ -5352,7 +5357,7 @@ function updateTsBlocks(){
     }
     tsApplyWave(ts, voiceRecent);
 
-    // Duration bar — fills over 120s then stays full
+    // Duration bar â€” fills over 120s then stays full
     if(dur&&st.started_at){
       const pct=Math.min(100,((now-st.started_at)/120000)*100);
       dur.style.width=pct+'%';
@@ -5371,18 +5376,18 @@ function tsIssiText(issi){
   const c=callsigns[issi];
   if(!c||!c.cs)return ''+issi;
   const fl=c.fl?c.fl+' ':'';
-  return issi+' · '+fl+c.cs;
+  return issi+' Â· '+fl+c.cs;
 }
 // Compute the two text lines for an active timeslot from its call state:
-//   top    → GSSI (talkgroup number) for group calls, else the called ISSI / P2P
-//   bottom → the ISSI currently transmitting, with callsign when resolved
+//   top    â†’ GSSI (talkgroup number) for group calls, else the called ISSI / P2P
+//   bottom â†’ the ISSI currently transmitting, with callsign when resolved
 function tsLines(st){
   const speaker=st.speaker_issi||st.caller_issi;
   if(st.call_type==='group'){
     // Group calls (the normal traffic-channel case): GSSI on top, speaking ISSI below.
     return {top: st.gssi!=null?('GSSI '+st.gssi):'GROUP', bottom: tsIssiText(speaker)};
   }
-  // Individual / point-to-point calls have no talkgroup — label the top line clearly
+  // Individual / point-to-point calls have no talkgroup â€” label the top line clearly
   // so it never shows a bare "ISSI" that reads like a misplaced GSSI.
   return {top:'PRIVATE', bottom: tsIssiText(speaker)};
 }
@@ -5572,7 +5577,7 @@ function updateTsBlocksCarrier(){
       label.textContent=lines.top;
       if(voiceRecent){
         block.className='ts-block voice';
-        sub.textContent=lines.bottom?('â–¶ '+lines.bottom):'â–¶ TX';
+        sub.textContent=lines.bottom?('Ã¢â€“Â¶ '+lines.bottom):'Ã¢â€“Â¶ TX';
       }else{
         block.className='ts-block call';
         sub.textContent=lines.bottom||(st.sub||'Alloc');
@@ -5740,25 +5745,25 @@ function renderStations(){
   const tb=document.getElementById('ms-tbody');
   if(!ms.length){tb.innerHTML=`<tr><td colspan="7"><div class="empty-state"><span class="empty-ico">${svgIcon('radios')}</span><div class="empty-msg">${t('no_terminals')}</div></div></td></tr>`;return;}
   tb.innerHTML=ms.sort((a,b)=>a.issi-b.issi).map(m=>{
-    const r=m.rssi_dbfs,rL=r!=null?`${r.toFixed(1)} dBFS`:'—',pct=rssiPct(r),gcls=rssiGaugeClass(r);
+    const r=m.rssi_dbfs,rL=r!=null?`${r.toFixed(1)} dBFS`:'â€”',pct=rssiPct(r),gcls=rssiGaugeClass(r);
     let grps;
     const gl=m.groups||[],sel=m.selected_group;
     // The selected/active TG (the one the MS last keyed up on) is rendered as a solid blue
-    // badge with a ▶ marker; the merely scanned/affiliated TGs are dim. Until the MS is heard
-    // on a call sel is null — so right after a restart all groups show dim (scanned), without
+    // badge with a â–¶ marker; the merely scanned/affiliated TGs are dim. Until the MS is heard
+    // on a call sel is null â€” so right after a restart all groups show dim (scanned), without
     // implying the station is actively on any of them.
     const gBadge=g=>g===sel
       ?`<span class="badge badge-blue" style="font-weight:700;font-size:9px" title="${t('tg_selected')}"><span class="tg-marker">${ICON_MARKER}</span>${g}</span>`
       :`<span class="badge badge-dim" style="font-size:9px">${g}</span>`;
     if(gl.length>1){
       const gList=gl.slice().sort((a,b)=>(b===sel)-(a===sel)||a-b).map(gBadge).join(' ');
-      // Always show a neutral "+N affiliated" badge — never "⚡ SCAN" (FH-BUG-032). On the BS
+      // Always show a neutral "+N affiliated" badge â€” never "âš¡ SCAN" (FH-BUG-032). On the BS
       // side we have NO signal that the radio is actively scanning; we only have the static set
       // of affiliated groups, which the radio keeps re-attaching with lifetime=0 even after scan
-      // is turned off on the device (intentional — see FH-BUG-022). "⚡ SCAN" was read by
+      // is turned off on the device (intentional â€” see FH-BUG-022). "âš¡ SCAN" was read by
       // operators as a live "this radio is scanning" claim, which we cannot back up. "+N
       // affiliated" is honest: these N groups are affiliated alongside the selected one (if any).
-      // With a selected TG, the selected one is marked ▶ and N excludes it; with none selected
+      // With a selected TG, the selected one is marked â–¶ and N excludes it; with none selected
       // yet (e.g. before the first PTT), N counts them all.
       const others=sel!=null?gl.filter(g=>g!==sel).length:gl.length;
       const extraBadge=`<span class="badge badge-dim" style="font-size:9px;margin-right:4px" title="${t('tg_affiliated_hint')}">+${others} ${t('tg_affiliated_short')}</span>`;
@@ -5766,7 +5771,7 @@ function renderStations(){
     } else if(gl.length===1){
       grps=`<span class="badge badge-blue">${gl[0]}</span>`;
     } else {
-      grps='<span class="badge badge-dim">—</span>';
+      grps='<span class="badge badge-dim">â€”</span>';
     }
     const ls=m._last_seen_ts?Math.floor((Date.now()-m._last_seen_ts)/1000):m.last_seen_secs_ago;
     const emg=!!state.emergencies[m.issi];
@@ -5796,11 +5801,11 @@ function renderCalls(){
     const to=c.call_type==='group'?`GSSI ${c.gssi}`:`${idCell(c.called_issi)}${allocMeta}`;
     const spk=c.active_speaker
       ? `${idCell(c.active_speaker)}${c.call_type==='individual'?` <span class="badge badge-dim" style="font-size:9px">${privatePartyRole(c,c.active_speaker)}</span>`:''}`
-      : '<span style="color:var(--text3)">—</span>';
+      : '<span style="color:var(--text3)">â€”</span>';
     // Emergency call = ETSI call priority 15 (terminal emergency button). Flag it prominently.
     const emg=(c.priority||0)>=15;
     const emgBadge=emg?`<span class="pill pill-danger"><span class="pill-icon">${svgIcon('emergency')}</span>${t('call_emergency')}</span> `:'';
-    return`<tr${emg?' class="row-emergency"':''}><td class="col-mobile-hide"><code>${c.call_id}</code></td><td>${emgBadge}<span class="pill ${pillv}">${label}</span></td><td>${c.caller_issi?idCell(c.caller_issi):'<span class="muted">—</span>'}</td><td>${to}</td><td>${spk}</td><td><span class="num accent">${mm}:${ss}</span></td></tr>`;
+    return`<tr${emg?' class="row-emergency"':''}><td class="col-mobile-hide"><code>${c.call_id}</code></td><td>${emgBadge}<span class="pill ${pillv}">${label}</span></td><td>${c.caller_issi?idCell(c.caller_issi):'<span class="muted">â€”</span>'}</td><td>${to}</td><td>${spk}</td><td><span class="num accent">${mm}:${ss}</span></td></tr>`;
   }).join('');
 }
 
@@ -5809,7 +5814,7 @@ function renderLastHeard(){
   if(!tb)return;
   if(!state.lastHeard.length){tb.innerHTML=`<tr><td colspan="4"><div class="empty-state"><span class="empty-ico">${svgIcon('lastheard')}</span><div class="empty-msg">${t('no_activity')}</div></div></td></tr>`;return;}
   tb.innerHTML=state.lastHeard.map(e=>{
-    const destStr=e.dest?`<code>${e.dest}</code>`:'<span class="muted">—</span>';
+    const destStr=e.dest?`<code>${e.dest}</code>`:'<span class="muted">â€”</span>';
     const isOnline=!!state.ms[e.issi];
     const issiHtml=`${idCell(e.issi)}${isOnline?` <span class="pill pill-ok">${t('online_badge')}</span>`:''}`;
     return`<tr>
@@ -5820,7 +5825,7 @@ function renderLastHeard(){
 }
 function clearLastHeard(){state.lastHeard=[];renderLastHeard();}
 
-// ── SDS Log ───────────────────────────────────────────────────────────────
+// â”€â”€ SDS Log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function _p2(n){return String(n).padStart(2,'0');}
 // Local "YYYY-MM-DD HH:MM:SS" stamp matching the server's persisted format. Used only for
 // live rows arriving over the WS; rows fetched from /api/sds-log already carry a server stamp.
@@ -5829,9 +5834,9 @@ const LOG_PAGE_SIZE=50;
 let sdsLogPageIndex=0,dapnetLogPageIndex=0,geoalarmPageIndex=0;
 function setLogPager(id,page,total){
   const el=document.getElementById(id);if(!el)return;
-  if(!total){el.textContent='Page 0 / 0 · 0';return;}
+  if(!total){el.textContent='Page 0 / 0 Â· 0';return;}
   const pages=Math.max(1,Math.ceil(total/LOG_PAGE_SIZE));
-  el.textContent=`Page ${page+1} / ${pages} · ${total}`;
+  el.textContent=`Page ${page+1} / ${pages} Â· ${total}`;
 }
 function clampLogPage(page,total){
   const pages=Math.max(1,Math.ceil(total/LOG_PAGE_SIZE));
@@ -5917,7 +5922,7 @@ function exportSdsLog(){
   downloadTextFile(`flowstation-sds-log-${logExportStamp()}.txt`,lines.join('\n')+'\n');
 }
 
-// ── DAPNET ────────────────────────────────────────────────────────────────
+// â”€â”€ DAPNET â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let dapPasswordDirty=false,dapAuthDirty=false;
 function dapSet(id,v){
   const el=document.getElementById(id);if(!el)return;
@@ -5975,7 +5980,7 @@ function dapRicListBody(id,label){
 }
 function dapPaths(paths){
   const p=paths||[];
-  if(!p.length)return '<span class="sds-empty">—</span>';
+  if(!p.length)return '<span class="sds-empty">â€”</span>';
   return p.map(x=>`<span class="badge badge-blue" style="font-size:10px">${escHtml(x)}</span>`).join(' ');
 }
 function dapnetRow(e){
@@ -6051,7 +6056,7 @@ async function loadDapnet(){
     dapSet('dap-callout-rics',dapRicListText(d.callout_allowed_rics));
     dapSet('dap-telegram-prefix',d.telegram_prefix||'DAPNET');
     dapSet('dap-telegram-rics',dapRicListText(d.telegram_allowed_rics));
-    // Hero pill — DAPNET has no live link probe; reflect the enabled feed state.
+    // Hero pill â€” DAPNET has no live link probe; reflect the enabled feed state.
     setIntegrationHero('dap', !!d.enabled, !!d.enabled,
       d.enabled?t('integ_enabled'):t('integ_disabled'),
       d.api_url||d.rwth_core_host||'');
@@ -6115,20 +6120,20 @@ async function sendDapnetMessage(){
   };
   if(!body.text){setDapSendMsg('Message text is empty',false);return;}
   if(!body.callSignNames.length&&!body.transmitterGroupNames.length){setDapSendMsg('Set callsign or transmitter group',false);return;}
-  setDapSendMsg('Sending…',true);
+  setDapSendMsg('Sendingâ€¦',true);
   try{
     const r=await fetch('/api/dapnet/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();
-    if(d.ok){setDapSendMsg('✓ Sent',true);document.getElementById('dap-out-text').value='';loadDapnetLog();}
-    else setDapSendMsg('✗ '+(d.error||'Send failed'),false);
+    if(d.ok){setDapSendMsg('âœ“ Sent',true);document.getElementById('dap-out-text').value='';loadDapnetLog();}
+    else setDapSendMsg('âœ— '+(d.error||'Send failed'),false);
   }catch{setDapSendMsg(t('conn_error'),false);}
 }
 
-// ── Shared map-link + paths helpers (also used by GeoAlarm) ────────────────
+// â”€â”€ Shared map-link + paths helpers (also used by GeoAlarm) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function meshMapLink(lat,lon,label){
-  if(lat===null||lat===undefined||lon===null||lon===undefined)return '—';
+  if(lat===null||lat===undefined||lon===null||lon===undefined)return 'â€”';
   const la=Number(lat),lo=Number(lon);
-  if(!Number.isFinite(la)||!Number.isFinite(lo))return '—';
+  if(!Number.isFinite(la)||!Number.isFinite(lo))return 'â€”';
   const url=`https://maps.google.com/?q=${encodeURIComponent(la+','+lo)}`;
   return `<a class="sds-map-link" href="${url}" target="_blank" rel="noopener noreferrer">${escHtml(label||`${la.toFixed(5)}, ${lo.toFixed(5)}`)}</a>`;
 }
@@ -6136,7 +6141,7 @@ function meshRfText(row){
   const parts=[];
   if(row.rssi!==null&&row.rssi!==undefined)parts.push(`RSSI ${row.rssi}`);
   if(row.snr!==null&&row.snr!==undefined)parts.push(`SNR ${row.snr}`);
-  return parts.join(' · ')||'—';
+  return parts.join(' Â· ')||'â€”';
 }
 function meshSourceListText(values){
   return Array.isArray(values)?values.join('\n'):'';
@@ -6147,11 +6152,11 @@ function meshSourceListBody(id){
   return raw.split(/[\s,]+/).map(v=>v.trim()).filter(Boolean);
 }
 function meshPaths(paths){
-  if(!Array.isArray(paths)||!paths.length)return '<span class="sds-empty">—</span>';
+  if(!Array.isArray(paths)||!paths.length)return '<span class="sds-empty">â€”</span>';
   return paths.map(p=>`<span class="badge badge-blue" style="font-size:10px">${escHtml(p)}</span>`).join(' ');
 }
 
-// ── GeoAlarm ──────────────────────────────────────────────────────────────
+// â”€â”€ GeoAlarm â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function geoFloat(id,def,min,max){
   const n=parseFloat(dapVal(id));
   if(!Number.isFinite(n))return def;
@@ -6177,8 +6182,8 @@ function geoEventRow(e){
     : (e.inside_radius?'<span class="badge badge-blue" style="font-size:10px">inside</span>':'<span class="badge" style="font-size:10px">outside</span>');
   return `<tr>
     <td class="sds-time">${escHtml(e.ts||'')}</td>
-    <td>${escHtml(e.source||'—')}</td>
-    <td>${escHtml(e.device||'—')}</td>
+    <td>${escHtml(e.source||'â€”')}</td>
+    <td>${escHtml(e.device||'â€”')}</td>
     <td class="sds-time">${Number(e.distance_m||0).toFixed(0)} m</td>
     <td>${meshMapLink(e.lat,e.lon,'map')}</td>
     <td>${status}</td>
@@ -6230,11 +6235,11 @@ async function loadGeoalarm(){
     dapSet('geo-alarms',rt.alarm_count??0);
     dapSet('geo-center',rt.center||`${d.flowstation_lat??0},${d.flowstation_lon??0}`);
     dapSet('geo-radius',`${Number(rt.radius_m||d.radius_m||0).toFixed(0)} m`);
-    dapSet('geo-last-position',rt.last_position||'—');
-    dapSet('geo-last-alarm',rt.last_alarm||'—');
-    dapSet('geo-last-error',rt.last_error||'—');
-    // Hero pill — reflect the enabled state; warn when enabled but a last error is present.
-    const geoErr=rt.last_error&&rt.last_error!=='—';
+    dapSet('geo-last-position',rt.last_position||'â€”');
+    dapSet('geo-last-alarm',rt.last_alarm||'â€”');
+    dapSet('geo-last-error',rt.last_error||'â€”');
+    // Hero pill â€” reflect the enabled state; warn when enabled but a last error is present.
+    const geoErr=rt.last_error&&rt.last_error!=='â€”';
     setIntegrationHero('geo', !!d.enabled, !!d.enabled&&!geoErr,
       d.enabled?(geoErr?t('integ_error'):t('integ_enabled')):t('integ_disabled'),
       rt.center||`${d.flowstation_lat??0}, ${d.flowstation_lon??0}`);
@@ -6278,7 +6283,7 @@ async function saveGeoalarm(){
   };
   try{
     const r=await fetch('/api/geoalarm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(r.ok){setGeoMsg('✓ Saved',true);setTimeout(loadGeoalarm,500);}
+    if(r.ok){setGeoMsg('âœ“ Saved',true);setTimeout(loadGeoalarm,500);}
     else setGeoMsg(t('save_fail')+': '+await r.text(),false);
   }catch{setGeoMsg(t('conn_error'),false);}
 }
@@ -6298,7 +6303,7 @@ function appendLog(msg){
 }
 function clearLog(){document.getElementById('log-container').innerHTML='';}
 
-// Export the live log buffer to a local .log file — no SSH required. Saves what is
+// Export the live log buffer to a local .log file â€” no SSH required. Saves what is
 // currently held in the dashboard (up to the most recent ~600 lines that passed the
 // active level filter), as plain "TS  LEVEL  message" text.
 function exportLog(){
@@ -6320,9 +6325,9 @@ function exportLog(){
   setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},0);
 }
 
-// ── Asterisk SIP ───────────────────────────────────────────────────────────
+// â”€â”€ Asterisk SIP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadAsteriskStatus(){
-  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=(v===null||v===undefined||v==='')?'—':v;};
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=(v===null||v===undefined||v==='')?'â€”':v;};
   try{
     const r=await fetch('/api/asterisk/status');
     if(!r.ok)throw new Error('http '+r.status);
@@ -6330,7 +6335,7 @@ async function loadAsteriskStatus(){
     const c=d.config||{}, rt=d.runtime||{};
     set('ast-configured', (c.configured||rt.configured)?'YES':'NO');
     set('ast-enabled', (c.enabled||rt.enabled)?'enabled':'disabled');
-    set('ast-register', rt.register_status||'—');
+    set('ast-register', rt.register_status||'â€”');
     set('ast-dialogs', (rt.active_dialogs??0)+' active dialogs');
     set('ast-sip-listen', rt.sip_listen||c.sip_listen);
     set('ast-remote', rt.remote||c.remote);
@@ -6339,7 +6344,7 @@ async function loadAsteriskStatus(){
     set('ast-last-rx', rt.last_rx);
     set('ast-last-tx', rt.last_tx);
     set('ast-last-error', rt.last_error);
-    // Hero connection pill — driven by the live REGISTER state.
+    // Hero connection pill â€” driven by the live REGISTER state.
     const enabled=!!(c.enabled||rt.enabled);
     const reg=(rt.register_status||'').toLowerCase();
     const registered=/regist|ok|online|200/.test(reg)&&!/fail|error|unreach|timeout/.test(reg);
@@ -6350,22 +6355,22 @@ async function loadAsteriskStatus(){
     const rc=document.getElementById('ast-register-card');
     if(rc){rc.classList.remove('is-ok','is-warn','is-danger','is-idle');rc.classList.add(registered?'is-ok':enabled?'is-warn':'is-idle');}
   }catch(e){
-    set('ast-configured','—');set('ast-enabled','status unavailable');set('ast-register','—');
+    set('ast-configured','â€”');set('ast-enabled','status unavailable');set('ast-register','â€”');
     set('ast-last-error',t('conn_error'));
     setIntegrationHero('ast', false, false, t('conn_error'), '');
   }
 }
 // Shared helper: drive an integration tab's hero dot + connection pill from
 // (enabled, connected) state. Calm severity language: connected=ok, enabled-but-down=warn,
-// disabled=idle. No color literals — all via .hero-dot/.pill variants.
+// disabled=idle. No color literals â€” all via .hero-dot/.pill variants.
 function setIntegrationHero(prefix, enabled, connected, pillText, subText){
   const dot=document.getElementById(prefix+'-hero-dot');
   const pill=document.getElementById(prefix+'-hero-pill');
   const sub=document.getElementById(prefix+'-hero-sub');
   const lvl=!enabled?'idle':connected?'ok':'warn';
   if(dot) dot.className='hero-dot is-'+lvl;
-  if(pill){pill.className='pill pill-'+lvl;pill.textContent=pillText||'—';}
-  if(sub&&subText!=null) sub.textContent=subText||'—';
+  if(pill){pill.className='pill pill-'+lvl;pill.textContent=pillText||'â€”';}
+  if(sub&&subText!=null) sub.textContent=subText||'â€”';
 }
 
 let snomPasswordDirty=false;
@@ -6466,12 +6471,12 @@ async function saveSnomNotify(){
   if(snomPasswordDirty)body.ami_password=dapVal('snom-ami-password');
   try{
     const r=await fetch('/api/snom-notify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(r.ok){setSnomMsg('✓ Saved',true);loadSnomNotify();}
+    if(r.ok){setSnomMsg('âœ“ Saved',true);loadSnomNotify();}
     else setSnomMsg(t('save_fail')+': '+await r.text(),false);
   }catch{setSnomMsg(t('conn_error'),false);}
 }
 
-// ── Config ────────────────────────────────────────────────────────────────
+// â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadConfig(){
   try{const r=await fetch('/api/config');if(r.ok)document.getElementById('config-editor').value=await r.text();else setConfigMsg(t('conn_error'),false);}
   catch{setConfigMsg(t('conn_error'),false);}
@@ -6482,7 +6487,7 @@ async function saveConfig(){
 }
 function setConfigMsg(txt,ok){const el=document.getElementById('config-msg');el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';}
 
-// ── ISSI Whitelist ─────────────────────────────────────────────────────────
+// â”€â”€ ISSI Whitelist â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let whitelistEntries=[];
 async function loadWhitelist(){
   try{
@@ -6504,7 +6509,7 @@ function renderWhitelist(){
   }
   box.innerHTML=whitelistEntries.map(issi=>
     '<span class="id-chip">'+issi+
-    '<span class="id-chip-x" onclick="removeWhitelistEntry('+issi+')">×</span></span>'
+    '<span class="id-chip-x" onclick="removeWhitelistEntry('+issi+')">Ã—</span></span>'
   ).join('');
 }
 function addWhitelistEntry(){
@@ -6532,7 +6537,7 @@ async function saveWhitelist(){
 }
 function setWhitelistMsg(txt,ok){const el=document.getElementById('whitelist-msg');el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';setTimeout(()=>{if(el.textContent===txt)el.textContent='';},4000);}
 
-// ── WX / METAR service ──────────────────────────────────────────────────────
+// â”€â”€ WX / METAR service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadWx(){
   try{
     const r=await fetch('/api/wx');
@@ -6566,14 +6571,14 @@ async function saveWx(){
 }
 function setWxMsg(txt,ok){const el=document.getElementById('wx-msg');el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';setTimeout(()=>{if(el.textContent===txt)el.textContent='';},4000);}
 
-// ── Telegram alerts ─────────────────────────────────────────────────────────
+// â”€â”€ Telegram alerts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let tgChats=[];            // recipient chat IDs (numbers)
 let tgChatNames={};        // id -> best-effort friendly name (display only)
 let tgDetected=[];         // last "detect" result, for the Add buttons
 let tgTokenDirty=false;    // true once the user edits the token field (so we send it)
 function tgEsc(s){return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 // The token to send: a freshly-typed value (never the masked placeholder), else '' = keep saved.
-function tgTokenField(){const v=(document.getElementById('tg-token').value||'').trim();return (tgTokenDirty&&v&&!v.includes('…'))?v:'';}
+function tgTokenField(){const v=(document.getElementById('tg-token').value||'').trim();return (tgTokenDirty&&v&&!v.includes('â€¦'))?v:'';}
 async function loadTelegram(){
   try{
     const r=await fetch('/api/telegram');
@@ -6599,9 +6604,9 @@ function renderTgChips(){
   const box=document.getElementById('tg-chips');
   if(!tgChats.length){box.innerHTML='<span style="color:var(--muted);font-size:13px">'+t('tg_no_recipients')+'</span>';return;}
   box.innerHTML=tgChats.map(id=>{
-    const nm=tgChatNames[id]?(' · '+tgEsc(tgChatNames[id])):'';
+    const nm=tgChatNames[id]?(' Â· '+tgEsc(tgChatNames[id])):'';
     return '<span class="id-chip">'+id+nm+
-      '<span class="id-chip-x" onclick="removeRecipient('+id+')">×</span></span>';
+      '<span class="id-chip-x" onclick="removeRecipient('+id+')">Ã—</span></span>';
   }).join('');
 }
 function addRecipient(){
@@ -6619,8 +6624,8 @@ async function verifyTelegram(){
   try{
     const r=await fetch('/api/telegram/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bot_token:tgTokenField()})});
     const d=await r.json();
-    if(d.ok){st.textContent='✓ @'+(d.username||'bot');st.style.color='var(--accent)';}
-    else{st.textContent='✗ '+tgEsc(d.error||'error');st.style.color='var(--danger)';}
+    if(d.ok){st.textContent='âœ“ @'+(d.username||'bot');st.style.color='var(--accent)';}
+    else{st.textContent='âœ— '+tgEsc(d.error||'error');st.style.color='var(--danger)';}
   }catch{st.textContent=t('conn_error');st.style.color='var(--danger)';}
 }
 async function detectTelegramChats(){
@@ -6629,13 +6634,13 @@ async function detectTelegramChats(){
   try{
     const r=await fetch('/api/telegram/detect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bot_token:tgTokenField()})});
     const d=await r.json();
-    if(!d.ok){box.innerHTML='<span style="color:var(--danger);font-size:13px">✗ '+tgEsc(d.error||'error')+'</span>';return;}
+    if(!d.ok){box.innerHTML='<span style="color:var(--danger);font-size:13px">âœ— '+tgEsc(d.error||'error')+'</span>';return;}
     tgDetected=d.chats||[];
     if(!tgDetected.length){box.innerHTML='<span style="color:var(--muted);font-size:13px">'+t('tg_detect_none')+'</span>';return;}
     box.innerHTML='<div style="color:var(--muted);font-size:13px;margin-bottom:6px">'+t('tg_detect_found')+'</div>'+
       tgDetected.map((c,i)=>
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0">'+
-        '<span style="font-size:13px">'+tgEsc(c.name)+' <span style="color:var(--muted)">('+c.id+' · '+tgEsc(c.kind)+')</span></span>'+
+        '<span style="font-size:13px">'+tgEsc(c.name)+' <span style="color:var(--muted)">('+c.id+' Â· '+tgEsc(c.kind)+')</span></span>'+
         '<button class="btn" onclick="addDetected('+i+')">+ '+t('tg_add')+'</button></div>'
       ).join('');
   }catch{box.innerHTML='<span style="color:var(--danger);font-size:13px">'+t('conn_error')+'</span>';}
@@ -6665,7 +6670,7 @@ async function testTelegram(){
     const r=await fetch('/api/telegram/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();
     if(d.ok)setTgMsg(t('tg_test_ok',{n:d.sent}),true);
-    else setTgMsg('✗ '+tgEsc(d.error||'error'),false);
+    else setTgMsg('âœ— '+tgEsc(d.error||'error'),false);
   }catch{setTgMsg(t('conn_error'),false);}
 }
 function setTgMsg(txt,ok){const el=document.getElementById('tg-msg');el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';setTimeout(()=>{if(el.textContent===txt)el.textContent='';},5000);}
@@ -6681,11 +6686,11 @@ function resetSdsCallout(){document.getElementById('sds-callout').checked=false;
 function openSds(issi){sdsDest=issi;document.getElementById('sds-dest').value=issi;document.getElementById('sds-msg').value='';resetSdsCallout();document.getElementById('sds-modal').classList.add('open');}
 function closeSdsModal(){document.getElementById('sds-modal').classList.remove('open');}
 function sendSds(){const dest=parseInt(document.getElementById('sds-dest').value);if(!dest)return;if(document.getElementById('sds-callout').checked){const source=parseInt(document.getElementById('sds-callout-source').value)||9999;const incident=Math.max(1,Math.min(256,parseInt(document.getElementById('sds-callout-incident').value)||1));const alarmText=document.getElementById('sds-callout-text').value.trim()||'ALARM';const rawhex=document.getElementById('sds-callout-raw').value.trim();wsSend({type:'sds_callout',dest_issi:dest,source_issi:source,incident,message:alarmText,raw_hex:rawhex});closeSdsModal();return;}const msg=document.getElementById('sds-msg').value.trim();if(!msg)return;wsSend({type:'sds',dest_issi:dest,message:msg});closeSdsModal();}
-function openDgna(issi){document.getElementById('dgna-issi').value=issi;document.getElementById('dgna-gssi').value='';const cur=document.getElementById('dgna-current');const gl=(state.ms[issi]&&state.ms[issi].groups)||[];cur.innerHTML=gl.length?gl.slice().sort((a,b)=>a-b).map(g=>`<span class="badge badge-blue" style="font-size:10px">${g}</span>`).join(''):'<span class="badge badge-dim">—</span>';document.getElementById('dgna-modal').classList.add('open');}
+function openDgna(issi){document.getElementById('dgna-issi').value=issi;document.getElementById('dgna-gssi').value='';document.getElementById('dgna-name').value='';const cur=document.getElementById('dgna-current');const gl=(state.ms[issi]&&state.ms[issi].groups)||[];cur.innerHTML=gl.length?gl.slice().sort((a,b)=>a-b).map(g=>`<span class="badge badge-blue" style="font-size:10px">${g}</span>`).join(''):'<span class="badge badge-dim">-</span>';document.getElementById('dgna-modal').classList.add('open');}
 function closeDgnaModal(){document.getElementById('dgna-modal').classList.remove('open');}
-function sendDgna(attach){const issi=parseInt(document.getElementById('dgna-issi').value),gssi=parseInt(document.getElementById('dgna-gssi').value);if(!issi||!gssi)return;wsSend({type:'dgna',issi,gssi,attach});closeDgnaModal();}
+function sendDgna(attach){const issi=parseInt(document.getElementById('dgna-issi').value),gssi=parseInt(document.getElementById('dgna-gssi').value),mnemonic=document.getElementById('dgna-name').value.trim();if(!issi||!gssi)return;wsSend({type:'dgna',issi,gssi,mnemonic,attach});closeDgnaModal();}
 
-// ── OTA Update ────────────────────────────────────────────────────────────
+// â”€â”€ OTA Update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let updatePollTimer=null;
 function closeUpdateModal(){document.getElementById('update-modal').classList.remove('open');if(updatePollTimer){clearInterval(updatePollTimer);updatePollTimer=null;}}
 async function startUpdate(){
@@ -6698,8 +6703,8 @@ async function startUpdate(){
   termEl.textContent='';msgEl.className='update-status running';msgEl.textContent=t('update_running');closeBtn.disabled=true;
   try{
     const r=await fetch('/api/update',{method:'POST'});
-    if(!r.ok&&r.status!==409){msgEl.className='update-status err';msgEl.textContent='✗ '+await r.text();closeBtn.disabled=false;return;}
-  }catch(e){msgEl.className='update-status err';msgEl.textContent='✗ '+e.message;closeBtn.disabled=false;return;}
+    if(!r.ok&&r.status!==409){msgEl.className='update-status err';msgEl.textContent='âœ— '+await r.text();closeBtn.disabled=false;return;}
+  }catch(e){msgEl.className='update-status err';msgEl.textContent='âœ— '+e.message;closeBtn.disabled=false;return;}
   let lastLen=0;
   updatePollTimer=setInterval(async()=>{
     try{
@@ -6712,7 +6717,7 @@ async function startUpdate(){
   },1000);
 }
 
-// ── System tab ────────────────────────────────────────────────────────────
+// â”€â”€ System tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let sysData=null;
 let sysAutoRefreshTimer = null;
 function toggleSysAutoRefresh(on) {
@@ -6720,7 +6725,7 @@ function toggleSysAutoRefresh(on) {
   if (on) sysAutoRefreshTimer = setInterval(loadSystemInfo, 5000);
 }
 
-// ── Display brightness (FH-FEAT-008) ─────────────────────────────────────────
+// â”€â”€ Display brightness (FH-FEAT-008) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Debounced POST so dragging the slider doesn't flood the endpoint; status probe
 // on page open reveals the card only when the backend reports a panel present.
 let _brTimer=null;
@@ -6746,8 +6751,8 @@ function loadBrightness(){
 // Inline glyphs for the BTS header chips (no extra requests).
 const BTS_TOWER_ICON='<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v13"/><path d="M8.5 22h7"/><path d="M7 8a6 6 0 0 1 10 0"/><path d="M4.5 6a9 9 0 0 1 15 0"/></svg>';
 const BTS_CLOCK_ICON='<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
-// TETRA BTS Details card — static cell + RF identity pulled from config (one fetch).
-// ── Dual-Carrier ON/OFF (first-page toggle; applied via controlled restart) ──
+// TETRA BTS Details card â€” static cell + RF identity pulled from config (one fetch).
+// â”€â”€ Dual-Carrier ON/OFF (first-page toggle; applied via controlled restart) â”€â”€
 let dcState={enabled:false,secondary_carrier:null,active:false,main_carrier:null};
 function setDcSub(txt){const e=document.getElementById('dc-sub');if(e)e.textContent=txt;}
 async function loadDualCarrier(){
@@ -6786,11 +6791,11 @@ async function loadBtsInfo(){
     const r=await fetch('/api/btsinfo',{credentials:'same-origin'});
     if(!r.ok)return;
     const d=await r.json();
-    const set=(id,v)=>setText(id,(v==null||v==='')?'—':v);
-    const mhz=(hz,dp)=>(hz!=null&&isFinite(hz))?(hz/1e6).toFixed(dp==null?4:dp)+' MHz':'—';
+    const set=(id,v)=>setText(id,(v==null||v==='')?'â€”':v);
+    const mhz=(hz,dp)=>(hz!=null&&isFinite(hz))?(hz/1e6).toFixed(dp==null?4:dp)+' MHz':'â€”';
     set('bts-tx', mhz(d.tx_freq_hz));
     set('bts-rx', mhz(d.rx_freq_hz));
-    set('bts-shift', (d.shift_hz!=null&&isFinite(d.shift_hz))?((d.shift_hz>=0?'+':'')+(d.shift_hz/1e6).toFixed(3)+' MHz'):'—');
+    set('bts-shift', (d.shift_hz!=null&&isFinite(d.shift_hz))?((d.shift_hz>=0?'+':'')+(d.shift_hz/1e6).toFixed(3)+' MHz'):'â€”');
     set('bts-mcc', d.mcc);
     set('bts-mnc', d.mnc);
     const carrierValue=document.getElementById('bts-carrier');
@@ -6804,17 +6809,17 @@ async function loadBtsInfo(){
       if(carrierLabel)carrierLabel.textContent=(t('bts_carrier')||'Carrier')+(carriers.length>1?'s':'');
       carrierValue.classList.toggle('bts-carrier-listing', carriers.length>1);
       carrierValue.innerHTML=carriers.map(c=>{
-        const carrierNum=(c.carrier_num??'â€”');
+        const carrierNum=(c.carrier_num??'Ã¢â‚¬â€');
         const dl=mhz(c.tx_freq_hz);
         const ul=mhz(c.rx_freq_hz);
-        return `<span class="bts-carrier-line">#${carrierNum} · DL ${dl} · UL ${ul}</span>`;
+        return `<span class="bts-carrier-line">#${carrierNum} Â· DL ${dl} Â· UL ${ul}</span>`;
       }).join('');
       carrierValue.innerHTML=carrierValue.innerHTML
         .replace(/\u00c2\u00b7/g,' | ')
         .replace(/\u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u009d/g,'-');
     }
     state.mainCarrierNum=d.main_carrier!=null?d.main_carrier:state.mainCarrierNum;
-    set('bts-carrier', d.main_carrier!=null?('#'+d.main_carrier):'â€”');
+    set('bts-carrier', d.main_carrier!=null?('#'+d.main_carrier):'Ã¢â‚¬â€');
     ((Array.isArray(d.carriers)&&d.carriers.length)?d.carriers:[{
       carrier_num:d.main_carrier,
       tx_freq_hz:d.tx_freq_hz,
@@ -6825,12 +6830,12 @@ async function loadBtsInfo(){
     const nb=document.getElementById('bts-neighbor');
     if(nb){
       const n=d.neighbor_count||0;
-      nb.innerHTML=BTS_TOWER_ICON+'Neighbor Cell · '+(n>0?('ON ('+n+' '+(n===1?'neighbor':'neighbors')+')'):'OFF');
+      nb.innerHTML=BTS_TOWER_ICON+'Neighbor Cell Â· '+(n>0?('ON ('+n+' '+(n===1?'neighbor':'neighbors')+')'):'OFF');
       nb.className='bts-chip '+(n>0?'on':'off');
     }
     const hg=document.getElementById('bts-hang');
     if(hg){
-      hg.innerHTML=BTS_CLOCK_ICON+'HangTime · '+(d.hangtime_secs!=null?d.hangtime_secs:'—')+' sec';
+      hg.innerHTML=BTS_CLOCK_ICON+'HangTime Â· '+(d.hangtime_secs!=null?d.hangtime_secs:'â€”')+' sec';
       hg.className='bts-chip time';
     }
     const acc=document.getElementById('bts-access');
@@ -6845,7 +6850,7 @@ async function loadBtsInfo(){
         ? ((d.whitelist_count||0)+' '+t('bts_wl_entries'))
         : t('bts_wl_open');
     }
-  }catch(e){/* config endpoint unavailable — leave placeholders */}
+  }catch(e){/* config endpoint unavailable â€” leave placeholders */}
 }
 
 async function loadBtsInfoLegacy(){
@@ -6903,12 +6908,12 @@ async function loadSystemInfo(){
   try{
     const r=await fetch('/api/system');if(!r.ok)return;
     sysData=await r.json();
-    document.getElementById('sysHostname').textContent=sysData.hostname||'—';
-    document.getElementById('sysVersion').textContent=sysData.stack_version||'—';
-    document.getElementById('sysOs').textContent=sysData.os||'—';
-    document.getElementById('sysConfigPath').textContent=sysData.config_path||'—';
+    document.getElementById('sysHostname').textContent=sysData.hostname||'â€”';
+    document.getElementById('sysVersion').textContent=sysData.stack_version||'â€”';
+    document.getElementById('sysOs').textContent=sysData.os||'â€”';
+    document.getElementById('sysConfigPath').textContent=sysData.config_path||'â€”';
 
-    // SDR badge in topbar — populated from auto-detected hardware on first /api/system fetch.
+    // SDR badge in topbar â€” populated from auto-detected hardware on first /api/system fetch.
     // Hidden when the value is unknown or absent (e.g. file backend in tests).
     const sdrBadge = document.getElementById('sdr-badge');
     const sdrLabel = document.getElementById('sdr-badge-label');
@@ -6923,9 +6928,9 @@ async function loadSystemInfo(){
       }
     }
 
-    // CPU — gauge fill width + threshold state class on the .gauge wrapper.
+    // CPU â€” gauge fill width + threshold state class on the .gauge wrapper.
     const cpuEl=document.getElementById('sysCpu');
-    if(cpuEl) cpuEl.textContent=(sysData.cpu_model||'—')+(sysData.cpu_cores?` (${sysData.cpu_cores} cores)`:'');
+    if(cpuEl) cpuEl.textContent=(sysData.cpu_model||'â€”')+(sysData.cpu_cores?` (${sysData.cpu_cores} cores)`:'');
     const cpuPct=sysData.cpu_pct||0;
     const cpuBarEl=document.getElementById('sysCpuBar');
     const cpuPctEl=document.getElementById('sysCpuPct');
@@ -6945,7 +6950,7 @@ async function loadSystemInfo(){
     if(ramGauge) ramGauge.className='gauge'+(ramPct>85?' is-danger':ramPct>70?' is-warn':' is-info');
     if(ramValEl) ramValEl.textContent=`${ramUsed} / ${ramTotal} MB (${ramPct}%)`;
 
-    // Temperature — state via stat-card class, hot label without emoji.
+    // Temperature â€” state via stat-card class, hot label without emoji.
     const tempCard=document.getElementById('cpu-temp-card');
     const tempEl=document.getElementById('sysCpuTemp');
     const tempSub=document.getElementById('sysCpuTempSub');
@@ -6953,7 +6958,7 @@ async function loadSystemInfo(){
       const tv=sysData.cpu_temp_c.toFixed(1);
       const hot=sysData.cpu_temp_c>75, warm=sysData.cpu_temp_c>60;
       if(tempCard){ tempCard.style.display=''; tempCard.className='stat-card '+(hot?'is-danger':warm?'is-warn':'is-ok'); }
-      if(tempEl){ tempEl.textContent=tv+'°C'; }
+      if(tempEl){ tempEl.textContent=tv+'Â°C'; }
       if(tempSub) tempSub.textContent=hot?t('sys_temp_hot'):warm?t('sys_temp_warm'):t('sys_temp_ok');
     } else {
       if(tempCard) tempCard.style.display='none';
@@ -6961,7 +6966,7 @@ async function loadSystemInfo(){
 
     // RF / SoapySDR
     const soapyEl=document.getElementById('sysSoapy');
-    if(soapyEl) soapyEl.textContent=sysData.soapy_info||'—';
+    if(soapyEl) soapyEl.textContent=sysData.soapy_info||'â€”';
 
     updateSystemUptime();
     updateSysHero();
@@ -6986,13 +6991,13 @@ function updateSysHero(){
   const brewOnline=brewCard&&brewCard.classList.contains('is-info');
   if(dot) dot.className='hero-dot '+(btsOnline?'is-ok':'is-danger');
   if(sub){
-    const host=(sysData&&sysData.hostname)||document.getElementById('sysHostname').textContent||'—';
-    sub.textContent=(btsOnline?t('online'):t('offline'))+' · '+(brewOnline?t('brew_online'):t('brew_offline'))+' · '+host;
+    const host=(sysData&&sysData.hostname)||document.getElementById('sysHostname').textContent||'â€”';
+    sub.textContent=(btsOnline?t('online'):t('offline'))+' Â· '+(brewOnline?t('brew_online'):t('brew_offline'))+' Â· '+host;
   }
   if(tempV){
     const tc=document.getElementById('sysCpuTemp');
     const card=document.getElementById('cpu-temp-card');
-    tempV.textContent=(card&&card.style.display!=='none'&&tc)?tc.textContent:'—';
+    tempV.textContent=(card&&card.style.display!=='none'&&tc)?tc.textContent:'â€”';
   }
 }
 
@@ -7038,16 +7043,16 @@ function updateSysBtsPanel(online,brewOnline,brewVer){
   const bdEl=document.getElementById('sysBrewBadge');
   const btsCard=document.getElementById('sysBtsCard');
   const brewCard=document.getElementById('sysBrewCard');
-  if(ipEl)ipEl.textContent=online?location.hostname:'—';
+  if(ipEl)ipEl.textContent=online?location.hostname:'â€”';
   if(stEl)stEl.textContent=online?t('online'):t('offline');
   if(btsCard)btsCard.className='stat-card '+(online?'is-ok':'is-danger');
   if(bsEl)bsEl.textContent=brewOnline?t('brew_online'):t('brew_offline');
   if(brewCard)brewCard.className='stat-card '+(brewOnline?'is-info':'is-danger');
-  if(bdEl){bdEl.textContent=brewOnline?`Brew v${brewVer||0}`:'—';}
+  if(bdEl){bdEl.textContent=brewOnline?`Brew v${brewVer||0}`:'â€”';}
   updateSysHero();
 }
 
-// ── Edit Profile (inactive config) ───────────────────────────────────────
+// â”€â”€ Edit Profile (inactive config) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let editProfileName = null;
 async function openEditProfile(name) {
   editProfileName = name;
@@ -7099,7 +7104,7 @@ async function saveEditProfile() {
   }
 }
 
-// ── Live SDS Broadcast ────────────────────────────────────────────────────
+// â”€â”€ Live SDS Broadcast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadLiveSds() {
   const list = document.getElementById('live-sds-list');
   const clearBtn = document.getElementById('live-sds-clear-btn');
@@ -7124,7 +7129,7 @@ async function loadLiveSds() {
         <div style="flex:1;min-width:0">
           <div style="font-size:13px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(m.text)}</div>
           <div style="font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:2px">
-            PID ${m.protocol_id} · src ${m.source_issi} · ${t('live_sds_sent')}: ${repeatLabel}
+            PID ${m.protocol_id} Â· src ${m.source_issi} Â· ${t('live_sds_sent')}: ${repeatLabel}
           </div>
         </div>
         <button class="btn btn-sm btn-danger" onclick="deleteLiveSds(${m.id})" title="${t('live_sds_delete')}">${t('live_sds_delete')}</button>`;
@@ -7170,7 +7175,7 @@ async function clearAllLiveSds() {
   } catch(e) { alert('Error: ' + e.message); }
 }
 
-// ── Tick ──────────────────────────────────────────────────────────────────
+// â”€â”€ Tick â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 setInterval(()=>{
   if(document.getElementById('page-calls').classList.contains('active'))renderCalls();
   if(document.getElementById('page-stations').classList.contains('active'))renderStations();
@@ -7185,22 +7190,22 @@ setInterval(()=>{
   }
 },10000);
 
-// ── Init ──────────────────────────────────────────────────────────────────
+// â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 (function(){
   const ua=navigator.userAgent;
-  let os='—';
+  let os='â€”';
   if(/Windows NT ([\d.]+)/.test(ua)){const v=ua.match(/Windows NT ([\d.]+)/)[1];os={'10.0':'Win10','11.0':'Win11','6.3':'Win8.1','6.1':'Win7'}[v]||'Windows';}
   else if(/Mac OS X ([\d_]+)/.test(ua)){os='macOS '+ua.match(/Mac OS X ([\d_]+)/)[1].replace(/_/g,'.');}
   else if(/Android ([\d.]+)/.test(ua)){os='Android '+ua.match(/Android ([\d.]+)/)[1];}
   else if(/Linux/.test(ua)){os='Linux';}
   else if(/iPhone|iPad/.test(ua)){os='iOS';}
-  let br='—';
+  let br='â€”';
   if(/Firefox\/([\d.]+)/.test(ua))br='Firefox '+ua.match(/Firefox\/([\d.]+)/)[1].split('.')[0];
   else if(/Edg\/([\d.]+)/.test(ua))br='Edge '+ua.match(/Edg\/([\d.]+)/)[1].split('.')[0];
   else if(/Chrome\/([\d.]+)/.test(ua))br='Chrome '+ua.match(/Chrome\/([\d.]+)/)[1].split('.')[0];
   else if(/Safari\/([\d.]+)/.test(ua)&&/Version\/([\d.]+)/.test(ua))br='Safari '+ua.match(/Version\/([\d.]+)/)[1].split('.')[0];
   const el=document.getElementById('cr-ua');
-  if(el)el.textContent=os+' · '+br;
+  if(el)el.textContent=os+' Â· '+br;
 })();
 if(sidebarCollapsed)document.getElementById('sidebar').classList.add('collapsed');
 paintIcons();
@@ -7210,7 +7215,7 @@ applyUiSize();
 applyTouchMode();
 
 // Logout: hits /api/logout (clears the session cookie server-side) and navigates
-// to /login. We surface the button only when auth is actually in effect — detected
+// to /login. We surface the button only when auth is actually in effect â€” detected
 // by whether the fs_session cookie is present.
 function doLogout(){
   if(!confirm(t('confirm_logout')||'Log out?'))return;
@@ -7224,11 +7229,11 @@ if(document.cookie.split(';').some(c=>c.trim().startsWith('fs_auth='))){
   if(lb) lb.style.display='flex';
 }
 
-// ── RF live monitor rendering ──────────────────────────────────────────────
+// â”€â”€ RF live monitor rendering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // We receive tx_visual + tx_quality messages: visual carries a 512-bin spectrum
 // (i16 dB-tenths, fftshift'd) and up to 192 IQ samples for the constellation.
 // Plus a richer set of derived metrics (EVM, PAPR, etc) we paint as health bars.
-// All drawing is done on Canvas 2D — no external libs.
+// All drawing is done on Canvas 2D â€” no external libs.
 
 const rfState = {
   lastTs: 0,
@@ -7238,7 +7243,7 @@ const rfState = {
   carriers: [],
   constellationCarrier: null,
   evmCarrier: null,
-  // Waterfall ring buffer — rows × FFT bins. Newest row at index 0; we shift on push.
+  // Waterfall ring buffer â€” rows Ã— FFT bins. Newest row at index 0; we shift on push.
   // Each row stores normalized [0..1] magnitudes so we can recolour on theme change.
   waterfall: [],
   waterfallMaxRows: 200,
@@ -7259,7 +7264,7 @@ function rfThemeColors(){
 }
 
 function rfResizeCanvas(id){
-  // HiDPI canvas: resize the backing store to match CSS pixels × devicePixelRatio.
+  // HiDPI canvas: resize the backing store to match CSS pixels Ã— devicePixelRatio.
   // Reset transform first or repeated calls compound the scale.
   const c = document.getElementById(id);
   if(!c) return null;
@@ -7278,14 +7283,14 @@ function rfResizeCanvas(id){
 
 // The DSP emits TWO separate events for the RF page:
 //
-//   * tx_visual  — every ~200 ms.  Carries spectrum + IQ + RMS/peak.  Used for
+//   * tx_visual  â€” every ~200 ms.  Carries spectrum + IQ + RMS/peak.  Used for
 //     the spectrum trace, constellation, waterfall and the top-row RMS/Peak
 //     readout.  Fast cadence so the animation feels live.
 //
-//   * tx_quality — once per second.  Carries the derived metrics (EVM, PAPR,
+//   * tx_quality â€” once per second.  Carries the derived metrics (EVM, PAPR,
 //     carrier leak, OBW, DC offset, IQ imbalance).  Slow cadence so the
 //     numeric cards don't flicker.  We additionally smooth across 3 messages
-//     (≈3 s window) so they sit still.
+//     (â‰ˆ3 s window) so they sit still.
 
 // Rolling-average smoothing for the Signal Quality numbers + RMS/Peak.
 // We average across SMOOTH_WINDOW most-recent samples so the values settle
@@ -7349,7 +7354,7 @@ function rfCarrierSummary(){
     const offText = isFinite(off) ? (off >= 0 ? '+' : '') + off.toFixed(Math.abs(off) < 100 ? 1 : 0) + ' kHz' : '';
     return (rfCarrierName(c) + ' ' + offText).trim();
   });
-  return (carriers.length > 1 ? 'aggregate · ' : '') + parts.join(' · ');
+  return (carriers.length > 1 ? 'aggregate Â· ' : '') + parts.join(' Â· ');
 }
 
 function updateRfCarrierHints(){
@@ -7357,10 +7362,10 @@ function updateRfCarrierHints(){
   const multi = (rfState.carriers || []).length > 1;
   const iqCarrier = rfState.constellationCarrier;
   const evmCarrier = rfState.evmCarrier || iqCarrier;
-  setText('rf-spectrum-hint', (t('rf_live')||'live') + ' · 512-bin FFT' + (summary ? ' · ' + summary : ''));
-  setText('rf-waterfall-hint', 'rolling · viridis' + (summary ? ' · ' + summary : ''));
-  setText('rf-constellation-hint', iqCarrier ? rfCarrierName(iqCarrier)+' IQ · mixed to baseband' : (multi ? 'aggregate IQ · no carrier lock' : 'π/4-DQPSK'));
-  setText('rf-quality-hint', evmCarrier ? 'EVM '+rfCarrierName(evmCarrier)+' · OBW aggregate pre-PA' : (multi ? 'aggregate pre-PA · EVM/OBW are not per-carrier' : 'measured pre-PA · derived from same DSP snapshot'));
+  setText('rf-spectrum-hint', (t('rf_live')||'live') + ' Â· 512-bin FFT' + (summary ? ' Â· ' + summary : ''));
+  setText('rf-waterfall-hint', 'rolling Â· viridis' + (summary ? ' Â· ' + summary : ''));
+  setText('rf-constellation-hint', iqCarrier ? rfCarrierName(iqCarrier)+' IQ Â· mixed to baseband' : (multi ? 'aggregate IQ Â· no carrier lock' : 'Ï€/4-DQPSK'));
+  setText('rf-quality-hint', evmCarrier ? 'EVM '+rfCarrierName(evmCarrier)+' Â· OBW aggregate pre-PA' : (multi ? 'aggregate pre-PA Â· EVM/OBW are not per-carrier' : 'measured pre-PA Â· derived from same DSP snapshot'));
 }
 
 function drawRfCarrierMarkers(ctx, w, h, sampleRate, centerFreq, carriers, opts){
@@ -7407,27 +7412,27 @@ function handleTxVisual(msg){
   rfState.carriers = rfNormalizeCarriers(msg.carriers || []);
   rfState.constellationCarrier = rfNormalizeCarrier(msg.constellation_carrier);
 
-  // RMS/Peak in the top strip — these come in at the fast cadence so we
+  // RMS/Peak in the top strip â€” these come in at the fast cadence so we
   // smooth them before painting (otherwise the dB number jumps a couple of
   // tenths every 200 ms which reads as flicker).
   const rms  = rfPushAvg('rms_dbfs',  msg.rms_dbfs);
   const peak = rfPushAvg('peak_dbfs', msg.peak_dbfs);
   const freqMHz = (rfState.centerFreq / 1e6);
   const rateK   = (rfState.sampleRate / 1e3);
-  setText('rf-freq', isFinite(freqMHz) && freqMHz>0 ? freqMHz.toFixed(3)+' MHz' : '—');
-  setText('rf-rate', isFinite(rateK)   && rateK  >0 ? rateK.toFixed(1)+' kS/s'  : '—');
-  setText('rf-rms',  isFinite(rms)  ? rms.toFixed(1)  +' dBFS' : '—');
-  setText('rf-peak', isFinite(peak) ? peak.toFixed(1) +' dBFS' : '—');
+  setText('rf-freq', isFinite(freqMHz) && freqMHz>0 ? freqMHz.toFixed(3)+' MHz' : 'â€”');
+  setText('rf-rate', isFinite(rateK)   && rateK  >0 ? rateK.toFixed(1)+' kS/s'  : 'â€”');
+  setText('rf-rms',  isFinite(rms)  ? rms.toFixed(1)  +' dBFS' : 'â€”');
+  setText('rf-peak', isFinite(peak) ? peak.toFixed(1) +' dBFS' : 'â€”');
   setText('rf-age',  t('rf_live')||'live');
   // Hero summary
-  setText('rf-hero-freq', isFinite(freqMHz) && freqMHz>0 ? freqMHz.toFixed(3)+' MHz' : '—');
+  setText('rf-hero-freq', isFinite(freqMHz) && freqMHz>0 ? freqMHz.toFixed(3)+' MHz' : 'â€”');
   const carrierSummary = rfCarrierSummary();
-  setText('rf-hero-sub',  (t('rf_live')||'live') + (carrierSummary ? ' · ' + carrierSummary : ''));
+  setText('rf-hero-sub',  (t('rf_live')||'live') + (carrierSummary ? ' Â· ' + carrierSummary : ''));
   updateRfCarrierHints();
   const rhd=document.getElementById('rf-hero-dot');
   if(rhd) rhd.className='hero-dot is-ok';
 
-  // Visual feeds redraw on every message — that's the whole point.
+  // Visual feeds redraw on every message â€” that's the whole point.
   const spec = (msg.spectrum_db_tenths || []).map(v => v / 10);
   drawRfSpectrum(spec, rfState.sampleRate, rfState.centerFreq, rfState.carriers);
   drawRfConstellation(msg.constellation_iq || []);
@@ -7460,21 +7465,21 @@ function handleSdrHealth(msg){
   setText('rf-hw-age', t('rf_just_now')||'just now');
 
   // Temperature with named state. Thresholds chosen so a typical LimeSDR running
-  // at room temp (~45-55°C) reads "nominal", >65 is "warm", >80 is "hot".
+  // at room temp (~45-55Â°C) reads "nominal", >65 is "warm", >80 is "hot".
   const tempEl = document.getElementById('rf-temp');
   const stateEl = document.getElementById('rf-temp-state');
   const tempGauge = document.getElementById('rf-temp-gauge');
   const tempBar = document.getElementById('rf-temp-bar');
   if(tempEl && stateEl){
     if(msg.temperature_c == null){
-      tempEl.textContent = '—';
+      tempEl.textContent = 'â€”';
       stateEl.textContent = t('rf_temp_na')||'no sensor';
       stateEl.className = 'rf-hw-temp-state';
       if(tempGauge){ tempGauge.classList.remove('is-warn','is-danger','is-info'); tempGauge.classList.add('is-idle'); }
       if(tempBar) tempBar.style.width = '0%';
     } else {
       const tc = msg.temperature_c;
-      tempEl.textContent = tc.toFixed(1) + ' °C';
+      tempEl.textContent = tc.toFixed(1) + ' Â°C';
       let cls = 'nominal', label = t('rf_temp_nominal')||'nominal', gcls='';
       if(tc < 20){ cls='cold'; label = t('rf_temp_cold')||'cold'; gcls='is-info'; }
       else if(tc > 80){ cls='hot'; label = t('rf_temp_hot')||'hot'; gcls='is-danger'; }
@@ -7485,7 +7490,7 @@ function handleSdrHealth(msg){
         tempGauge.classList.remove('is-warn','is-danger','is-info','is-idle');
         if(gcls) tempGauge.classList.add(gcls);
       }
-      // Map 0-100°C onto the track (clamped).
+      // Map 0-100Â°C onto the track (clamped).
       if(tempBar) tempBar.style.width = Math.max(0,Math.min(100,tc)).toFixed(0) + '%';
     }
   }
@@ -7502,16 +7507,16 @@ function renderGainList(id, gains){
   ).join('');
 }
 
-// ── Host system health (temps, voltages, currents, power) ──────────────────
+// â”€â”€ Host system health (temps, voltages, currents, power) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Drives two UI surfaces:
 //   1. The violet PWR badge in the topbar (only shown when total_power_w is known).
 //   2. A sensor grid on the System tab (shown when any sensors are present).
 
-// Plain-English diagnosis + remediation per (domain, level) — the "Looking Glass" advice.
+// Plain-English diagnosis + remediation per (domain, level) â€” the "Looking Glass" advice.
 const HEALTH_ADVICE = {
   service: {
     ok: { why: 'The TETRA core loop is processing TDMA frames in real time.', do: [] },
-    degraded: { why: 'Time between TDMA ticks is higher than expected — the SDR/USB link or the CPU is lagging behind real time. Calls still work but timing is tight.',
+    degraded: { why: 'Time between TDMA ticks is higher than expected â€” the SDR/USB link or the CPU is lagging behind real time. Calls still work but timing is tight.',
       do: ['Check CPU load & temperature on the System tab (or `top`).',
            'Look for "Too late to produce TX block" / SDR underrun lines in the Log.',
            'Make sure no other heavy process is starving the BTS (it runs at FIFO priority).'] },
@@ -7521,7 +7526,7 @@ const HEALTH_ADVICE = {
            'Enable the software watchdog so this auto-recovers: `[health] restart_on_core_stall = true`.'] },
   },
   backhaul: {
-    ok: { why: 'The Brew/TetraPack interconnect is up — calls/SDS route to other cells & BrandMeister.', do: [] },
+    ok: { why: 'The Brew/TetraPack interconnect is up â€” calls/SDS route to other cells & BrandMeister.', do: [] },
     degraded: { why: 'The Brew/TetraPack backhaul is DOWN. The cell still works locally, but calls and SDS to/from other cells or BrandMeister will not route.',
       do: ['Check network/internet connectivity from the Pi to the Brew server.',
            'Verify the [brew] host / port / credentials on the Config tab.',
@@ -7536,11 +7541,11 @@ const HEALTH_ADVICE = {
   },
   congestion: {
     ok: { why: 'Downlink (MCCH) and SDS queues are draining normally.', do: [] },
-    degraded: { why: 'The downlink or SDS queue is filling faster than it drains — too much signalling/SDS, a flapping radio, or the SDR dropping TX blocks.',
+    degraded: { why: 'The downlink or SDS queue is filling faster than it drains â€” too much signalling/SDS, a flapping radio, or the SDR dropping TX blocks.',
       do: ['Check the SDS Log for a radio spamming retransmits or a flood of broadcasts.',
            'Reduce Home-Mode-Display / broadcast-SDS rate if it is heavy.',
            'Check SDR TX health on the RF tab for dropped blocks.'] },
-    critical: { why: 'The downlink/SDS backlog is severe — grants, signalling and messages will be delayed or dropped.',
+    critical: { why: 'The downlink/SDS backlog is severe â€” grants, signalling and messages will be delayed or dropped.',
       do: ['Act urgently: identify and kick a misbehaving radio from the Radios tab.',
            'Check the Log for "Too late to produce TX block" (the SDR can\'t keep up).',
            'Reduce broadcast/SDS load until the queues drain.'] },
@@ -7563,7 +7568,7 @@ function healthDomainSvg(d){
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+m.svg+'</svg>';
 }
 function healthDomainAccent(d){ return (HEALTH_SVG[d]||{}).accent || ''; }
-// Inline SVGs for the integration cards (replace ☎ 📟 ◎).
+// Inline SVGs for the integration cards (replace â˜Ž ðŸ“Ÿ â—Ž).
 const INTEGRATION_SVG = {
   asterisk:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
   dapnet:'<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 6h6M9 10h6M9 14h3"/>',
@@ -7585,7 +7590,7 @@ function renderHealthTab(h){
   const sub   = document.getElementById('health-hero-sub');
   const up    = document.getElementById('health-uptime');
   const act   = document.getElementById('health-action');
-  // Hero ring: status-tinted via class (was a bg colour) — keeps the SVG check inside.
+  // Hero ring: status-tinted via class (was a bg colour) â€” keeps the SVG check inside.
   if(dot)   dot.className = 'h-ring ' + healthLevelClass(overall);
   if(title) title.textContent = 'Station health: ' + overall.toUpperCase();
   const bad = (h.domains||[]).filter(function(d){return d.level!=='ok';});
@@ -7653,8 +7658,8 @@ function classifyAsteriskHealth(data){
   let level='ok';
   if(err)level='degraded';
   if(c.register && reg && !/(registered|reachable|ok|disabled)/.test(reg))level='degraded';
-  const detail=(rt.register_status||'enabled')+' · '+dialogs+' active dialog(s)';
-  const extra=err?('Last error: '+err):('Remote '+(rt.remote||c.remote||'—')+' · codec '+(rt.codec||c.codec||'—'));
+  const detail=(rt.register_status||'enabled')+' Â· '+dialogs+' active dialog(s)';
+  const extra=err?('Last error: '+err):('Remote '+(rt.remote||c.remote||'â€”')+' Â· codec '+(rt.codec||c.codec||'â€”'));
   return {level,detail,extra};
 }
 function classifyDapnetHealth(data){
@@ -7679,8 +7684,8 @@ function classifyDapnetHealth(data){
   if(!paths.length)notes.push('no forwarding path enabled');
   if(notes.length)level='degraded';
   const status=rt.rwth_core_status||(data.rwth_core_enabled?'enabled':'disabled');
-  const detail='RWTH '+status+' · '+(paths.length?paths.join(', '):'no forwarding');
-  const extra=notes.length?notes.join(' · '):('Host '+(rt.endpoint||((data.rwth_core_host||'—')+':'+(data.rwth_core_port||'—')))+' · seen '+(rt.seen_messages??0)+(rt.last_rx?' · last RX '+rt.last_rx:''));
+  const detail='RWTH '+status+' Â· '+(paths.length?paths.join(', '):'no forwarding');
+  const extra=notes.length?notes.join(' Â· '):('Host '+(rt.endpoint||((data.rwth_core_host||'â€”')+':'+(data.rwth_core_port||'â€”')))+' Â· seen '+(rt.seen_messages??0)+(rt.last_rx?' Â· last RX '+rt.last_rx:''));
   return {level,detail,extra};
 }
 function classifyGeoalarmHealth(data){
@@ -7697,8 +7702,8 @@ function classifyGeoalarmHealth(data){
   if(!data.trigger_tetra&&!data.trigger_meshcom)notes.push('no input source enabled');
   if(err)notes.push('Last error: '+err);
   const level=notes.length?'degraded':'ok';
-  const detail=(rt.seen_positions??0)+' position(s) · '+(rt.alarm_count??0)+' alarm(s)';
-  const extra=notes.length?notes.join(' · '):('Center '+(rt.center||'—')+' · radius '+Number(rt.radius_m||data.radius_m||0).toFixed(0)+' m · routes '+paths.join(', '));
+  const detail=(rt.seen_positions??0)+' position(s) Â· '+(rt.alarm_count??0)+' alarm(s)';
+  const extra=notes.length?notes.join(' Â· '):('Center '+(rt.center||'â€”')+' Â· radius '+Number(rt.radius_m||data.radius_m||0).toFixed(0)+' m Â· routes '+paths.join(', '));
   return {level,detail,extra};
 }
 function renderHealthIntegrations(){
@@ -7751,7 +7756,7 @@ function handleHealth(h){
   lbl.style.color = color;
   badge.style.display = 'flex';
   const bad = (h.domains||[]).filter(function(d){return d.level!=='ok';})
-                             .map(function(d){return '• '+d.domain+': '+d.level+' ('+d.detail+')';});
+                             .map(function(d){return 'â€¢ '+d.domain+': '+d.level+' ('+d.detail+')';});
   let tip = 'Station health: '+lvl.toUpperCase();
   tip += bad.length ? '\n'+bad.join('\n') : '\nAll domains nominal';
   if(h.last_action) tip += '\nAction: '+h.last_action;
@@ -7772,7 +7777,7 @@ function handleSysHealth(msg){
     if(msg && typeof msg.total_power_w === 'number' && isFinite(msg.total_power_w) && msg.total_power_w > 0){
       lbl.textContent = msg.total_power_w.toFixed(1) + ' W';
       badge.style.display = 'flex';
-      badge.title = 'Host power draw — '+(msg.sensors||[]).length+' sensor(s) reporting';
+      badge.title = 'Host power draw â€” '+(msg.sensors||[]).length+' sensor(s) reporting';
     } else {
       badge.style.display = 'none';
     }
@@ -7788,7 +7793,7 @@ function handleSysHealth(msg){
   const sensLabel = document.getElementById('sys-sensors-label');
   const sensors = (msg && msg.sensors) || [];
   if(sensors.length === 0){
-    // Nothing detected — leave the card hidden so we don't clutter the System tab.
+    // Nothing detected â€” leave the card hidden so we don't clutter the System tab.
     card.style.display = 'none';
     if(sensLabel) sensLabel.style.display = 'none';
     return;
@@ -7828,7 +7833,7 @@ function handleSysHealth(msg){
 
 function sensorUnit(kind){
   switch(kind){
-    case 'temperature': return '°C';
+    case 'temperature': return 'Â°C';
     case 'voltage':     return 'V';
     case 'current':     return 'A';
     case 'power':       return 'W';
@@ -7854,40 +7859,40 @@ function setText(id, txt){
   if(e) e.textContent = txt;
 }
 
-// ── Formatters ─────────────────────────────────────────────────────────────
-function fmtPct(v, dp){ return isFinite(v) ? v.toFixed(dp||1)+' %' : '—'; }
+// â”€â”€ Formatters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function fmtPct(v, dp){ return isFinite(v) ? v.toFixed(dp||1)+' %' : 'â€”'; }
 function fmtDb(v, dp, signed){
-  if(!isFinite(v)) return '—';
+  if(!isFinite(v)) return 'â€”';
   return (signed && v >= 0 ? '+' : '') + v.toFixed(dp||1) + ' dB';
 }
-function fmtKhz(hz){ return isFinite(hz)&&hz>0 ? (hz/1000).toFixed(1)+' kHz' : '—'; }
+function fmtKhz(hz){ return isFinite(hz)&&hz>0 ? (hz/1000).toFixed(1)+' kHz' : 'â€”'; }
 function fmtDcPair(i, q){
-  if(!isFinite(i) || !isFinite(q)) return '—';
+  if(!isFinite(i) || !isFinite(q)) return 'â€”';
   return i.toFixed(4)+' / '+q.toFixed(4);
 }
 
-// ── Health classifiers ─────────────────────────────────────────────────────
+// â”€â”€ Health classifiers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Each returns {status: 'good'|'warn'|'bad', pct: 0..100} for bar fill width.
 function evalEvm(v){
   if(!isFinite(v)) return {status:'good', pct:0};
-  // ETSI EN 300 392-2 §6.5.4 spec is ≤10% for a TETRA subscriber.
-  // For TX from an amateur SDR (LimeSDR/SXceiver/µCell etc) what actually shows up
-  // is typically 5-15%. Be generous: <8% good, <15% warn, ≥15% bad.
+  // ETSI EN 300 392-2 Â§6.5.4 spec is â‰¤10% for a TETRA subscriber.
+  // For TX from an amateur SDR (LimeSDR/SXceiver/ÂµCell etc) what actually shows up
+  // is typically 5-15%. Be generous: <8% good, <15% warn, â‰¥15% bad.
   if(v < 8)  return {status:'good', pct: Math.min(100, v/8*40)};
   if(v < 15) return {status:'warn', pct: 40 + Math.min(60, (v-8)/7*40)};
   return {status:'bad', pct: 80 + Math.min(20, (v-15)/15*20)};
 }
 function evalPapr(v){
   if(!isFinite(v)) return {status:'good', pct:0};
-  // TETRA π/4-DQPSK theoretical PAPR is ~3.5 dB. Real DSP output with RRC
-  // pulse-shaping sits 4-7 dB. <7 good, <10 warn, ≥10 means clipping risk.
+  // TETRA Ï€/4-DQPSK theoretical PAPR is ~3.5 dB. Real DSP output with RRC
+  // pulse-shaping sits 4-7 dB. <7 good, <10 warn, â‰¥10 means clipping risk.
   if(v < 7)  return {status:'good', pct: Math.min(100, v/7*50)};
   if(v < 10) return {status:'warn', pct: 50 + (v-7)/3*30};
   return {status:'bad', pct: Math.min(100, 80 + (v-10)/3*20)};
 }
 function evalCarrierLeakage(v){
   if(!isFinite(v)) return {status:'good', pct:0};
-  // Direct-conversion SDRs (SXceiver, µCell, LimeSDR) typically sit -25 to -35 dB.
+  // Direct-conversion SDRs (SXceiver, ÂµCell, LimeSDR) typically sit -25 to -35 dB.
   // -30 dB or better is good, -20 to -30 is warn, above -20 is bad (visible spur).
   if(v < -30) return {status:'good', pct: Math.max(10, 100 + v + 30)};
   if(v < -20) return {status:'warn', pct: 60 + (-20 - v)/10*20};
@@ -7896,7 +7901,7 @@ function evalCarrierLeakage(v){
 function evalObw(v){
   if(!isFinite(v) || v <= 0) return {status:'good', pct:0};
   // TETRA channel spacing is 25 kHz. A clean signal sits ~22-24 kHz wide.
-  // <24 kHz good, <26 kHz warn (touching channel edges), ≥26 kHz bad (ACI risk).
+  // <24 kHz good, <26 kHz warn (touching channel edges), â‰¥26 kHz bad (ACI risk).
   const k = v/1000;
   if(k < 24) return {status:'good', pct: Math.min(100, k/24*80)};
   if(k < 26) return {status:'warn', pct: 80 + (k-24)/2*15};
@@ -7905,7 +7910,7 @@ function evalObw(v){
 function evalDcOffset(i, q){
   if(!isFinite(i) || !isFinite(q)) return {status:'good', pct:0};
   // Magnitude of DC vector. Realistic thresholds for amateur SDRs:
-  // <0.03 good, <0.08 warn, ≥0.08 bad (causes visible centre spike).
+  // <0.03 good, <0.08 warn, â‰¥0.08 bad (causes visible centre spike).
   const mag = Math.hypot(i, q);
   if(mag < 0.03) return {status:'good', pct: mag/0.03*40};
   if(mag < 0.08) return {status:'warn', pct: 40 + (mag-0.03)/0.05*40};
@@ -7921,7 +7926,7 @@ function evalIqAmpImbal(v){
 }
 function evalIqPhaseImbal(v){
   if(!isFinite(v)) return {status:'good', pct:0};
-  // <2° good, <5° warn, >5° bad. Sub-1° is professional-grade.
+  // <2Â° good, <5Â° warn, >5Â° bad. Sub-1Â° is professional-grade.
   const a = Math.abs(v);
   if(a < 2) return {status:'good', pct: a/2*40};
   if(a < 5) return {status:'warn', pct: 40 + (a-2)/3*40};
@@ -8053,7 +8058,7 @@ function drawRfConstellation(iqInt16){
   }
 }
 
-// ── Waterfall ──────────────────────────────────────────────────────────────
+// â”€â”€ Waterfall â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Maintain a rolling buffer of recent spectra. Each new snapshot lands at the
 // top of the canvas; older rows scroll down. Colours come from a viridis-style
 // palette so the contrast works for daltonism (no red-green dependence).
@@ -8077,7 +8082,7 @@ function pushWaterfall(specDb){
   }
 }
 
-// Viridis approximation: 5-stop colour map mov→albastru→teal→verde-galben→galben.
+// Viridis approximation: 5-stop colour map movâ†’albastruâ†’tealâ†’verde-galbenâ†’galben.
 // Hand-tuned RGB stops so the bottom is dark blue (low magnitude) and the top is
 // bright yellow (peak). Linear interpolation between stops keeps it monotonic.
 function viridisColor(t){
@@ -8119,7 +8124,7 @@ function drawRfWaterfall(){
   if(!r || !rfState.waterfall.length) return;
   const {ctx, w, h} = r;
   const col = rfThemeColors();
-  // Background colour as RGB for the noise-floor mask. We replace viridis(0)≈purple
+  // Background colour as RGB for the noise-floor mask. We replace viridis(0)â‰ˆpurple
   // with the page background for bins below threshold so the waterfall reads as
   // "signal vs nothing" instead of "purple everywhere".
   const bgRgb = parseHexRgb(col.bg) || [9, 13, 20];
@@ -8131,9 +8136,9 @@ function drawRfWaterfall(){
   // Noise-floor threshold in [0..1]. pushWaterfall normalises -100..0 dBFS into 0..1.
   const NOISE_FLOOR = 0.16;
 
-  // Render the heatmap at its native resolution (bins × rows) onto an offscreen
+  // Render the heatmap at its native resolution (bins Ã— rows) onto an offscreen
   // canvas, then scale it to fill the panel with drawImage(). drawImage honours the
-  // HiDPI transform set by rfResizeCanvas — the old putImageData() path did NOT,
+  // HiDPI transform set by rfResizeCanvas â€” the old putImageData() path did NOT,
   // which is what left the column shifted to the left and only partly filled the
   // height. Scaling also makes the limited history fill top-to-bottom and keeps the
   // (fft-shifted) carrier dead-centre.
@@ -8191,12 +8196,12 @@ function drawRfWaterfall(){
   }
 }
 
-// ── Age refresh & resize ───────────────────────────────────────────────────
+// â”€â”€ Age refresh & resize â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 setInterval(() => {
   if(rfState.lastTs){
     const age = (Date.now() - rfState.lastTs) / 1000;
     if(age > 3){
-      setText('rf-age', (t('rf_stale')||'stale')+' · '+age.toFixed(0)+'s');
+      setText('rf-age', (t('rf_stale')||'stale')+' Â· '+age.toFixed(0)+'s');
     }
   }
   if(rfState.lastHwTs){
@@ -8213,7 +8218,7 @@ window.addEventListener('resize', () => {
   drawRfWaterfall();
 });
 
-// ── GitHub update-check ─────────────────────────────────────────────────────
+// â”€â”€ GitHub update-check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Best-effort: query GitHub for the latest release once at boot (and when the
 // config page is opened). If a newer version exists, reveal the header badge and
 // highlight the Update button. Failures are silent.
@@ -8225,20 +8230,20 @@ async function checkUpdate(){
     const badge=document.getElementById('update-badge');
     const btn=document.getElementById('update-btn');
     if(d&&d.update_available&&d.latest){
-      if(badge){badge.style.display='block';badge.textContent='⬆ '+t('update_available')+' '+d.latest;}
-      if(btn){btn.classList.add('btn-primary');btn.textContent='⬆ '+t('update')+' → '+d.latest;}
+      if(badge){badge.style.display='block';badge.textContent='â¬† '+t('update_available')+' '+d.latest;}
+      if(btn){btn.classList.add('btn-primary');btn.textContent='â¬† '+t('update')+' â†’ '+d.latest;}
     }else{
       if(badge)badge.style.display='none';
-      if(btn){btn.classList.remove('btn-primary');btn.textContent='⬆ '+t('update');}
+      if(btn){btn.classList.remove('btn-primary');btn.textContent='â¬† '+t('update');}
     }
   }catch{/* silent */}
 }
 
-// ── Boot gating (FH-FEAT-033) ───────────────────────────────────────────────
+// â”€â”€ Boot gating (FH-FEAT-033) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // When the dashboard has auth enabled AND public_overview is on, an anonymous
 // visitor is served the SPA shell but must NOT open the WS or hit privileged
 // endpoints. Probe one privileged endpoint: 401 => anonymous (public mode);
-// 200 => either a no-auth deployment or an authenticated admin — behave as before.
+// 200 => either a no-auth deployment or an authenticated admin â€” behave as before.
 async function boot(){
   const hasAuthMarker = document.cookie.split(';').some(c=>c.trim().startsWith('fs_auth='));
   let anonymous = false;
@@ -8273,12 +8278,12 @@ async function pollPublic(){
     if(!r.ok) return;
     const d=await r.json();
     const setT=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
-    setT('pub-ms', d.registered_ms ?? '—');
+    setT('pub-ms', d.registered_ms ?? 'â€”');
     setT('pub-calls', (d.active_calls ?? 0) + (d.active_calls ? ' ('+d.group_calls+'G / '+d.individual_calls+'I)' : ''));
-    setT('pub-freq', d.center_freq_hz ? (d.center_freq_hz/1e6).toFixed(4)+' MHz' : '—');
+    setT('pub-freq', d.center_freq_hz ? (d.center_freq_hz/1e6).toFixed(4)+' MHz' : 'â€”');
     setT('pub-rf', d.rf_active ? 'Active' : 'Idle');
     setT('pub-brew', d.brew_online ? 'Online' : 'Offline');
-    setT('pub-ver', d.stack_version || '—');
+    setT('pub-ver', d.stack_version || 'â€”');
     const STAT_STATES=['is-ok','is-idle','is-info','is-warn','is-danger'];
     const rfc=document.getElementById('pub-rf-card');
     if(rfc){ rfc.classList.remove(...STAT_STATES); rfc.classList.add(d.rf_active?'is-ok':'is-idle'); }
@@ -8302,7 +8307,7 @@ pub const LOGIN_HTML: &str = r##"<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#eceff4">
-<title>FlowStation — Login</title>
+<title>FlowStation â€” Login</title>
 <style>
 :root{
   --bg:#eceff4;--bg2:#ffffff;--bg3:#e6eaf1;--bg4:#d6dde7;
@@ -8347,7 +8352,7 @@ body{
 }
 
 .logo-wrap{display:flex;flex-direction:column;align-items:center;gap:14px;margin-bottom:26px;}
-/* Tower / antenna mark — SVG inlined so there's no extra request */
+/* Tower / antenna mark â€” SVG inlined so there's no extra request */
 .logo-mark{
   width:64px;height:64px;
   border-radius:14px;
@@ -8488,7 +8493,7 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   errBox.textContent = '';
   btn.disabled = true;
-  btn.textContent = 'Signing in…';
+  btn.textContent = 'Signing inâ€¦';
 
   const user = document.getElementById('username').value;
   const password = document.getElementById('password').value;

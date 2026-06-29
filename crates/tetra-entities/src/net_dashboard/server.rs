@@ -2334,12 +2334,7 @@ fn handle_ws(
     }
 }
 
-fn handle_ws_command(
-    text: &str,
-    state: &DashboardState,
-    cmd_tx: &Arc<Mutex<Option<CmdSender>>>,
-    update_state: &SharedUpdateState,
-) {
+fn handle_ws_command(text: &str, state: &DashboardState, cmd_tx: &Arc<Mutex<Option<CmdSender>>>, update_state: &SharedUpdateState) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
         return;
     };
@@ -2431,24 +2426,36 @@ fn handle_ws_command(
         Some("dgna") => {
             let issi = v.get("issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             let gssi = v.get("gssi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let mnemonic = v
+                .get("mnemonic")
+                .and_then(|m| m.as_str())
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(|m| m.chars().take(15).collect::<String>());
             let attach = v.get("attach").and_then(|a| a.as_bool()).unwrap_or(true);
             if issi == 0 || gssi == 0 {
                 return;
             }
             let verb = if attach { "assign" } else { "deassign" };
-            tracing::info!("Dashboard: DGNA {} GSSI {} on ISSI {}", verb, gssi, issi);
-            if !send_cmd(ControlCommand::Dgna { issi, gssi, attach }) {
+            tracing::info!("Dashboard: DGNA {} GSSI {} on ISSI {} (mnemonic={:?})", verb, gssi, issi, mnemonic);
+            if !send_cmd(ControlCommand::Dgna {
+                issi,
+                gssi,
+                mnemonic: if attach { mnemonic.clone() } else { None },
+                attach,
+            }) {
                 tracing::warn!("Dashboard: no control dispatcher for DGNA");
             }
             let mut s = state.write().unwrap();
             s.push_log(
                 "INFO",
                 format!(
-                    "DGNA {} requested: GSSI {} {} ISSI {}",
+                    "DGNA {} requested: GSSI {} {} ISSI {}{}",
                     verb,
                     gssi,
                     if attach { "to" } else { "from" },
-                    issi
+                    issi,
+                    mnemonic.as_ref().map(|m| format!(" (name: {})", m)).unwrap_or_default()
                 ),
             );
         }
@@ -2619,11 +2626,7 @@ fn serve_bts_info(mut stream: TcpStream, shared_config: &Option<tetra_config::bl
 /// GET /api/dualcarrier — current Dual-Carrier ON/OFF state for the first-page toggle.
 /// Reads the switch + configured secondary carrier from the TOML (so the number is shown even while
 /// off), plus the running effective state and the main carrier.
-fn serve_dual_carrier_get(
-    mut stream: TcpStream,
-    shared_config: &Option<tetra_config::bluestation::SharedConfig>,
-    config_path: &str,
-) {
+fn serve_dual_carrier_get(mut stream: TcpStream, shared_config: &Option<tetra_config::bluestation::SharedConfig>, config_path: &str) {
     let st = crate::net_dashboard::dual_carrier::read_dual_carrier(config_path);
     let main_carrier = shared_config.as_ref().map(|c| c.config().cell.main_carrier);
     // What the running stack is actually doing right now (may lag the file until the restart lands).
@@ -2726,10 +2729,7 @@ fn serve_dual_carrier_post(
         if enabled { "ON" } else { "OFF" },
         secondary
     );
-    crate::service_control::schedule_service_action(
-        crate::service_control::ServiceAction::Restart,
-        std::time::Duration::from_secs(2),
-    );
+    crate::service_control::schedule_service_action(crate::service_control::ServiceAction::Restart, std::time::Duration::from_secs(2));
 
     http_response(
         stream,
@@ -3672,7 +3672,9 @@ fn read_http_body(stream: &mut TcpStream) -> Vec<u8> {
             break;
         }
     }
-    if content_length == 0 { return Vec::new(); }
+    if content_length == 0 {
+        return Vec::new();
+    }
     let mut body = vec![0u8; content_length.min(512 * 1024)];
     let _ = stream.read_exact(&mut body);
     body

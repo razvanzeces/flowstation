@@ -193,13 +193,8 @@ mod tests {
         pdu.to_bitbuf(&mut buf).expect("serialize");
         let total = buf.get_pos();
         buf.seek(0);
-        let bits: String = (0..total)
-            .map(|_| if buf.read_bits(1).unwrap() == 1 { '1' } else { '0' })
-            .collect();
-        assert_eq!(
-            bits,
-            "1000000010000011011101011000111000010000000000000000010110110000111000000100"
-        );
+        let bits: String = (0..total).map(|_| if buf.read_bits(1).unwrap() == 1 { '1' } else { '0' }).collect();
+        assert_eq!(bits, "1000000010000011011101011000111000010000000000000000010110110000111000000100");
     }
 
     /// A D-FACILITY wrapping an ASSIGN: the container parses, carries exactly
