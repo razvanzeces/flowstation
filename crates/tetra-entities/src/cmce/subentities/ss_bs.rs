@@ -1,5 +1,6 @@
 use crate::MessageQueue;
 use crate::net_telemetry::{TelemetryEvent, TelemetrySink};
+use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, SsiType, TetraAddress};
 use tetra_pdus::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
@@ -13,6 +14,8 @@ use tetra_pdus::cmce::ss_dgna::pdus::assign::Assign;
 use tetra_pdus::cmce::ss_dgna::pdus::deassign::Deassign;
 use tetra_pdus::cmce::ss_dgna::ss_dgna_pdu::SsDgnaPdu;
 use tetra_saps::lcmc::LcmcMleUnitdataReq;
+use tetra_saps::lcmc::enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment};
+use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
 /// Clause 12 Supplementary Services CMCE sub-entity.
@@ -23,6 +26,7 @@ use tetra_saps::{SapMsg, SapMsgInner};
 /// uplink U-FACILITY. The group registry and affiliation state are owned by MM;
 /// this sub-entity only puts the SS PDU on the air and logs the ACK.
 pub struct SsBsSubentity {
+    config: SharedConfig,
     telemetry: Option<TelemetrySink>,
 }
 
@@ -33,8 +37,12 @@ pub struct SsBsSubentity {
 const DGNA_CLASS_OF_USAGE: u8 = 4;
 
 impl SsBsSubentity {
-    pub fn new() -> Self {
-        SsBsSubentity { telemetry: None }
+    pub fn new(config: SharedConfig) -> Self {
+        SsBsSubentity { config, telemetry: None }
+    }
+
+    pub fn set_config(&mut self, config: SharedConfig) {
+        self.config = config;
     }
 
     pub fn set_telemetry(&mut self, sink: TelemetrySink) {
@@ -123,13 +131,37 @@ impl SsBsSubentity {
             issi,
             sdu.dump_bin()
         );
+        let traffic = self.resolve_traffic_delivery(issi);
+        let (layer2service, stealing_permission, chan_alloc, route_detail) = match traffic {
+            Some((carrier_num, ts, usage)) if (1..=4).contains(&ts) => {
+                let mut timeslots = [false; 4];
+                timeslots[(ts - 1) as usize] = true;
+                (
+                    Layer2Service::Unacknowledged,
+                    true,
+                    Some(CmceChanAllocReq {
+                        usage: Some(usage),
+                        carrier: Some(carrier_num),
+                        timeslots,
+                        alloc_type: ChanAllocType::Replace,
+                        ul_dl_assigned: UlDlAssignment::Dl,
+                    }),
+                    format!("via FACCH stealing on carrier={} ts={}", carrier_num, ts),
+                )
+            }
+            _ => (Layer2Service::Acknowledged, false, None, "via MCCH".to_string()),
+        };
         self.emit_dgna_status(
             issi,
             gssi,
             attach,
             true,
             "CMCE",
-            format!("Queued SS-DGNA {} D-FACILITY", if attach { "ASSIGN" } else { "DEASSIGN" }),
+            format!(
+                "Queued SS-DGNA {} D-FACILITY {}",
+                if attach { "ASSIGN" } else { "DEASSIGN" },
+                route_detail
+            ),
         );
 
         queue.push_back(SapMsg {
@@ -142,14 +174,14 @@ impl SsBsSubentity {
                 handle: 0,
                 endpoint_id: 0,
                 link_id: 0,
-                // Individually-addressed SS PDU: acknowledged BL-DATA, so the LLC layer carries the
-                // delivery guarantee the SS-DGNA layer does not (TS 100 392-12-22 cl.6.6).
-                layer2service: Layer2Service::Acknowledged,
+                // Idle target: acknowledged BL-DATA over MCCH. In-call target: unacknowledged
+                // FACCH/STCH, because the acknowledged LLC path drops stealing traffic.
+                layer2service,
                 pdu_prio: 0,
                 layer2_qos: 0,
-                stealing_permission: false,
+                stealing_permission,
                 stealing_repeats_flag: false,
-                chan_alloc: None,
+                chan_alloc,
                 main_address: TetraAddress::new(issi, SsiType::Issi),
                 tx_reporter: None,
             }),
@@ -291,5 +323,16 @@ impl SsBsSubentity {
             out.push(if cp <= 0xFF { ch } else { '?' });
         }
         out
+    }
+
+    fn resolve_traffic_delivery(&self, issi: u32) -> Option<(u16, u8, u8)> {
+        let state = self.config.state_read();
+        state.active_call_ts.get(&issi).copied().or_else(|| {
+            state
+                .subscribers
+                .attached_groups_of(issi)
+                .into_iter()
+                .find_map(|gssi| state.active_call_ts.get(&gssi).copied())
+        })
     }
 }

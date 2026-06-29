@@ -36,7 +36,7 @@ impl CmceBs {
             cc.set_telemetry(sink.clone());
         }
 
-        let mut ss = SsBsSubentity::new();
+        let mut ss = SsBsSubentity::new(config.clone());
         if let Some(ref sink) = telemetry {
             ss.set_telemetry(sink.clone());
         }
@@ -214,7 +214,9 @@ impl TetraEntityTrait for CmceBs {
     }
 
     fn set_config(&mut self, config: SharedConfig) {
-        self.config = config;
+        self.config = config.clone();
+        self.cc.set_config(config.clone());
+        self.ss.set_config(config);
     }
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {

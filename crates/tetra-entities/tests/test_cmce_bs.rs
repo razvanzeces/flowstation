@@ -1969,9 +1969,20 @@ mod ss_dgna_tests {
         None
     }
 
+    fn find_d_facility_req(msgs: &[SapMsg]) -> Option<&tetra_saps::lcmc::LcmcMleUnitdataReq> {
+        msgs.iter().find_map(|m| match &m.msg {
+            SapMsgInner::LcmcMleUnitdataReq(req) if dl_pdu_type(&req.sdu) == Some(CmcePduTypeDl::DFacility) => Some(req),
+            _ => None,
+        })
+    }
+
     /// Build a MM(+control)/CMCE stack with the Mle sink, register the terminal, drive a DGNA, and
     /// return everything captured at the sinks.
     fn run_dgna(attach: bool, mnemonic: Option<&str>) -> (ComponentTest, Vec<SapMsg>) {
+        run_dgna_with_traffic(attach, mnemonic, None)
+    }
+
+    fn run_dgna_with_traffic(attach: bool, mnemonic: Option<&str>, traffic: Option<(u16, u8, u8)>) -> (ComponentTest, Vec<SapMsg>) {
         let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
         test.populate_entities(vec![], vec![TetraEntity::Mle]);
 
@@ -1985,6 +1996,9 @@ mod ss_dgna_tests {
 
         register_terminal_mm(&mut test, DGNA_ISSI);
         let _ = test.dump_sinks();
+        if let Some(call_ts) = traffic {
+            test.config.state_write().active_call_ts.insert(DGNA_ISSI, call_ts);
+        }
 
         if !attach {
             // Assign first so there is something to deassign.
@@ -2060,6 +2074,38 @@ mod ss_dgna_tests {
         };
         assert_eq!(assign.groups.len(), 1, "exactly one group assigned");
         assert_eq!(assign.groups[0].mnemonic.as_deref(), Some("OPS 42"));
+    }
+
+    #[test]
+    fn test_dgna_assign_to_idle_ms_uses_mcch_acknowledged_llc() {
+        debug::setup_logging_verbose();
+        let (_test, msgs) = run_dgna(true, None);
+
+        let req = find_d_facility_req(&msgs).expect("expected D-FACILITY request");
+        assert_eq!(req.main_address.ssi, DGNA_ISSI);
+        assert_eq!(req.layer2service, tetra_core::Layer2Service::Acknowledged);
+        assert!(!req.stealing_permission, "idle DGNA should stay on MCCH");
+        assert!(req.chan_alloc.is_none(), "idle DGNA should not carry chan_alloc");
+    }
+
+    #[test]
+    fn test_dgna_assign_to_in_call_ms_uses_facch_stealing() {
+        debug::setup_logging_verbose();
+        let (_test, msgs) = run_dgna_with_traffic(true, None, Some((SECONDARY_CARRIER, 3, 9)));
+
+        let req = find_d_facility_req(&msgs).expect("expected D-FACILITY request");
+        assert_eq!(req.main_address.ssi, DGNA_ISSI);
+        assert_eq!(
+            req.layer2service,
+            tetra_core::Layer2Service::Unacknowledged,
+            "in-call DGNA should use FACCH/STCH path"
+        );
+        assert!(req.stealing_permission, "in-call DGNA should request stealing");
+        let chan_alloc = req.chan_alloc.as_ref().expect("in-call DGNA should carry chan_alloc");
+        assert_eq!(chan_alloc.carrier, Some(SECONDARY_CARRIER));
+        assert_eq!(chan_alloc.usage, Some(9));
+        assert_eq!(chan_alloc.ul_dl_assigned, UlDlAssignment::Dl);
+        assert_eq!(chan_alloc.timeslots, [false, false, true, false]);
     }
 
     /// Operator DGNA deassign emits a D-FACILITY{DEASSIGN} naming the GSSI and removes the
