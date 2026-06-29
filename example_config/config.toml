@@ -185,6 +185,9 @@ voice_service = true
 # codeplug — that is a codeplug gap, not a stack bug.
 # Absent = true. Set false only to roll back to the legacy path.
 # dgna_use_ss_facility = true
+# Default SS-DGNA attachment mode used by the dashboard when the advanced picker is hidden.
+# Valid values: 0..5 (ETSI Table 51). Default: 0 = AttachedPermanently.
+# dgna_attachment_mode = 0
 
 # Maximum active call duration in seconds — ETSI EN 300 392-2 §14.9.1 T310 equivalent (FlowStation).
 # After this time the BS sends D-RELEASE regardless of call activity.
@@ -550,6 +553,10 @@ voice_service = true
 # calls, frequency/RF state, network status) and a Log in button — but no controls,
 # config, or raw telemetry. Requires auth to be set; inert otherwise. Default: false.
 # public_overview = true
+# OPTIONAL: advanced DGNA control. When true, the dashboard shows the SS-DGNA
+# attachment-mode picker so the operator can choose the mode per assign. When
+# false, the dashboard uses [cell_info].dgna_attachment_mode silently.
+# show_dgna_attachment_mode_picker = true
 #
 # OPTIONAL: explicit path to the FlowStation git source directory used by the
 # "Update" button. By default the dashboard auto-detects by walking up from the

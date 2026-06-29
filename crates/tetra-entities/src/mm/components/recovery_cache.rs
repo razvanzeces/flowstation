@@ -1,9 +1,9 @@
 //! On-disk persistence for restart recovery.
 //!
 //! Holds a small JSON snapshot of the terminals the BS knew before a restart — their ISSI,
-//! persistent group affiliations, and energy-saving mode — so that on the next startup the MM
-//! layer can replay D-LOCATION-UPDATE-COMMANDs and re-attract them (see `mm_bs::init_recovery`
-//! and `drive_recovery_replay`).
+//! persistent group affiliations, DGNA group metadata, and energy-saving mode — so that on the
+//! next startup the MM layer can replay D-LOCATION-UPDATE-COMMANDs and re-attract them (see
+//! `mm_bs::init_recovery` and `drive_recovery_replay`).
 //!
 //! Writes are best-effort: any I/O or serialization error is logged and swallowed — a corrupt or
 //! unwritable cache must never panic or block the single-threaded stack loop. The write is atomic
@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use tetra_config::bluestation::state::DgnaGroup;
 
 /// On-disk schema version. Bump if the record shape changes incompatibly; an older/newer file is
 /// then ignored (treated as empty) rather than mis-parsed.
@@ -26,6 +27,9 @@ pub struct TerminalRecord {
     pub issi: u32,
     #[serde(default)]
     pub groups: Vec<u32>,
+    /// DGNA groups remembered for this ISSI, independent of current affiliation.
+    #[serde(default)]
+    pub dgna_groups: Vec<DgnaGroup>,
     /// Energy-saving mode as the raw ETSI value (0 = StayAlive). Restored so the re-registering
     /// MS keeps its EE schedule; defaults to 0 when absent.
     #[serde(default)]
@@ -175,11 +179,17 @@ mod tests {
             TerminalRecord {
                 issi: 2260571,
                 groups: vec![91, 92],
+                dgna_groups: vec![DgnaGroup {
+                    gssi: 92,
+                    mnemonic: Some("OPS".to_string()),
+                    attachment_mode: 3,
+                }],
                 energy_saving_mode: 0,
             },
             TerminalRecord {
                 issi: 1000001,
                 groups: vec![],
+                dgna_groups: vec![],
                 energy_saving_mode: 2,
             },
         ];

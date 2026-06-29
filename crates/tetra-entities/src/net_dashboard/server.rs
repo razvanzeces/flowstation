@@ -948,6 +948,7 @@ impl DashboardServer {
                     }
                 }
                 TelemetryEvent::DgnaStatus(status) => {
+                    s.push_dgna_log(status.clone());
                     s.push_log(
                         if status.accepted { "INFO" } else { "WARN" },
                         format!(
@@ -1535,6 +1536,16 @@ fn serve_sds_log(stream: TcpStream, state: &DashboardState) {
     http_json_response(stream, 200, &body);
 }
 
+/// GET /api/dgna-log — the persisted DGNA activity log as a JSON array, newest entry first.
+fn serve_dgna_log(stream: TcpStream, state: &DashboardState) {
+    let body = {
+        let s = state.read().unwrap();
+        let list: Vec<_> = s.dgna_log.iter().rev().cloned().collect();
+        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+    };
+    http_json_response(stream, 200, &body);
+}
+
 /// Serialize the current live SDS queue to JSON and serve it.
 fn serve_live_sds_list(mut stream: TcpStream, cfg: &Option<tetra_config::bluestation::SharedConfig>) {
     let items: Vec<serde_json::Value> = cfg
@@ -2113,10 +2124,18 @@ fn handle_connection(
         let mut s = stream;
         drain_http_headers(&mut s);
         serve_dapnet_log_clear(s, &state);
+    } else if req_line.contains("DELETE /api/dgna-log") {
+        let mut s = stream;
+        drain_http_headers(&mut s);
+        serve_dgna_log_clear(s, &state);
     } else if req_line.contains("GET /api/dapnet-log") {
         let mut s = stream;
         drain_http_headers(&mut s);
         serve_dapnet_log(s, &state);
+    } else if req_line.contains("GET /api/dgna-log") {
+        let mut s = stream;
+        drain_http_headers(&mut s);
+        serve_dgna_log(s, &state);
     } else if req_line.contains("POST /api/dapnet/send") {
         let (inner, body_str) = read_post_body(stream);
         serve_dapnet_send(inner, &shared_config, &state, &clients, &body_str);
@@ -2441,6 +2460,7 @@ fn handle_ws(
         let last_sdr_health = s.last_sdr_health.clone();
         let last_sys_health = s.last_sys_health.clone();
         let last_health = s.last_health.clone();
+        let dgna_log: Vec<_> = s.dgna_log.iter().rev().cloned().collect();
         drop(s);
         let (dgna_default_attachment_mode, dgna_attachment_mode_picker_enabled) = shared_config
             .as_ref()
@@ -2464,6 +2484,7 @@ fn handle_ws(
             "last_sdr_health": last_sdr_health,
             "last_sys_health": last_sys_health,
             "health": last_health,
+            "dgna_log": dgna_log,
             "dgna_default_attachment_mode": dgna_default_attachment_mode,
             "dgna_attachment_mode_picker_enabled": dgna_attachment_mode_picker_enabled,
         })) {
@@ -2659,6 +2680,95 @@ fn handle_ws_command(
                         mnemonic.as_ref().map(|m| format!(" (name: {})", m)).unwrap_or_default(),
                         attachment_mode
                     )
+                ),
+            );
+        }
+        Some("dgna_bulk") => {
+            let gssi = v.get("gssi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let mnemonic = v
+                .get("mnemonic")
+                .and_then(|m| m.as_str())
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(|m| m.chars().take(15).collect::<String>());
+            let attach = v.get("attach").and_then(|a| a.as_bool()).unwrap_or(true);
+            let all_radios = v.get("all_radios").and_then(|a| a.as_bool()).unwrap_or(false);
+            let (default_attachment_mode, picker_enabled) = shared_config
+                .as_ref()
+                .map(|cfg| {
+                    (
+                        cfg.config().cell.dgna_attachment_mode,
+                        cfg.config()
+                            .dashboard
+                            .as_ref()
+                            .map(|d| d.show_dgna_attachment_mode_picker)
+                            .unwrap_or(false),
+                    )
+                })
+                .unwrap_or((0, false));
+            let attachment_mode = if picker_enabled {
+                v.get("attachment_mode")
+                    .and_then(|m| m.as_u64())
+                    .map(|m| m.min(5) as u8)
+                    .unwrap_or(default_attachment_mode)
+            } else {
+                default_attachment_mode
+            };
+            if gssi == 0 {
+                return;
+            }
+            let mut targets = Vec::<u32>::new();
+            if all_radios {
+                let mut issis: Vec<u32> = state.read().unwrap().ms_map.keys().copied().collect();
+                issis.sort_unstable();
+                issis.dedup();
+                targets = issis;
+            } else if let Some(arr) = v.get("targets").and_then(|t| t.as_array()) {
+                for value in arr {
+                    let issi = value.as_u64().unwrap_or(0) as u32;
+                    if issi != 0 && !targets.contains(&issi) {
+                        targets.push(issi);
+                    }
+                }
+                targets.sort_unstable();
+            }
+            if targets.is_empty() {
+                return;
+            }
+            let verb = if attach { "assign" } else { "deassign" };
+            tracing::info!(
+                "Dashboard: DGNA bulk {} GSSI {} on {} radios (mnemonic={:?}, attachment_mode={})",
+                verb,
+                gssi,
+                targets.len(),
+                mnemonic,
+                attachment_mode
+            );
+            let mut sent = 0usize;
+            for issi in &targets {
+                if send_cmd(ControlCommand::Dgna {
+                    issi: *issi,
+                    gssi,
+                    mnemonic: if attach { mnemonic.clone() } else { None },
+                    attachment_mode,
+                    attach,
+                }) {
+                    sent += 1;
+                }
+            }
+            if sent == 0 {
+                tracing::warn!("Dashboard: no control dispatcher for DGNA bulk");
+            }
+            let mut s = state.write().unwrap();
+            s.push_log(
+                "INFO",
+                format!(
+                    "DGNA bulk {} requested: GSSI {} on {} radios{} (mode: {})",
+                    verb,
+                    gssi,
+                    targets.len(),
+                    mnemonic.as_ref().map(|m| format!(" (name: {m})")).unwrap_or_default(),
+                    attachment_mode
                 ),
             );
         }
@@ -4017,6 +4127,14 @@ fn serve_login_page(mut stream: TcpStream) {
 fn serve_sds_log_clear(stream: TcpStream, state: &DashboardState) {
     if let Ok(mut s) = state.write() {
         s.clear_sds_log();
+    }
+    http_json_response(stream, 200, "{\"ok\":true}");
+}
+
+/// DELETE /api/dgna-log — clear the persisted DGNA activity log.
+fn serve_dgna_log_clear(stream: TcpStream, state: &DashboardState) {
+    if let Ok(mut s) = state.write() {
+        s.clear_dgna_log();
     }
     http_json_response(stream, 200, "{\"ok\":true}");
 }

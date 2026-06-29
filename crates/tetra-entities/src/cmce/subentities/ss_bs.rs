@@ -7,7 +7,9 @@ use tetra_pdus::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
 use tetra_pdus::cmce::pdus::cmce_function_not_supported::CmceFunctionNotSupported;
 use tetra_pdus::cmce::pdus::d_facility::{DFacility, DFacilitySsBody};
 use tetra_pdus::cmce::pdus::u_facility::UFacility;
-use tetra_pdus::cmce::ss_dgna::enums::results::GroupIdentityAttachmentMode;
+use tetra_pdus::cmce::ss_dgna::enums::results::{
+    GroupIdentityAttachmentMode, ResultOfAssignment, ResultOfAttachment, ResultOfDeassignment,
+};
 use tetra_pdus::cmce::ss_dgna::fields::group_assignment::GroupAssignment;
 use tetra_pdus::cmce::ss_dgna::fields::group_deassignment::GroupDeassignment;
 use tetra_pdus::cmce::ss_dgna::pdus::assign::Assign;
@@ -215,8 +217,8 @@ impl SsBsSubentity {
                                 ie.result_of_assignment,
                                 ie.result_of_attachment
                             );
-                            let accepted = ie.result_of_assignment.to_string().eq_ignore_ascii_case("accepted")
-                                && ie.result_of_attachment.to_string().eq_ignore_ascii_case("accepted");
+                            let accepted = matches!(ie.result_of_assignment, ResultOfAssignment::Accepted)
+                                && matches!(ie.result_of_attachment, ResultOfAttachment::Attached);
                             self.emit_dgna_status(
                                 issi,
                                 ie.group_ssi,
@@ -238,7 +240,10 @@ impl SsBsSubentity {
                                 ie.group_ssi,
                                 ie.result_of_deassignment
                             );
-                            let accepted = ie.result_of_deassignment.to_string().eq_ignore_ascii_case("accepted");
+                            let accepted = matches!(
+                                ie.result_of_deassignment,
+                                ResultOfDeassignment::DefinitionKeptDetached | ResultOfDeassignment::DefinitionRemoved
+                            );
                             self.emit_dgna_status(
                                 issi,
                                 ie.group_ssi,

@@ -33,7 +33,7 @@ pub struct Subscriber {
     pub attached_groups: HashSet<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DgnaGroup {
     pub gssi: u32,
     pub mnemonic: Option<String>,

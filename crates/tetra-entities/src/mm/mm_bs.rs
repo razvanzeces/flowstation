@@ -108,6 +108,14 @@ impl MmBs {
             }
             let esm = EnergySavingMode::try_from(rec.energy_saving_mode as u64).unwrap_or(EnergySavingMode::StayAlive);
             self.client_mgr.restore_client(rec.issi, &rec.groups, esm);
+            {
+                let mut state = self.config.state_write();
+                for group in rec.dgna_groups {
+                    state
+                        .subscribers
+                        .remember_dgna_group(rec.issi, group.gssi, group.mnemonic, group.attachment_mode);
+                }
+            }
             self.recovery_pending.push_back(rec.issi);
             self.recovery_attempts.insert(rec.issi, 0);
             restored += 1;
@@ -199,12 +207,14 @@ impl MmBs {
             return;
         };
         cache.maybe_flush(|| {
+            let state = self.config.state_read();
             self.client_mgr
                 .snapshot_for_recovery()
                 .into_iter()
                 .map(|(issi, groups, esm)| TerminalRecord {
                     issi,
                     groups,
+                    dgna_groups: state.subscribers.dgna_groups_of(issi),
                     energy_saving_mode: esm.into_raw() as u8,
                 })
                 .collect()
@@ -1616,7 +1626,7 @@ impl MmBs {
         );
 
         // Put the regroup on the air. By default this is an SS-DGNA ASSIGN/DEASSIGN carried in a
-        // CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; transport EN 300 392-9 V1.7.1) â€” that SS PDU
+        // CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; transport EN 300 392-9 V1.7.1) - that SS PDU
         // both *defines* the group and attaches it (cl.6.5.2.1), which is what makes the dynamic
         // talkgroup appear and be selectable on a real terminal. The group attach/detach state and
         // affiliation above are unchanged; CMCE owns only the air-interface emission, so we hand the

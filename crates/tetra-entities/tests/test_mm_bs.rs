@@ -649,8 +649,8 @@ fn test_restart_recovery_loads_and_replays() {
     std::fs::write(
         &path,
         r#"{"version":1,"terminals":[
-            {"issi":1000001,"groups":[91],"energy_saving_mode":0},
-            {"issi":1000002,"groups":[],"energy_saving_mode":0}
+            {"issi":1000001,"groups":[91],"dgna_groups":[{"gssi":91,"mnemonic":"OPS","attachment_mode":3}],"energy_saving_mode":0},
+            {"issi":1000002,"groups":[],"dgna_groups":[],"energy_saving_mode":0}
         ]}"#,
     )
     .unwrap();
@@ -691,6 +691,12 @@ fn test_restart_recovery_loads_and_replays() {
         "ISSI 1000002 should receive a recovery COMMAND, got {:?}",
         targets
     );
+
+    let restored_dgna = test.config.state_read().subscribers.dgna_groups_of(1000001);
+    assert_eq!(restored_dgna.len(), 1, "DGNA metadata should be restored from the recovery cache");
+    assert_eq!(restored_dgna[0].gssi, 91);
+    assert_eq!(restored_dgna[0].mnemonic.as_deref(), Some("OPS"));
+    assert_eq!(restored_dgna[0].attachment_mode, 3);
 
     let _ = std::fs::remove_file(&path);
 }

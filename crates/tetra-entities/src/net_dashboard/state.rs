@@ -99,6 +99,19 @@ pub struct DapnetLogEntry {
     pub paths: Vec<String>,
 }
 
+/// DGNA Activity entry — one DGNA status transition emitted by MM/CMCE/SS. Persisted to disk
+/// (`dgna_log.json` next to the active config) so the history survives restart and page reload.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DgnaLogEntry {
+    pub ts: String, // "YYYY-MM-DD HH:MM:SS" local time
+    pub issi: u32,
+    pub gssi: u32,
+    pub attach: bool,
+    pub accepted: bool,
+    pub source: String,
+    pub detail: String,
+}
+
 /// Shared mutable state for the dashboard, protected by RwLock
 #[derive(Debug, Default)]
 pub struct DashboardStateInner {
@@ -117,6 +130,10 @@ pub struct DashboardStateInner {
     pub dapnet_log: std::collections::VecDeque<DapnetLogEntry>,
     /// Where `dapnet_log` is persisted. Empty disables persistence.
     dapnet_log_path: std::path::PathBuf,
+    /// DGNA activity ring (chronological, oldest at the front). Backed by an on-disk JSON file.
+    pub dgna_log: std::collections::VecDeque<DgnaLogEntry>,
+    /// Where `dgna_log` is persisted. Empty disables persistence.
+    dgna_log_path: std::path::PathBuf,
     pub config_path: String,
     pub brew_online: bool,
     pub brew_version: u8,
@@ -189,6 +206,8 @@ pub const LAST_HEARD_MAX: usize = 50;
 pub const SDS_LOG_MAX: usize = 500;
 /// Max DAPNET Log entries kept in memory and on disk.
 pub const DAPNET_LOG_MAX: usize = 500;
+/// Max DGNA activity entries kept in memory and on disk.
+pub const DGNA_LOG_MAX: usize = 200;
 
 #[derive(Debug)]
 pub struct MsEntry {
@@ -252,6 +271,14 @@ impl DashboardStateInner {
         if !dapnet_log.is_empty() {
             tracing::info!("DAPNET Log: loaded {} entries from {}", dapnet_log.len(), dapnet_log_path.display());
         }
+        let dgna_log_path = std::path::Path::new(&config_path)
+            .parent()
+            .map(|d| d.join("dgna_log.json"))
+            .unwrap_or_else(|| std::path::PathBuf::from("dgna_log.json"));
+        let dgna_log = load_dgna_log(&dgna_log_path);
+        if !dgna_log.is_empty() {
+            tracing::info!("DGNA Log: loaded {} entries from {}", dgna_log.len(), dgna_log_path.display());
+        }
         Self {
             ms_map: HashMap::new(),
             calls: HashMap::new(),
@@ -262,6 +289,8 @@ impl DashboardStateInner {
             sds_log_path,
             dapnet_log,
             dapnet_log_path,
+            dgna_log,
+            dgna_log_path,
             config_path,
             brew_online: false,
             brew_version: 0,
@@ -377,6 +406,40 @@ impl DashboardStateInner {
         self.persist_dapnet_log();
     }
 
+    /// Append one DGNA status to the log, evicting the oldest past DGNA_LOG_MAX, then persist
+    /// the ring to disk. DGNA operator actions are low-volume, so rewriting the small JSON file
+    /// on every update is acceptable.
+    pub fn push_dgna_log(&mut self, status: crate::net_telemetry::events::DgnaStatusInfo) {
+        let entry = DgnaLogEntry {
+            ts: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            issi: status.issi,
+            gssi: status.gssi,
+            attach: status.attach,
+            accepted: status.accepted,
+            source: status.source,
+            detail: status.detail,
+        };
+        if self.dgna_log.len() >= DGNA_LOG_MAX {
+            self.dgna_log.pop_front();
+        }
+        self.dgna_log.push_back(entry);
+        self.persist_dgna_log();
+    }
+
+    fn persist_dgna_log(&self) {
+        if self.dgna_log_path.as_os_str().is_empty() {
+            return;
+        }
+        if let Ok(text) = serde_json::to_string(&self.dgna_log) {
+            let _ = std::fs::write(&self.dgna_log_path, text);
+        }
+    }
+
+    pub fn clear_dgna_log(&mut self) {
+        self.dgna_log.clear();
+        self.persist_dgna_log();
+    }
+
     pub fn snapshot_ms(&self) -> Vec<MsState> {
         self.ms_map
             .values()
@@ -469,6 +532,13 @@ fn load_sds_log(path: &std::path::Path) -> std::collections::VecDeque<SdsLogEntr
 }
 
 fn load_dapnet_log(path: &std::path::Path) -> std::collections::VecDeque<DapnetLogEntry> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return std::collections::VecDeque::new();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn load_dgna_log(path: &std::path::Path) -> std::collections::VecDeque<DgnaLogEntry> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return std::collections::VecDeque::new();
     };
