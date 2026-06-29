@@ -1617,11 +1617,11 @@ impl MmBs {
             true,
             "MM",
             if attach {
-                format!("Accepted: GSSI {} assigned in MM state", gssi)
+                format!("Queued: GSSI {} assigned in MM state", gssi)
             } else if is_dynamic {
-                format!("Accepted: dynamic GSSI {} deassigned in MM state", gssi)
+                format!("Queued: dynamic GSSI {} deassigned in MM state", gssi)
             } else {
-                format!("Accepted: static GSSI {} detached in MM state", gssi)
+                format!("Queued: static GSSI {} detached in MM state", gssi)
             },
         );
 

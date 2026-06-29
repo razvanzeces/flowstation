@@ -7013,10 +7013,16 @@ function persistDgnaTemplates(){try{localStorage.setItem(DGNA_TEMPLATE_KEY,JSON.
 function rebuildDgnaLastByIssi(){
   dgnaUi.lastByIssi={};
   (dgnaUi.statusLog||[]).forEach(entry=>{
-    if(!entry||dgnaUi.lastByIssi[entry.issi])return;
+    if(!entry)return;
+    const next=dgnaStatusPresentation(entry);
+    const cur=dgnaUi.lastByIssi[entry.issi];
+    if(cur&&cur.final)return;
+    if(cur&&cur.pending&&!next.final)return;
     dgnaUi.lastByIssi[entry.issi]={
       gssi:entry.gssi,
-      accepted:!!entry.accepted,
+      accepted:next.kind==='ok',
+      pending:next.kind==='pending',
+      final:next.final,
       detail:entry.detail||'',
       attach:!!entry.attach,
       ts:entry.ts||''
@@ -7155,9 +7161,28 @@ function setDgnaPageStatus(text,ok){
   el.textContent=text;
   el.style.color=ok?'var(--accent)':'var(--danger)';
 }
+function dgnaStatusPresentation(msg){
+  const detail=String(msg&&msg.detail||'');
+  const source=String(msg&&msg.source||'');
+  const rejected=detail.startsWith('Rejected:');
+  const ack=detail.includes('ACK');
+  const parseFail=detail.includes('parse failed');
+  const queued=detail.startsWith('Queued:')||detail.startsWith('Waiting for backend:');
+  const final=rejected||ack||parseFail;
+  if(queued&&!final)return {kind:'pending',final:false,label:'PENDING'};
+  if(final&&!!msg.accepted)return {kind:'ok',final:true,label:'OK'};
+  if(final)return {kind:'fail',final:true,label:'FAIL'};
+  if(source==='MM'||source==='CMCE')return {kind:'pending',final:false,label:'PENDING'};
+  return {kind:(msg&&msg.accepted)?'ok':'fail',final:false,label:(msg&&msg.accepted)?'PENDING':'FAIL'};
+}
 function pushDgnaActivity(msg){
-  dgnaUi.lastByIssi[msg.issi]={gssi:msg.gssi,accepted:!!msg.accepted,detail:msg.detail||'',attach:!!msg.attach,ts:Date.now()};
-  dgnaUi.statusLog.unshift({ts:nowStamp(),issi:msg.issi,gssi:msg.gssi,accepted:!!msg.accepted,detail:msg.detail||'',attach:!!msg.attach,source:msg.source||''});
+  const entry={ts:nowStamp(),issi:msg.issi,gssi:msg.gssi,accepted:!!msg.accepted,detail:msg.detail||'',attach:!!msg.attach,source:msg.source||''};
+  const next=dgnaStatusPresentation(entry);
+  const cur=dgnaUi.lastByIssi[msg.issi];
+  if(!cur||!cur.final||next.final){
+    dgnaUi.lastByIssi[msg.issi]={gssi:msg.gssi,accepted:next.kind==='ok',pending:next.kind==='pending',final:next.final,detail:msg.detail||'',attach:!!msg.attach,ts:Date.now()};
+  }
+  dgnaUi.statusLog.unshift(entry);
   if(dgnaUi.statusLog.length>200)dgnaUi.statusLog.length=200;
 }
 async function clearDgnaActivity(){
@@ -7245,7 +7270,9 @@ function renderDgnaTargetsTable(){
     const st=gssi?dgnaTargetState(ms.issi,gssi):null;
     const last=dgnaUi.lastByIssi[ms.issi];
     const stateHtml=!gssi?'<span class="dgna-state-note">Choose a group</span>':st?`<span class="dgna-status-pill"><span class="badge ${st.is_dynamic?'badge-blue':'badge-dim'}">${st.is_dynamic?'dynamic':'static'}</span><span class="badge ${st.is_attached?'badge-green':'badge-dim'}">${st.is_attached?'attached':'detached'}</span>${st.mnemonic?`<span class="dgna-state-note">${escHtml(st.mnemonic)}</span>`:''}</span>`:'<span class="dgna-state-note">not present</span>';
-    const lastHtml=(last&&(!gssi||last.gssi===gssi))?`<span class="${last.accepted?'dgna-status-ok':'dgna-status-bad'}">${escHtml(last.detail||'')}</span>`:'<span class="dgna-state-note">-</span>';
+    const lastState=(last&&(!gssi||last.gssi===gssi))?dgnaStatusPresentation(last):null;
+    const lastClass=!lastState?'dgna-state-note':(lastState.kind==='ok'?'dgna-status-ok':lastState.kind==='pending'?'dgna-state-note':'dgna-status-bad');
+    const lastHtml=(last&&(!gssi||last.gssi===gssi))?`<span class="${lastClass}">${escHtml(last.detail||'')}</span>`:'<span class="dgna-state-note">-</span>';
     return `<tr><td><input type="checkbox" ${checked?'checked':''} onchange="dgnaToggleTarget(${ms.issi},this.checked)"></td><td>${idCell(ms.issi)}</td><td>${stateHtml}</td><td>${lastHtml}</td></tr>`;
   }).join('');
 }
@@ -7257,7 +7284,7 @@ function renderDgnaActivity(){
     tb.innerHTML='<tr><td colspan="5"><div class="empty-state"><span class="empty-msg">No DGNA activity yet</span></div></td></tr>';
     return;
   }
-  tb.innerHTML=rows.map(r=>`<tr><td class="num">${escHtml(r.ts)}</td><td>${idCell(r.issi)}</td><td><code>${r.gssi}</code></td><td><span class="${r.accepted?'dgna-status-ok':'dgna-status-bad'}">${r.accepted?'OK':'FAIL'}</span></td><td>${escHtml(r.detail||'')}</td></tr>`).join('');
+  tb.innerHTML=rows.map(r=>{const s=dgnaStatusPresentation(r);const cls=s.kind==='ok'?'dgna-status-ok':s.kind==='pending'?'dgna-state-note':'dgna-status-bad';return `<tr><td class="num">${escHtml(r.ts)}</td><td>${idCell(r.issi)}</td><td><code>${r.gssi}</code></td><td><span class="${cls}">${s.label}</span></td><td>${escHtml(r.detail||'')}</td></tr>`;}).join('');
 }
 function renderDgnaAssignmentSummary(){
   const group=dgnaEditorGroup();
