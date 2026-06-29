@@ -947,6 +947,19 @@ impl DashboardServer {
                         }
                     }
                 }
+                TelemetryEvent::DgnaStatus(status) => {
+                    s.push_log(
+                        if status.accepted { "INFO" } else { "WARN" },
+                        format!(
+                            "DGNA {} ISSI {} GSSI {} [{}]: {}",
+                            if status.attach { "assign" } else { "deassign" },
+                            status.issi,
+                            status.gssi,
+                            status.source,
+                            status.detail
+                        ),
+                    );
+                }
                 TelemetryEvent::MsGroupDetach { issi, gssis } => {
                     if let Some(e) = s.ms_map.get_mut(issi) {
                         e.groups.retain(|g| !gssis.contains(g));
@@ -1302,6 +1315,15 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
         TelemetryEvent::MsGroupCatalogSnapshot { issi, groups } => {
             serde_json::json!({"type":"ms_group_catalog","issi":issi,"groups":groups})
         }
+        TelemetryEvent::DgnaStatus(status) => serde_json::json!({
+            "type":"dgna_status",
+            "issi":status.issi,
+            "gssi":status.gssi,
+            "attach":status.attach,
+            "accepted":status.accepted,
+            "source":status.source,
+            "detail":status.detail,
+        }),
         TelemetryEvent::MsRssi { issi, rssi_dbfs } => serde_json::json!({"type":"ms_rssi","issi":issi,"rssi_dbfs":rssi_dbfs}),
         TelemetryEvent::MsEnergySaving { issi, mode } => serde_json::json!({"type":"ms_energy_saving","issi":issi,"mode":mode}),
         TelemetryEvent::GroupCallStarted {

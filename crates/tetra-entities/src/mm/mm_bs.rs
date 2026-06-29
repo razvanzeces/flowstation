@@ -895,6 +895,22 @@ impl MmBs {
         sink.send(crate::net_telemetry::TelemetryEvent::MsGroupCatalogSnapshot { issi, groups });
     }
 
+    fn emit_dgna_status(&self, issi: u32, gssi: u32, attach: bool, accepted: bool, source: &str, detail: String) {
+        let Some(sink) = &self.telemetry else {
+            return;
+        };
+        sink.send(crate::net_telemetry::TelemetryEvent::DgnaStatus(
+            crate::net_telemetry::events::DgnaStatusInfo {
+                issi,
+                gssi,
+                attach,
+                accepted,
+                source: source.to_string(),
+                detail,
+            },
+        ));
+    }
+
     /// Decide which energy saving mode to grant an MS and compute its monitoring window.
     ///
     /// Per clause 16.7.1 NOTE 1 the BS may allocate a different mode than requested. We cap at
@@ -1503,6 +1519,8 @@ impl MmBs {
         attach: bool,
     ) -> bool {
         let verb = if attach { "assign" } else { "deassign" };
+        let is_dynamic = self.config.state_read().subscribers.has_dgna_group(issi, gssi);
+        let is_attached = self.config.state_read().subscribers.attached_groups_of(issi).contains(&gssi);
 
         // The terminal must be registered on the cell â€” we cannot regroup a radio that is not here.
         if !self.client_mgr.client_is_known(issi) {
@@ -1511,6 +1529,14 @@ impl MmBs {
                 issi,
                 verb,
                 gssi
+            );
+            self.emit_dgna_status(
+                issi,
+                gssi,
+                attach,
+                false,
+                "MM",
+                format!("Rejected: ISSI {} is not registered on this cell", issi),
             );
             return false;
         }
@@ -1522,11 +1548,27 @@ impl MmBs {
                 issi,
                 attachment_mode
             );
+            self.emit_dgna_status(
+                issi,
+                gssi,
+                attach,
+                false,
+                "MM",
+                format!("Rejected: invalid attachment mode {}", attachment_mode),
+            );
             return false;
         }
 
-        if !attach && !self.config.state_read().subscribers.has_dgna_group(issi, gssi) {
-            tracing::warn!("DGNA: refusing deassign of static/non-DGNA GSSI {} from ISSI {}", gssi, issi);
+        if !attach && !is_dynamic && !is_attached {
+            tracing::warn!("DGNA: refusing deassign of unknown GSSI {} from ISSI {}", gssi, issi);
+            self.emit_dgna_status(
+                issi,
+                gssi,
+                false,
+                false,
+                "MM",
+                format!("Rejected: GSSI {} is neither attached nor in the DGNA registry", gssi),
+            );
             return false;
         }
 
@@ -1545,15 +1587,33 @@ impl MmBs {
                 } else {
                     let mut state = self.config.state_write();
                     state.subscribers.deaffiliate(issi, gssi);
-                    state.subscribers.forget_dgna_group(issi, gssi);
+                    if is_dynamic {
+                        state.subscribers.forget_dgna_group(issi, gssi);
+                    }
                     self.emit_subscriber_update(queue, issi, vec![gssi], BrewSubscriberAction::Deaffiliate);
                 }
             }
             Err(e) => {
                 tracing::warn!("DGNA: cannot {} GSSI {} on ISSI {}: {:?}", verb, gssi, issi, e);
+                self.emit_dgna_status(issi, gssi, attach, false, "MM", format!("Rejected: {:?}", e));
                 return false;
             }
         }
+
+        self.emit_dgna_status(
+            issi,
+            gssi,
+            attach,
+            true,
+            "MM",
+            if attach {
+                format!("Accepted: GSSI {} assigned in MM state", gssi)
+            } else if is_dynamic {
+                format!("Accepted: dynamic GSSI {} deassigned in MM state", gssi)
+            } else {
+                format!("Accepted: static GSSI {} detached in MM state", gssi)
+            },
+        );
 
         // Put the regroup on the air. By default this is an SS-DGNA ASSIGN/DEASSIGN carried in a
         // CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; transport EN 300 392-9 V1.7.1) â€” that SS PDU
@@ -1638,6 +1698,17 @@ impl MmBs {
             issi,
             sdu.dump_bin()
         );
+        self.emit_dgna_status(
+            issi,
+            gssi,
+            attach,
+            true,
+            "MM",
+            format!(
+                "Queued legacy MM D-ATTACH/DETACH GROUP IDENTITY ({})",
+                if attach { "attach" } else { "detach" }
+            ),
+        );
 
         queue.push_back(SapMsg {
             sap: Sap::LmmSap,
@@ -1667,13 +1738,35 @@ impl MmBs {
         };
         let issi = prim.received_address.ssi;
         match UAttachDetachGroupIdentityAcknowledgement::from_bitbuf(&mut prim.sdu) {
-            Ok(pdu) => tracing::info!("DGNA: ISSI {} acknowledged group identity change: {:?}", issi, pdu),
-            Err(e) => tracing::warn!(
-                "DGNA: failed parsing U-ATTACH/DETACH GROUP IDENTITY ACK from {}: {:?} {}",
-                issi,
-                e,
-                prim.sdu.dump_bin()
-            ),
+            Ok(pdu) => {
+                tracing::info!("DGNA: ISSI {} acknowledged group identity change: {:?}", issi, pdu);
+                if let Some(groups) = &pdu.group_identity_uplink {
+                    for group in groups {
+                        if let Some(gssi) = group.gssi {
+                            let attach = group.class_of_usage.is_some();
+                            self.emit_dgna_status(
+                                issi,
+                                gssi,
+                                attach,
+                                true,
+                                "MM",
+                                format!("Legacy MM ACK received ({})", if attach { "attach" } else { "detach" }),
+                            );
+                        }
+                    }
+                } else {
+                    self.emit_dgna_status(issi, 0, true, true, "MM", "Legacy MM ACK received".to_string());
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "DGNA: failed parsing U-ATTACH/DETACH GROUP IDENTITY ACK from {}: {:?} {}",
+                    issi,
+                    e,
+                    prim.sdu.dump_bin()
+                );
+                self.emit_dgna_status(issi, 0, true, false, "MM", format!("Legacy MM ACK parse failed: {:?}", e));
+            }
         }
     }
 

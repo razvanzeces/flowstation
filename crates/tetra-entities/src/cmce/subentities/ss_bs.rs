@@ -1,4 +1,5 @@
 use crate::MessageQueue;
+use crate::net_telemetry::{TelemetryEvent, TelemetrySink};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, SsiType, TetraAddress};
 use tetra_pdus::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
@@ -21,7 +22,9 @@ use tetra_saps::{SapMsg, SapMsgInner};
 /// cl.4.1-4.2) and consumes the affected MS's ASSIGN ACK / DEASSIGN ACK off the
 /// uplink U-FACILITY. The group registry and affiliation state are owned by MM;
 /// this sub-entity only puts the SS PDU on the air and logs the ACK.
-pub struct SsBsSubentity {}
+pub struct SsBsSubentity {
+    telemetry: Option<TelemetrySink>,
+}
 
 /// Class of usage advertised in SS-DGNA group assignments. 4 mirrors the value
 /// the MM affiliation/ACK path uses (`mm_bs.rs` `DGNA_CLASS_OF_USAGE`), so an
@@ -31,7 +34,24 @@ const DGNA_CLASS_OF_USAGE: u8 = 4;
 
 impl SsBsSubentity {
     pub fn new() -> Self {
-        SsBsSubentity {}
+        SsBsSubentity { telemetry: None }
+    }
+
+    pub fn set_telemetry(&mut self, sink: TelemetrySink) {
+        self.telemetry = Some(sink);
+    }
+
+    fn emit_dgna_status(&self, issi: u32, gssi: u32, attach: bool, accepted: bool, source: &str, detail: String) {
+        if let Some(sink) = &self.telemetry {
+            sink.send(TelemetryEvent::DgnaStatus(crate::net_telemetry::events::DgnaStatusInfo {
+                issi,
+                gssi,
+                attach,
+                accepted,
+                source: source.to_string(),
+                detail,
+            }));
+        }
     }
 
     /// Emit an SS-DGNA D-FACILITY to a single ISSI: an ASSIGN when `attach`, a
@@ -103,6 +123,14 @@ impl SsBsSubentity {
             issi,
             sdu.dump_bin()
         );
+        self.emit_dgna_status(
+            issi,
+            gssi,
+            attach,
+            true,
+            "CMCE",
+            format!("Queued SS-DGNA {} D-FACILITY", if attach { "ASSIGN" } else { "DEASSIGN" }),
+        );
 
         queue.push_back(SapMsg {
             sap: Sap::LcmcSap,
@@ -155,6 +183,19 @@ impl SsBsSubentity {
                                 ie.result_of_assignment,
                                 ie.result_of_attachment
                             );
+                            let accepted = ie.result_of_assignment.to_string().eq_ignore_ascii_case("accepted")
+                                && ie.result_of_attachment.to_string().eq_ignore_ascii_case("accepted");
+                            self.emit_dgna_status(
+                                issi,
+                                ie.group_ssi,
+                                true,
+                                accepted,
+                                "CMCE",
+                                format!(
+                                    "SS-DGNA ASSIGN ACK assignment={} attachment={}",
+                                    ie.result_of_assignment, ie.result_of_attachment
+                                ),
+                            );
                         }
                     }
                     SsDgnaPdu::DeassignAck(ack) => {
@@ -164,6 +205,15 @@ impl SsBsSubentity {
                                 issi,
                                 ie.group_ssi,
                                 ie.result_of_deassignment
+                            );
+                            let accepted = ie.result_of_deassignment.to_string().eq_ignore_ascii_case("accepted");
+                            self.emit_dgna_status(
+                                issi,
+                                ie.group_ssi,
+                                false,
+                                accepted,
+                                "CMCE",
+                                format!("SS-DGNA DEASSIGN ACK deassignment={}", ie.result_of_deassignment),
                             );
                         }
                     }

@@ -3942,6 +3942,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <button class="btn btn-danger" id="dgna-deassign-btn" onclick="sendDgna(false)" data-i18n="dgna_deassign">Deassign</button>
       <button class="btn btn-primary" onclick="sendDgna(true)" data-i18n="dgna_assign">Assign</button>
     </div>
+    <div id="dgna-status" style="font-size:12px;min-height:16px;margin-top:8px"></div>
   </div>
 </div>
 
@@ -5174,6 +5175,7 @@ function handleMsg(msg){
       renderStations();break;
     case 'ms_groups':
       if(state.ms[msg.issi]){const cur=new Set(state.ms[msg.issi].groups||[]);(msg.groups||[]).forEach(g=>cur.add(g));state.ms[msg.issi].groups=[...cur];(state.ms[msg.issi].group_catalog||[]).forEach(g=>{if(cur.has(g.gssi))g.is_attached=true;});}
+      if(dgnaModalIssi()===msg.issi)refreshOpenDgna();
       renderStations();break;
     case 'ms_groups_detach':
       if(state.ms[msg.issi]){
@@ -5183,6 +5185,7 @@ function handleMsg(msg){
         // Drop a stale selected_group pointer if the detach removed the actively-selected TG.
         if(state.ms[msg.issi].selected_group!=null&&rem.has(state.ms[msg.issi].selected_group))state.ms[msg.issi].selected_group=null;
       }
+      if(dgnaModalIssi()===msg.issi)refreshOpenDgna();
       renderStations();break;
     case 'ms_groups_all':
       if(state.ms[msg.issi]){
@@ -5193,13 +5196,25 @@ function handleMsg(msg){
         const sg=state.ms[msg.issi].selected_group;
         if(sg!=null&&!(state.ms[msg.issi].groups||[]).includes(sg))state.ms[msg.issi].selected_group=null;
       }
+      if(dgnaModalIssi()===msg.issi)refreshOpenDgna();
       renderStations();break;
     case 'ms_group_catalog':
       if(state.ms[msg.issi]){
         state.ms[msg.issi].group_catalog=msg.groups||[];
         state.ms[msg.issi].groups=(msg.groups||[]).filter(g=>g.is_attached).map(g=>g.gssi);
       }
+      if(dgnaModalIssi()===msg.issi)refreshOpenDgna();
       renderStations();break;
+    case 'dgna_status':
+      if(msg.issi!=null&&msg.gssi!=null){
+        const currentIssi=parseInt(document.getElementById('dgna-issi')?.value||'0');
+        const currentGssi=parseInt(document.getElementById('dgna-gssi')?.value||'0');
+        if(currentIssi===msg.issi){
+          refreshOpenDgna();
+          if(currentGssi===msg.gssi)setDgnaStatus(msg.detail||'',!!msg.accepted);
+        }
+      }
+      break;
     case 'call_started':
       state.calls[msg.call_id]={...msg,started_at:Date.now()};
       if(msg.carrier_num!=null)tsEnsureCarrierInfo(msg.carrier_num);
@@ -6714,12 +6729,28 @@ function dgnaGroupsFor(issi){
   if((ms.group_catalog||[]).length)return ms.group_catalog.slice().sort((a,b)=>a.gssi-b.gssi);
   return (ms.groups||[]).slice().sort((a,b)=>a-b).map(gssi=>({gssi,mnemonic:'',is_dynamic:false,is_attached:true}));
 }
+function dgnaModalIssi(){
+  const modal=document.getElementById('dgna-modal');
+  if(!modal||!modal.classList.contains('open'))return 0;
+  return parseInt(document.getElementById('dgna-issi')?.value||'0')||0;
+}
+function refreshOpenDgna(){
+  const issi=dgnaModalIssi();
+  if(!issi)return;
+  renderDgnaGroups(issi);
+}
 function syncDgnaDeassignState(){
   const gssi=parseInt(document.getElementById('dgna-gssi').value);
   const issi=parseInt(document.getElementById('dgna-issi').value);
   const sel=dgnaGroupsFor(issi).find(g=>g.gssi===gssi);
   const btn=document.getElementById('dgna-deassign-btn');
-  if(btn)btn.disabled=!(sel&&sel.is_dynamic);
+  if(btn)btn.disabled=!(sel&&(sel.is_dynamic||sel.is_attached));
+}
+function setDgnaStatus(txt,ok){
+  const el=document.getElementById('dgna-status');
+  if(!el)return;
+  el.textContent=txt||'';
+  el.style.color=ok?'var(--accent)':'var(--danger)';
 }
 function syncDgnaAttachmentModePicker(){
   const row=document.getElementById('dgna-attachment-mode-row');
@@ -6749,11 +6780,13 @@ function selectDgnaGroup(issi,gssi){
   document.getElementById('dgna-gssi').value=gssi;
   document.getElementById('dgna-name').value=(group&&group.mnemonic)||'';
   document.getElementById('dgna-attachment-mode').value=((group&&group.attachment_mode)!=null?group.attachment_mode:(state.dgnaDefaultAttachmentMode||0));
+  setDgnaStatus(group&&group.is_dynamic?'Dynamic group selected':'Static group selected - deassign will force a detach from the radio',group&&group.is_dynamic);
   syncDgnaDeassignState();
 }
-function openDgna(issi){document.getElementById('dgna-issi').value=issi;document.getElementById('dgna-gssi').value='';document.getElementById('dgna-name').value='';document.getElementById('dgna-attachment-mode').value=String(state.dgnaDefaultAttachmentMode||0);syncDgnaAttachmentModePicker();renderDgnaGroups(issi);document.getElementById('dgna-modal').classList.add('open');}
-function closeDgnaModal(){document.getElementById('dgna-modal').classList.remove('open');}
-function sendDgna(attach){const issi=parseInt(document.getElementById('dgna-issi').value),gssi=parseInt(document.getElementById('dgna-gssi').value),mnemonic=document.getElementById('dgna-name').value.trim(),attachment_mode=(state.dgnaAttachmentModePickerEnabled?(parseInt(document.getElementById('dgna-attachment-mode').value)||0):(state.dgnaDefaultAttachmentMode||0));if(!issi||!gssi)return;if(!attach){const sel=dgnaGroupsFor(issi).find(g=>g.gssi===gssi);if(!(sel&&sel.is_dynamic))return;}wsSend({type:'dgna',issi,gssi,mnemonic,attachment_mode,attach});closeDgnaModal();}
+function openDgna(issi){document.getElementById('dgna-issi').value=issi;document.getElementById('dgna-gssi').value='';document.getElementById('dgna-name').value='';document.getElementById('dgna-attachment-mode').value=String(state.dgnaDefaultAttachmentMode||0);setDgnaStatus('',true);syncDgnaAttachmentModePicker();renderDgnaGroups(issi);document.getElementById('dgna-modal').classList.add('open');}
+function closeDgnaModal(){document.getElementById('dgna-modal').classList.remove('open');setDgnaStatus('',true);}
+function sendDgna(attach){const issi=parseInt(document.getElementById('dgna-issi').value),gssi=parseInt(document.getElementById('dgna-gssi').value),mnemonic=document.getElementById('dgna-name').value.trim(),attachment_mode=(state.dgnaAttachmentModePickerEnabled?(parseInt(document.getElementById('dgna-attachment-mode').value)||0):(state.dgnaDefaultAttachmentMode||0));if(!issi||!gssi)return;const sel=dgnaGroupsFor(issi).find(g=>g.gssi===gssi);if(!attach){if(!sel)return;if(!sel.is_dynamic){if(!confirm(`Detach static GSSI ${gssi} from ISSI ${issi}? This forces the radio to drop a non-DGNA group.`))return;}}setDgnaStatus(`Waiting for backend: ${attach?'assign':'deassign'} ISSI ${issi} GSSI ${gssi}`,true);if(!wsSend({type:'dgna',issi,gssi,mnemonic,attachment_mode,attach}))setDgnaStatus('Backend unavailable - command was not sent',false);}
+setInterval(refreshOpenDgna,1000);
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ OTA Update Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 let updatePollTimer=null;

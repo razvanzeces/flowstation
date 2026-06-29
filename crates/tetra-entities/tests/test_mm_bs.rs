@@ -377,9 +377,10 @@ fn test_dgna_registry_survives_group_detach() {
     );
 }
 
-/// Only DGNA-defined groups may be deassigned. Static affiliations must remain attach/detach-only.
+/// A static affiliation may be operator-detached through the DGNA control surface. MM must emit the
+/// detach on air but keep the DGNA registry untouched because the group was never dynamic.
 #[test]
-fn test_dgna_deassign_rejects_static_group() {
+fn test_dgna_deassign_allows_static_group_detach() {
     debug::setup_logging_verbose();
     const TEST_ISSI: u32 = 2260577;
     const TEST_GSSI: u32 = 104;
@@ -404,17 +405,24 @@ fn test_dgna_deassign_rejects_static_group() {
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
+    let (issi, gssi, _mnemonic, attachment_mode, attach) = find_ss_dgna_request(&msgs)
+        .unwrap_or_else(|| panic!("expected a CmceSsDgnaAssign request after static detach, got {} msgs", msgs.len()));
+    assert_eq!(issi, TEST_ISSI);
+    assert_eq!(gssi, TEST_GSSI);
+    assert_eq!(attachment_mode, 0);
+    assert!(!attach, "static detach must emit a DEASSIGN request on the SS-DGNA path");
     assert!(
-        find_ss_dgna_request(&msgs).is_none(),
-        "static groups must not be deassigned through DGNA"
-    );
-    assert!(
-        test.config
+        !test
+            .config
             .state_read()
             .subscribers
             .attached_groups_of(TEST_ISSI)
             .contains(&TEST_GSSI),
-        "rejecting a static-group deassign must leave the attachment untouched"
+        "static detach must remove the current attachment"
+    );
+    assert!(
+        test.config.state_read().subscribers.dgna_groups_of(TEST_ISSI).is_empty(),
+        "static detach must not fabricate a DGNA registry entry"
     );
 }
 
