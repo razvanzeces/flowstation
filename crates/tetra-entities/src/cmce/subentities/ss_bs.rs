@@ -92,6 +92,7 @@ impl SsBsSubentity {
         gssi: u32,
         mnemonic: Option<String>,
         attachment_mode: u8,
+        route_gssi_hint: Option<u32>,
         attach: bool,
     ) {
         let attachment_mode =
@@ -139,7 +140,7 @@ impl SsBsSubentity {
             issi,
             sdu.dump_bin()
         );
-        let delivery = self.resolve_traffic_delivery(issi);
+        let delivery = self.resolve_traffic_delivery(issi, route_gssi_hint);
         let route_detail = match delivery {
             DgnaDelivery::McchOnly => "via MCCH".to_string(),
             DgnaDelivery::DirectTraffic { carrier_num, ts, .. } => {
@@ -372,18 +373,18 @@ impl SsBsSubentity {
         }
     }
 
-    fn resolve_traffic_delivery(&self, issi: u32) -> DgnaDelivery {
+    fn resolve_traffic_delivery(&self, issi: u32, route_gssi_hint: Option<u32>) -> DgnaDelivery {
         let state = self.config.state_read();
         if let Some((carrier_num, ts, usage)) = state.active_call_ts.get(&issi).copied()
             && (1..=4).contains(&ts)
         {
             return DgnaDelivery::DirectTraffic { carrier_num, ts, usage };
         }
-        if let Some((carrier_num, ts, usage)) = state
-            .subscribers
-            .attached_groups_of(issi)
+        let hinted_gssis: Vec<u32> = route_gssi_hint
             .into_iter()
-            .find_map(|gssi| state.active_call_ts.get(&gssi).copied())
+            .chain(state.subscribers.attached_groups_of(issi))
+            .collect();
+        if let Some((carrier_num, ts, usage)) = hinted_gssis.into_iter().find_map(|gssi| state.active_call_ts.get(&gssi).copied())
             && (1..=4).contains(&ts)
         {
             return DgnaDelivery::AmbiguousGroupTraffic { carrier_num, ts, usage };

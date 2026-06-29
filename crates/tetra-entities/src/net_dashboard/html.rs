@@ -7105,12 +7105,14 @@ function closeDgnaTemplateModal(){
 }
 function saveDgnaTemplateModal(){
   const oldGssi=dgnaUi.editingTemplateGssi||0;
+  const existingGroup=oldGssi?dgnaLibraryGroups().find(g=>g.gssi===oldGssi):null;
   const existedBefore=(dgnaUi.templates||[]).some(g=>g.gssi===oldGssi||g.gssi===parseInt(document.getElementById('dgna-template-gssi')?.value||'0',10));
   const gssi=parseInt(document.getElementById('dgna-template-gssi')?.value||'0',10);
   if(!gssi){setDgnaTemplateStatus('Set a valid GSSI first',false);return;}
   const mnemonic=(document.getElementById('dgna-template-name')?.value||'').trim().slice(0,15);
   const attachment_mode=state.dgnaAttachmentModePickerEnabled?(parseInt(document.getElementById('dgna-template-attachment-mode')?.value||'0',10)||0):(state.dgnaDefaultAttachmentMode||0);
   const next={gssi,mnemonic,attachment_mode};
+  const shouldAutoUpdate=!!existingGroup&&oldGssi===gssi&&((existingGroup.mnemonic||'')!==mnemonic||Number(existingGroup.attachment_mode??(state.dgnaDefaultAttachmentMode||0))!==attachment_mode);
   dgnaUi.templates=(dgnaUi.templates||[]).filter(g=>g.gssi!==oldGssi&&g.gssi!==gssi);
   dgnaUi.templates.push(next);
   dgnaUi.templates.sort((a,b)=>a.gssi-b.gssi);
@@ -7118,7 +7120,20 @@ function saveDgnaTemplateModal(){
   dgnaUi.selectedGssi=gssi;
   dgnaUi.editingTemplateGssi=0;
   closeDgnaTemplateModal();
-  setDgnaPageStatus(oldGssi&&oldGssi!==gssi?`Renamed GSSI ${oldGssi} to ${gssi} in the local group library`:(existedBefore?`Updated GSSI ${gssi} in the local group library`:`Saved GSSI ${gssi} in the local group library`),true);
+  if(shouldAutoUpdate){
+    const targets=dgnaAllRadios().filter(ms=>!!dgnaTargetState(ms.issi,gssi)).map(ms=>ms.issi);
+    if(targets.length){
+      if(wsSend({type:'dgna_bulk',targets,gssi,mnemonic,attachment_mode,attach:true,all_radios:false})){
+        setDgnaPageStatus(`Updated GSSI ${gssi} in the local library and queued DGNA update to ${targets.length} radio(s)`,true);
+      }else{
+        setDgnaPageStatus(`Updated GSSI ${gssi} in the local library, but backend update could not be sent`,false);
+      }
+    }else{
+      setDgnaPageStatus(`Updated GSSI ${gssi} in the local library`,true);
+    }
+  }else{
+    setDgnaPageStatus(oldGssi&&oldGssi!==gssi?`Renamed GSSI ${oldGssi} to ${gssi} in the local group library`:(existedBefore?`Updated GSSI ${gssi} in the local group library`:`Saved GSSI ${gssi} in the local group library`),true);
+  }
   renderDgnaPage();
 }
 function dgnaTargetState(issi,gssi){

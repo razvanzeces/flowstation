@@ -303,6 +303,7 @@ impl TetraEntityTrait for CmceBs {
                         gssi,
                         mnemonic,
                         attachment_mode,
+                        route_gssi_hint,
                         attach,
                     } = message.msg
                     else {
@@ -310,7 +311,8 @@ impl TetraEntityTrait for CmceBs {
                     };
                     // MM owns the group registry/affiliation; it has already committed the change and
                     // asks CMCE only to put the SS-DGNA ASSIGN/DEASSIGN on the air as a D-FACILITY.
-                    self.ss.send_d_facility_dgna(queue, issi, gssi, mnemonic, attachment_mode, attach);
+                    self.ss
+                        .send_d_facility_dgna(queue, issi, gssi, mnemonic, attachment_mode, route_gssi_hint, attach);
                 }
                 ControlRoute::Unsupported => {
                     panic!("Unexpected control message: {:?}", message.msg);

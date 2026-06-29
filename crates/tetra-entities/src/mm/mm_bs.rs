@@ -1531,6 +1531,7 @@ impl MmBs {
         let verb = if attach { "assign" } else { "deassign" };
         let is_dynamic = self.config.state_read().subscribers.has_dgna_group(issi, gssi);
         let is_attached = self.config.state_read().subscribers.attached_groups_of(issi).contains(&gssi);
+        let route_gssi_hint = (!attach && is_attached).then_some(gssi);
 
         // The terminal must be registered on the cell â€” we cannot regroup a radio that is not here.
         if !self.client_mgr.client_is_known(issi) {
@@ -1643,6 +1644,7 @@ impl MmBs {
                     gssi,
                     mnemonic,
                     attachment_mode,
+                    route_gssi_hint,
                     attach,
                 },
             });
