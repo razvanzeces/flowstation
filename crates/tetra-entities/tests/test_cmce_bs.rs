@@ -25,6 +25,7 @@ use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 
 use crate::common::ComponentTest;
+use crate::common::default_stack::default_test_config_bs;
 
 const TEST_GSSI: u32 = 91;
 const TEST_ISSI: u32 = 1000001;
@@ -1133,6 +1134,83 @@ fn test_network_group_speaker_change_uses_remote_floor_grant() {
                 if *source_issi == second_speaker
         )),
         "Network group speakers must not use local FloorGranted because that arms UL inactivity"
+    );
+}
+
+#[test]
+fn test_network_group_call_timeout_refreshes_on_media_activity() {
+    debug::setup_logging_verbose();
+
+    let gssi = 220;
+    let local_issi = 9012003;
+    let source_issi = 2200010;
+    let brew_uuid = uuid::Uuid::new_v4();
+
+    let mut config = default_test_config_bs();
+    config.cell.call_timeout_secs = 30;
+    config.brew = Some(CfgBrew {
+        host: "127.0.0.1".into(),
+        port: 0,
+        tls: false,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_secs(1),
+        jitter_initial_latency_frames: 0,
+        feature_sds_enabled: true,
+        whitelisted_ssis: None,
+        feature_rssi_export: false,
+        pbx_gateway_issis: None,
+    });
+
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+    register_subscriber(&mut test, local_issi, gssi);
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
+            brew_uuid,
+            source_issi,
+            dest_gssi: gssi,
+            priority: 1,
+        }),
+    });
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.run_stack(Some(2000));
+    test.dump_sinks();
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallMediaActivity { brew_uuid }),
+    });
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.run_stack(Some(400));
+    let still_active_msgs = test.dump_sinks();
+    assert!(
+        !still_active_msgs
+            .iter()
+            .any(|msg| matches!(&msg.msg, SapMsgInner::CmceCallControl(CallControl::CallEnded { .. }))),
+        "network call must not end at the original timeout if Brew media refreshed it"
+    );
+
+    test.run_stack(Some(2200));
+    let release_msgs = test.dump_sinks();
+    assert!(
+        release_msgs
+            .iter()
+            .any(|msg| matches!(&msg.msg, SapMsgInner::CmceCallControl(CallControl::CallEnded { .. }))),
+        "network call should release after the refreshed timeout window expires"
     );
 }
 

@@ -2076,6 +2076,7 @@ impl UmacBs {
             CallControl::NetworkCallStart { .. }
             | CallControl::NetworkCallReady { .. }
             | CallControl::NetworkCallEnd { .. }
+            | CallControl::NetworkCallMediaActivity { .. }
             | CallControl::NetworkCircuitSetupRequest { .. }
             | CallControl::NetworkCircuitSetupAccept { .. }
             | CallControl::NetworkCircuitSetupReject { .. }

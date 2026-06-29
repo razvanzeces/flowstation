@@ -131,6 +131,11 @@ pub enum CallControl {
     NetworkCallEnd {
         brew_uuid: uuid::Uuid, // Identifies the call to end
     },
+    /// Notify CMCE that network media is still arriving for an active group call.
+    /// Used to refresh the BS-side call timeout while the backhaul is still sending voice.
+    NetworkCallMediaActivity {
+        brew_uuid: uuid::Uuid, // Identifies the active network group call
+    },
     /// UL inactivity detected on a traffic timeslot: no voice frames received
     /// for the timeout period. Sent by UMAC to CMCE.
     UlInactivityTimeout { carrier_num: u16, ts: u8 },
