@@ -88,6 +88,8 @@ pub enum SapMsgInner {
     MmDgnaRequest {
         issi: u32,
         gssi: u32,
+        mnemonic: Option<String>,
+        attachment_mode: u8,
         attach: bool,
     },
 
@@ -99,6 +101,9 @@ pub enum SapMsgInner {
     CmceSsDgnaAssign {
         issi: u32,
         gssi: u32,
+        mnemonic: Option<String>,
+        attachment_mode: u8,
+        route_gssi_hint: Option<u32>,
         attach: bool,
     },
 
@@ -151,11 +156,32 @@ impl Display for SapMsgInner {
 
             // Control/Brew
             SapMsgInner::MmSubscriberUpdate(_) => write!(f, "MmSubscriberUpdate"),
-            SapMsgInner::MmDgnaRequest { issi, gssi, attach } => {
-                write!(f, "MmDgnaRequest(issi={}, gssi={}, attach={})", issi, gssi, attach)
+            SapMsgInner::MmDgnaRequest {
+                issi,
+                gssi,
+                mnemonic,
+                attachment_mode,
+                attach,
+            } => {
+                write!(
+                    f,
+                    "MmDgnaRequest(issi={}, gssi={}, mnemonic={:?}, attachment_mode={}, attach={})",
+                    issi, gssi, mnemonic, attachment_mode, attach
+                )
             }
-            SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach } => {
-                write!(f, "CmceSsDgnaAssign(issi={}, gssi={}, attach={})", issi, gssi, attach)
+            SapMsgInner::CmceSsDgnaAssign {
+                issi,
+                gssi,
+                mnemonic,
+                attachment_mode,
+                route_gssi_hint,
+                attach,
+            } => {
+                write!(
+                    f,
+                    "CmceSsDgnaAssign(issi={}, gssi={}, mnemonic={:?}, attachment_mode={}, route_gssi_hint={:?}, attach={})",
+                    issi, gssi, mnemonic, attachment_mode, route_gssi_hint, attach
+                )
             }
             SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => write!(f, "MsRssiUpdate(issi={}, rssi={:.1}dBFS)", issi, rssi_dbfs),
             SapMsgInner::BrewReconnected => write!(f, "BrewReconnected"),

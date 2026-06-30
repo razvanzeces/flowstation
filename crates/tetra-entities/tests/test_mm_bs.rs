@@ -64,9 +64,16 @@ fn register_terminal(test: &mut ComponentTest, issi: u32) {
 /// Pull the first MM->CMCE `CmceSsDgnaAssign` SAP request out of a batch of captured messages.
 /// This is the air-interface emission MM now makes by default for a DGNA: it hands the SS-DGNA
 /// ASSIGN/DEASSIGN to CMCE rather than sending an MM D-ATTACH itself.
-fn find_ss_dgna_request(msgs: &[SapMsg]) -> Option<(u32, u32, bool)> {
+fn find_ss_dgna_request(msgs: &[SapMsg]) -> Option<(u32, u32, Option<String>, u8, bool)> {
     msgs.iter().find_map(|m| match m.msg {
-        SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach } if m.dest == TetraEntity::Cmce => Some((issi, gssi, attach)),
+        SapMsgInner::CmceSsDgnaAssign {
+            issi,
+            gssi,
+            ref mnemonic,
+            attachment_mode,
+            route_gssi_hint: _,
+            attach,
+        } if m.dest == TetraEntity::Cmce => Some((issi, gssi, mnemonic.clone(), attachment_mode, attach)),
         _ => None,
     })
 }
@@ -105,7 +112,7 @@ fn find_attach_detach(msgs: &[SapMsg]) -> Option<(u32, DAttachDetachGroupIdentit
 
 /// Pull the addressed ISSI of the first D-LOCATION-UPDATE-COMMAND in a batch of captured MLE
 /// messages, if any. Matched on the 4-bit MM downlink PDU-type discriminator (the PDU's own
-/// `from_bitbuf` decoder is an unimplemented stub — only the encoder MM uses is wired up).
+/// `from_bitbuf` decoder is an unimplemented stub â€” only the encoder MM uses is wired up).
 fn find_location_update_command(msgs: &[SapMsg]) -> Option<u32> {
     let want = MmPduTypeDl::DLocationUpdateCommand.into_raw();
     for m in msgs {
@@ -131,7 +138,7 @@ fn submit_uplink_rssi(test: &mut ComponentTest, issi: u32) {
 }
 
 /// Reactive restart recovery: an *unknown* (unregistered) ISSI seen transmitting on the uplink
-/// must be commanded to re-register — this is the ghost-radio-after-restart fix. With reactive
+/// must be commanded to re-register â€” this is the ghost-radio-after-restart fix. With reactive
 /// recovery on by default and no allowlist, a single RSSI sample yields a D-LOCATION-UPDATE-COMMAND
 /// addressed to that ISSI.
 #[test]
@@ -180,7 +187,7 @@ fn test_reactive_recovery_skips_known_issi() {
 }
 
 /// Rate limiting: a burst of uplink samples from the same ghost (a single PTT yields several RSSI
-/// updates) must key only ONE COMMAND while it re-registers — the cooldown suppresses the rest.
+/// updates) must key only ONE COMMAND while it re-registers â€” the cooldown suppresses the rest.
 #[test]
 fn test_reactive_recovery_rate_limits_repeat_bursts() {
     debug::setup_logging_verbose();
@@ -191,7 +198,7 @@ fn test_reactive_recovery_rate_limits_repeat_bursts() {
     let mm = MmBs::new(test.get_shared_config(), None, None);
     test.register_entity(mm);
 
-    // First burst → one COMMAND.
+    // First burst â†’ one COMMAND.
     submit_uplink_rssi(&mut test, GHOST_ISSI);
     assert_eq!(
         find_location_update_command(&test.dump_sinks()),
@@ -199,7 +206,7 @@ fn test_reactive_recovery_rate_limits_repeat_bursts() {
         "first uplink burst from the ghost must command a re-registration"
     );
 
-    // Second burst within the cooldown (still unregistered) → suppressed.
+    // Second burst within the cooldown (still unregistered) â†’ suppressed.
     submit_uplink_rssi(&mut test, GHOST_ISSI);
     assert!(
         find_location_update_command(&test.dump_sinks()).is_none(),
@@ -210,7 +217,7 @@ fn test_reactive_recovery_rate_limits_repeat_bursts() {
 /// DGNA assign (SS-DGNA default): a dashboard control command makes MM affiliate the GSSI in the
 /// shared subscriber registry (so local group calls/SDS route to it) AND hand the air-interface
 /// emission to CMCE as a `CmceSsDgnaAssign` request. MM no longer sends the legacy D-ATTACH itself
-/// — the actual D-FACILITY on the wire is asserted in test_cmce_bs (the full MM+CMCE path).
+/// â€” the actual D-FACILITY on the wire is asserted in test_cmce_bs (the full MM+CMCE path).
 #[test]
 fn test_dgna_assign_affiliates_and_requests_ss_dgna() {
     debug::setup_logging_verbose();
@@ -235,14 +242,19 @@ fn test_dgna_assign_affiliates_and_requests_ss_dgna() {
     dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
+        attachment_mode: 0,
         attach: true,
     });
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    let (issi, gssi, attach) = find_ss_dgna_request(&msgs)
+    let (issi, gssi, mnemonic, attachment_mode, attach) = find_ss_dgna_request(&msgs)
         .unwrap_or_else(|| panic!("expected a CmceSsDgnaAssign request after DGNA assign, got {} msgs", msgs.len()));
-    assert_eq!((issi, gssi, attach), (TEST_ISSI, TEST_GSSI, true));
+    assert_eq!(
+        (issi, gssi, mnemonic, attachment_mode, attach),
+        (TEST_ISSI, TEST_GSSI, None, 0, true)
+    );
 
     // On the SS-DGNA default MM must NOT also send a legacy MM D-ATTACH (that would double-attach).
     assert!(
@@ -281,6 +293,8 @@ fn test_dgna_deassign_requests_ss_dgna_and_deaffiliates() {
     dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
+        attachment_mode: 0,
         attach: true,
     });
     test.run_stack(Some(2));
@@ -296,14 +310,19 @@ fn test_dgna_deassign_requests_ss_dgna_and_deaffiliates() {
     dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
+        attachment_mode: 0,
         attach: false,
     });
     test.run_stack(Some(2));
     let msgs = test.dump_sinks();
 
-    let (issi, gssi, attach) = find_ss_dgna_request(&msgs)
+    let (issi, gssi, mnemonic, attachment_mode, attach) = find_ss_dgna_request(&msgs)
         .unwrap_or_else(|| panic!("expected a CmceSsDgnaAssign request after DGNA deassign, got {} msgs", msgs.len()));
-    assert_eq!((issi, gssi, attach), (TEST_ISSI, TEST_GSSI, false));
+    assert_eq!(
+        (issi, gssi, mnemonic, attachment_mode, attach),
+        (TEST_ISSI, TEST_GSSI, None, 0, false)
+    );
 
     assert!(
         !test
@@ -313,6 +332,98 @@ fn test_dgna_deassign_requests_ss_dgna_and_deaffiliates() {
             .attached_groups_of(TEST_ISSI)
             .contains(&TEST_GSSI),
         "DGNA deassign must remove the GSSI from the subscriber registry"
+    );
+}
+
+/// A dynamic group remains in the per-device DGNA registry even after the radio detaches from it,
+/// so the operator can still see it and explicitly deassign it later.
+#[test]
+fn test_dgna_registry_survives_group_detach() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260576;
+    const TEST_GSSI: u32 = 103;
+
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+    test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Cmce]);
+    let (dispatcher, endpoint) = make_control_link();
+    let mm = MmBs::new(test.get_shared_config(), None, Some(endpoint));
+    test.register_entity(mm);
+    register_terminal(&mut test, TEST_ISSI);
+    let _ = test.dump_sinks();
+
+    dispatcher.send(ControlCommand::Dgna {
+        issi: TEST_ISSI,
+        gssi: TEST_GSSI,
+        mnemonic: Some("OPS".to_string()),
+        attachment_mode: 3,
+        attach: true,
+    });
+    test.run_stack(Some(2));
+    let _ = test.dump_sinks();
+
+    test.config.state_write().subscribers.deaffiliate(TEST_ISSI, TEST_GSSI);
+
+    let state = test.config.state_read();
+    assert!(
+        !state.subscribers.attached_groups_of(TEST_ISSI).contains(&TEST_GSSI),
+        "manual detach should remove the current affiliation"
+    );
+    assert!(
+        state
+            .subscribers
+            .dgna_groups_of(TEST_ISSI)
+            .iter()
+            .any(|group| group.gssi == TEST_GSSI && group.mnemonic.as_deref() == Some("OPS")),
+        "detaching a dynamic group must not erase the DGNA registry entry"
+    );
+}
+
+/// A static affiliation may be operator-detached through the DGNA control surface. MM must emit the
+/// detach on air but keep the DGNA registry untouched because the group was never dynamic.
+#[test]
+fn test_dgna_deassign_allows_static_group_detach() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260577;
+    const TEST_GSSI: u32 = 104;
+
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+    test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Cmce]);
+    let (dispatcher, endpoint) = make_control_link();
+    let mm = MmBs::new(test.get_shared_config(), None, Some(endpoint));
+    test.register_entity(mm);
+    register_terminal(&mut test, TEST_ISSI);
+    let _ = test.dump_sinks();
+
+    test.config.state_write().subscribers.affiliate(TEST_ISSI, TEST_GSSI);
+
+    dispatcher.send(ControlCommand::Dgna {
+        issi: TEST_ISSI,
+        gssi: TEST_GSSI,
+        mnemonic: None,
+        attachment_mode: 0,
+        attach: false,
+    });
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+
+    let (issi, gssi, _mnemonic, attachment_mode, attach) = find_ss_dgna_request(&msgs)
+        .unwrap_or_else(|| panic!("expected a CmceSsDgnaAssign request after static detach, got {} msgs", msgs.len()));
+    assert_eq!(issi, TEST_ISSI);
+    assert_eq!(gssi, TEST_GSSI);
+    assert_eq!(attachment_mode, 0);
+    assert!(!attach, "static detach must emit a DEASSIGN request on the SS-DGNA path");
+    assert!(
+        !test
+            .config
+            .state_read()
+            .subscribers
+            .attached_groups_of(TEST_ISSI)
+            .contains(&TEST_GSSI),
+        "static detach must remove the current attachment"
+    );
+    assert!(
+        test.config.state_read().subscribers.dgna_groups_of(TEST_ISSI).is_empty(),
+        "static detach must not fabricate a DGNA registry entry"
     );
 }
 
@@ -341,6 +452,8 @@ fn test_dgna_legacy_flag_emits_mm_attach() {
     dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
+        attachment_mode: 0,
         attach: true,
     });
     test.run_stack(Some(2));
@@ -382,7 +495,7 @@ fn test_dgna_legacy_flag_emits_mm_attach() {
 /// Regression for the dashboard path (FlowStation log 00:19:24 "CMCE: ignoring unsupported control
 /// command Dgna"): the dashboard's control channel terminates at CMCE, not MM. A DGNA command
 /// delivered to CMCE must be forwarded to MM, which (SS-DGNA default) hands the emission back to
-/// CMCE as a D-FACILITY{ASSIGN} on the air — exactly the path a real dashboard click takes.
+/// CMCE as a D-FACILITY{ASSIGN} on the air â€” exactly the path a real dashboard click takes.
 #[test]
 fn test_dgna_from_cmce_control_reaches_mm_and_emits_d_facility() {
     debug::setup_logging_verbose();
@@ -392,7 +505,7 @@ fn test_dgna_from_cmce_control_reaches_mm_and_emits_d_facility() {
     let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
     test.populate_entities(vec![], vec![TetraEntity::Mle]);
 
-    // Real MM with NO control endpoint — it must receive DGNA via the SAP forward from CMCE.
+    // Real MM with NO control endpoint â€” it must receive DGNA via the SAP forward from CMCE.
     let mm = MmBs::new(test.get_shared_config(), None, None);
     test.register_entity(mm);
 
@@ -408,6 +521,8 @@ fn test_dgna_from_cmce_control_reaches_mm_and_emits_d_facility() {
     cmce_dispatcher.send(ControlCommand::Dgna {
         issi: TEST_ISSI,
         gssi: TEST_GSSI,
+        mnemonic: None,
+        attachment_mode: 0,
         attach: true,
     });
     // CMCE drains control -> forwards MmDgnaRequest -> MM affiliates + requests CmceSsDgnaAssign ->
@@ -428,10 +543,7 @@ fn test_dgna_from_cmce_control_reaches_mm_and_emits_d_facility() {
     };
     assert_eq!(assign.groups.len(), 1);
     assert_eq!(assign.groups[0].group_ssi, TEST_GSSI);
-    assert_eq!(
-        assign.groups[0].attachment_mode,
-        GroupIdentityAttachmentMode::AttachedPermanently
-    );
+    assert_eq!(assign.groups[0].attachment_mode, GroupIdentityAttachmentMode::AttachedPermanently);
 
     assert!(
         test.config
@@ -453,10 +565,12 @@ fn test_dgna_to_unregistered_issi_is_refused() {
     let mm = MmBs::new(test.get_shared_config(), None, Some(endpoint));
     test.register_entity(mm);
 
-    // No registration first — the command must be dropped, emitting no group identity PDU.
+    // No registration first â€” the command must be dropped, emitting no group identity PDU.
     dispatcher.send(ControlCommand::Dgna {
         issi: 9_999_001,
         gssi: 100,
+        mnemonic: None,
+        attachment_mode: 0,
         attach: true,
     });
     test.run_stack(Some(2));
@@ -523,7 +637,7 @@ fn test_u_mm_status_energy_saving() {
 
 /// Restart recovery: a seeded cache is loaded into MM as known-but-Detached terminals (no SAP
 /// emitted at load), and the startup sweep replays a D-LOCATION-UPDATE-COMMAND to each cached
-/// ISSI — addressed by ISSI with handle 0, paced one per TDMA frame, round-robin.
+/// ISSI â€” addressed by ISSI with handle 0, paced one per TDMA frame, round-robin.
 #[test]
 fn test_restart_recovery_loads_and_replays() {
     // Config with recovery enabled and 1 COMMAND per frame.
@@ -536,8 +650,8 @@ fn test_restart_recovery_loads_and_replays() {
     std::fs::write(
         &path,
         r#"{"version":1,"terminals":[
-            {"issi":1000001,"groups":[91],"energy_saving_mode":0},
-            {"issi":1000002,"groups":[],"energy_saving_mode":0}
+            {"issi":1000001,"groups":[91],"dgna_groups":[{"gssi":91,"mnemonic":"OPS","attachment_mode":3}],"energy_saving_mode":0},
+            {"issi":1000002,"groups":[],"dgna_groups":[],"energy_saving_mode":0}
         ]}"#,
     )
     .unwrap();
@@ -550,7 +664,7 @@ fn test_restart_recovery_loads_and_replays() {
     test.register_entity(mm);
 
     // Nothing should be emitted purely from loading the cache (re-affiliation happens only when a
-    // terminal actually re-registers, not at load) — verified by running zero-effect setup below.
+    // terminal actually re-registers, not at load) â€” verified by running zero-effect setup below.
 
     // Drive several frames; each tick advances the TDMA clock by one slot (4 slots/frame), so a
     // handful of ticks spans multiple frames and the round-robin sweep reaches both ISSIs.
@@ -578,6 +692,12 @@ fn test_restart_recovery_loads_and_replays() {
         "ISSI 1000002 should receive a recovery COMMAND, got {:?}",
         targets
     );
+
+    let restored_dgna = test.config.state_read().subscribers.dgna_groups_of(1000001);
+    assert_eq!(restored_dgna.len(), 1, "DGNA metadata should be restored from the recovery cache");
+    assert_eq!(restored_dgna[0].gssi, 91);
+    assert_eq!(restored_dgna[0].mnemonic.as_deref(), Some("OPS"));
+    assert_eq!(restored_dgna[0].attachment_mode, 3);
 
     let _ = std::fs::remove_file(&path);
 }

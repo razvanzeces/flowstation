@@ -147,6 +147,7 @@ pub(super) struct ActiveCall {
     pub(super) dest_gssi: u32,   // Destination group
     pub(super) source_issi: u32, // Current speaker
     pub(super) created_at: TdmaTime,
+    pub(super) last_activity_at: TdmaTime,
     pub(super) call_timeout: CallTimeout,
     /// ETSI EN 300 392-2 clause 14.8 call priority (0..=15; 15 = emergency). Used for
     /// pre-emptive priority handling: a higher-priority set-up may release this call.
@@ -191,6 +192,7 @@ impl ActiveCall {
             dest_gssi,
             source_issi,
             created_at,
+            last_activity_at: created_at,
             call_timeout,
             priority,
             carrier_num,
@@ -225,6 +227,7 @@ impl ActiveCall {
             dest_gssi,
             source_issi,
             created_at,
+            last_activity_at: created_at,
             call_timeout,
             priority,
             carrier_num,
@@ -266,9 +269,13 @@ impl ActiveCall {
     #[inline]
     pub(super) fn call_timeout_expired(&self, now: TdmaTime) -> bool {
         match call_timeout_to_timeslots(self.call_timeout) {
-            Some(timeout) => self.created_at.age(now) > timeout,
+            Some(timeout) => self.last_activity_at.age(now) > timeout,
             None => false,
         }
+    }
+
+    pub(super) fn touch_activity(&mut self, now: TdmaTime) {
+        self.last_activity_at = now;
     }
 
     pub(super) fn enter_hangtime(&mut self, now: TdmaTime) {

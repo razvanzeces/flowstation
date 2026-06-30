@@ -182,4 +182,24 @@ impl CcBsSubentity {
             }
         }
     }
+
+    /// Refresh the timeout of an active network-originated group call while Brew media is still arriving.
+    pub(super) fn rx_network_call_media_activity(&mut self, brew_uuid: uuid::Uuid) {
+        let Some((call_id, call)) = self
+            .active_calls
+            .iter_mut()
+            .find(|(_, c)| matches!(&c.origin, CallOrigin::Network { .. }) && c.brew_uuid == Some(brew_uuid))
+        else {
+            tracing::trace!("CMCE: network media activity for unknown brew_uuid={}", brew_uuid);
+            return;
+        };
+
+        call.touch_activity(self.dltime);
+        tracing::trace!(
+            "CMCE: refreshed network call timeout brew_uuid={} call_id={} gssi={}",
+            brew_uuid,
+            call_id,
+            call.dest_gssi
+        );
+    }
 }

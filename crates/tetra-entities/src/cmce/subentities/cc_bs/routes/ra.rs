@@ -22,6 +22,9 @@ impl CcBsSubentity {
             CallControl::NetworkCallEnd { brew_uuid } => {
                 self.rx_network_call_end(queue, brew_uuid);
             }
+            CallControl::NetworkCallMediaActivity { brew_uuid } => {
+                self.rx_network_call_media_activity(brew_uuid);
+            }
             CallControl::UlInactivityTimeout { carrier_num, ts } => {
                 self.handle_ul_inactivity_timeout_slot(queue, carrier_num, ts);
             }

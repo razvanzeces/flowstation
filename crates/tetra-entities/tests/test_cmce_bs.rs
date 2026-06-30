@@ -25,6 +25,7 @@ use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 
 use crate::common::ComponentTest;
+use crate::common::default_stack::default_test_config_bs;
 
 const TEST_GSSI: u32 = 91;
 const TEST_ISSI: u32 = 1000001;
@@ -1137,6 +1138,83 @@ fn test_network_group_speaker_change_uses_remote_floor_grant() {
 }
 
 #[test]
+fn test_network_group_call_timeout_refreshes_on_media_activity() {
+    debug::setup_logging_verbose();
+
+    let gssi = 220;
+    let local_issi = 9012003;
+    let source_issi = 2200010;
+    let brew_uuid = uuid::Uuid::new_v4();
+
+    let mut config = default_test_config_bs();
+    config.cell.call_timeout_secs = 30;
+    config.brew = Some(CfgBrew {
+        host: "127.0.0.1".into(),
+        port: 0,
+        tls: false,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_secs(1),
+        jitter_initial_latency_frames: 0,
+        feature_sds_enabled: true,
+        whitelisted_ssis: None,
+        feature_rssi_export: false,
+        pbx_gateway_issis: None,
+    });
+
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+    register_subscriber(&mut test, local_issi, gssi);
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
+            brew_uuid,
+            source_issi,
+            dest_gssi: gssi,
+            priority: 1,
+        }),
+    });
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.run_stack(Some(2000));
+    test.dump_sinks();
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallMediaActivity { brew_uuid }),
+    });
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.run_stack(Some(400));
+    let still_active_msgs = test.dump_sinks();
+    assert!(
+        !still_active_msgs
+            .iter()
+            .any(|msg| matches!(&msg.msg, SapMsgInner::CmceCallControl(CallControl::CallEnded { .. }))),
+        "network call must not end at the original timeout if Brew media refreshed it"
+    );
+
+    test.run_stack(Some(2200));
+    let release_msgs = test.dump_sinks();
+    assert!(
+        release_msgs
+            .iter()
+            .any(|msg| matches!(&msg.msg, SapMsgInner::CmceCallControl(CallControl::CallEnded { .. }))),
+        "network call should release after the refreshed timeout window expires"
+    );
+}
+
+#[test]
 fn test_simplex_individual_tx_ceased_without_queued_demand_releases_floor() {
     debug::setup_logging_verbose();
 
@@ -1380,7 +1458,7 @@ fn test_dsetup_late_entry_throttle() {
     test.submit_message(u_setup_msg);
     test.run_stack(Some(1));
 
-    // Collect initial output — should contain D-SETUP (initial send with no tracked receipt)
+    // Collect initial output â€” should contain D-SETUP (initial send with no tracked receipt)
     let initial_msgs = test.dump_sinks();
     let initial_setups = count_d_setups(&initial_msgs);
     assert!(initial_setups > 0, "Expected initial D-SETUP after U-SETUP");
@@ -1450,7 +1528,7 @@ fn test_emergency_call_preempts_when_cell_full() {
     for (i, &g) in gssis.iter().enumerate() {
         register_subscriber(&mut test, 2_000_001 + i as u32, g);
     }
-    // A fourth (emergency) talkgroup with its own listener — no free slot remains for it.
+    // A fourth (emergency) talkgroup with its own listener â€” no free slot remains for it.
     let emergency_gssi = 199u32;
     register_subscriber(&mut test, 2_000_099, emergency_gssi);
 
@@ -1467,7 +1545,7 @@ fn test_emergency_call_preempts_when_cell_full() {
         "expected the cell to be full (0 free slots) after three group calls"
     );
 
-    // Incoming EMERGENCY group call (priority 15) on the fourth GSSI — must pre-empt to proceed.
+    // Incoming EMERGENCY group call (priority 15) on the fourth GSSI â€” must pre-empt to proceed.
     test.submit_message(build_u_setup_msg_prio(3_000_099, emergency_gssi, 15));
     test.run_stack(Some(1));
     let msgs = test.dump_sinks();
@@ -1523,7 +1601,7 @@ fn test_ordinary_call_does_not_preempt_when_cell_full() {
     }
     test.dump_sinks();
 
-    // Ordinary-priority (priority 0) group call into a full cell — must NOT pre-empt anything.
+    // Ordinary-priority (priority 0) group call into a full cell â€” must NOT pre-empt anything.
     test.submit_message(build_u_setup_msg_prio(3_000_099, extra_gssi, 0));
     test.run_stack(Some(1));
     let msgs = test.dump_sinks();
@@ -1533,18 +1611,18 @@ fn test_ordinary_call_does_not_preempt_when_cell_full() {
         .filter(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::CallEnded { .. })))
         .count();
     assert_eq!(call_ended, 0, "an ordinary-priority call must not pre-empt any active call");
-    // The three original calls are untouched — still no free slot.
+    // The three original calls are untouched â€” still no free slot.
     assert_eq!(test.config.state_read().timeslot_alloc.free_count(), 0);
 }
 
 // Energy-Economy D-SETUP gate (clause 16.7): individual-call setup resends to a sleeping EE MS
 // are held for the MS's downlink monitoring window, with a bounded fallback (EE_DSETUP_FALLBACK_TS
-// ≈ 423 timeslots / ~105 frames) to the historical blind resend. The empirically-observed resend
+// â‰ˆ 423 timeslots / ~105 frames) to the historical blind resend. The empirically-observed resend
 // cadence (initial + setup-retry) fires several individual D-SETUPs to the called MS within the
 // fallback window, which the tests below rely on.
 
 /// A sleeping EE MS (monitoring window closed for the whole sub-fallback run) must NOT receive
-/// any D-SETUP resend — they are held for its window.
+/// any D-SETUP resend â€” they are held for its window.
 #[test]
 fn test_dsetup_to_ee_ms_held_outside_monitoring_window() {
     debug::setup_logging_verbose();
@@ -1564,7 +1642,7 @@ fn test_dsetup_to_ee_ms_held_outside_monitoring_window() {
     test.run_stack(Some(1));
     test.dump_sinks(); // discard the initial (ungated) D-SETUP page
 
-    // ~100 frames (400 ts) — comfortably under the ~423 ts fallback, so any resend here is held.
+    // ~100 frames (400 ts) â€” comfortably under the ~423 ts fallback, so any resend here is held.
     test.run_stack(Some(400));
     let held = count_individual_dsetup_to(&test.dump_sinks(), called);
     assert_eq!(
@@ -1573,7 +1651,7 @@ fn test_dsetup_to_ee_ms_held_outside_monitoring_window() {
     );
 }
 
-/// A non-EE MS (absent from the published window map) is always reachable — the gate must not
+/// A non-EE MS (absent from the published window map) is always reachable â€” the gate must not
 /// suppress its D-SETUP resends.
 #[test]
 fn test_dsetup_to_non_ee_ms_resends_normally() {
@@ -1600,7 +1678,7 @@ fn test_dsetup_to_non_ee_ms_resends_normally() {
 }
 
 /// Bounded-fallback safety net: even if the granted window phase is wrong (window never opens),
-/// resends must resume once the setup has been pending longer than the fallback — so call setup
+/// resends must resume once the setup has been pending longer than the fallback â€” so call setup
 /// is never worse than the historical blind resend.
 #[test]
 fn test_dsetup_ee_fallback_resends_after_timeout() {
@@ -1704,11 +1782,11 @@ fn test_group_ee_announce_excludes_speaker() {
     );
 }
 
-// ─── FH FIX 2 guard: group-addressed PDUs must use unacknowledged LLC ──────────────────────────
+// â”€â”€â”€ FH FIX 2 guard: group-addressed PDUs must use unacknowledged LLC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // D-SETUP / D-RELEASE to a GSSI have no single peer to acknowledge, so they must go out as
 // unacknowledged BL-UDATA (`Layer2Service::Unacknowledged`), not the acknowledged default. MLE
-// routes Unacknowledged → TlaTlUnitdataReqBl (BL-UDATA) and everything else → TlaTlDataReqBl
+// routes Unacknowledged â†’ TlaTlUnitdataReqBl (BL-UDATA) and everything else â†’ TlaTlDataReqBl
 // (acknowledged BL-DATA), so the LcmcMleUnitdataReq.layer2service is the load-bearing field.
 
 /// Find the LcmcMleUnitdataReq carrying `pdu_type` addressed to `address` and return its
@@ -1771,7 +1849,7 @@ fn test_group_d_release_uses_unacknowledged_llc() {
     let setup_msgs = test.dump_sinks();
     let call_id = first_d_setup_call_id(&setup_msgs, TEST_GSSI);
 
-    // The call owner (the original caller) disconnects → release_group_call sends the group
+    // The call owner (the original caller) disconnects â†’ release_group_call sends the group
     // D-RELEASE addressed to the GSSI.
     test.submit_message(build_u_disconnect_msg(TEST_ISSI, call_id));
     test.run_stack(Some(1));
@@ -1786,7 +1864,7 @@ fn test_group_d_release_uses_unacknowledged_llc() {
     );
 }
 
-// ─── FH FIX 1 guard: call-lifecycle telemetry must reach the dashboard sink ────────────────────
+// â”€â”€â”€ FH FIX 1 guard: call-lifecycle telemetry must reach the dashboard sink â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_group_call_emits_started_and_ended_telemetry() {
@@ -1797,7 +1875,7 @@ fn test_group_call_emits_started_and_ended_telemetry() {
 
     let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
     let mut test = ComponentTest::new(StackMode::Bs, Some(dltime));
-    // Build the sinks but NOT the CMCE — we register a telemetry-wired CmceBs ourselves below.
+    // Build the sinks but NOT the CMCE â€” we register a telemetry-wired CmceBs ourselves below.
     test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
 
     let (sink, source) = telemetry_channel();
@@ -1848,7 +1926,7 @@ fn test_group_call_emits_started_and_ended_telemetry() {
 }
 
 /// Regression: a U-FACILITY (supplementary service) request from an MS must be answered
-/// with D-CMCE-FUNCTION-NOT-SUPPORTED (ETSI EN 300 392-2 §14.7.2.5). The CMCE rewrite
+/// with D-CMCE-FUNCTION-NOT-SUPPORTED (ETSI EN 300 392-2 Â§14.7.2.5). The CMCE rewrite
 /// routed U-FACILITY to ss_bs::route_re_deliver which only logged and sent nothing, so the
 /// MS received no response to its SS request. The BS must reply, not stay silent (and must
 /// not crash).
@@ -1892,7 +1970,7 @@ fn test_u_facility_answered_with_function_not_supported() {
     );
 }
 
-// ── SS-DGNA over CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; EN 300 392-9 V1.7.1) ────────────────
+// â”€â”€ SS-DGNA over CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; EN 300 392-9 V1.7.1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // These exercise the full operator-DGNA path: a dashboard `ControlCommand::Dgna` reaches MM, which
 // (SS-DGNA default) affiliates the GSSI and hands the air emission to CMCE, which puts an SS-DGNA
@@ -1969,9 +2047,16 @@ mod ss_dgna_tests {
         None
     }
 
+    fn find_d_facility_req(msgs: &[SapMsg]) -> Option<&tetra_saps::lcmc::LcmcMleUnitdataReq> {
+        msgs.iter().find_map(|m| match &m.msg {
+            SapMsgInner::LcmcMleUnitdataReq(req) if dl_pdu_type(&req.sdu) == Some(CmcePduTypeDl::DFacility) => Some(req),
+            _ => None,
+        })
+    }
+
     /// Build a MM(+control)/CMCE stack with the Mle sink, register the terminal, drive a DGNA, and
     /// return everything captured at the sinks.
-    fn run_dgna(attach: bool) -> (ComponentTest, Vec<SapMsg>) {
+    fn run_dgna(attach: bool, mnemonic: Option<&str>) -> (ComponentTest, Vec<SapMsg>) {
         let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
         test.populate_entities(vec![], vec![TetraEntity::Mle]);
 
@@ -1991,6 +2076,8 @@ mod ss_dgna_tests {
             dispatcher.send(ControlCommand::Dgna {
                 issi: DGNA_ISSI,
                 gssi: DGNA_GSSI,
+                mnemonic: None,
+                attachment_mode: 0,
                 attach: true,
             });
             test.run_stack(Some(6));
@@ -2000,6 +2087,8 @@ mod ss_dgna_tests {
         dispatcher.send(ControlCommand::Dgna {
             issi: DGNA_ISSI,
             gssi: DGNA_GSSI,
+            mnemonic: mnemonic.map(str::to_string),
+            attachment_mode: 0,
             attach,
         });
         // CMCE drains control -> MmDgnaRequest -> MM affiliates + CmceSsDgnaAssign -> CMCE D-FACILITY.
@@ -2013,7 +2102,7 @@ mod ss_dgna_tests {
     #[test]
     fn test_dgna_assign_emits_d_facility() {
         debug::setup_logging_verbose();
-        let (test, msgs) = run_dgna(true);
+        let (test, msgs) = run_dgna(true, None);
 
         let (addr_ssi, facility) =
             find_d_facility(&msgs).unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA assign, got {} msgs", msgs.len()));
@@ -2042,15 +2131,112 @@ mod ss_dgna_tests {
         );
     }
 
+    /// Operator DGNA assign with a mnemonic carries the TG name in the SS-DGNA Group assignment IE.
+    #[test]
+    fn test_dgna_assign_emits_mnemonic_name() {
+        debug::setup_logging_verbose();
+        let (_test, msgs) = run_dgna(true, Some("OPS 42"));
+
+        let (_addr_ssi, facility) =
+            find_d_facility(&msgs).unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA assign, got {} msgs", msgs.len()));
+        let body = facility.facility.expect("D-FACILITY must carry an SS-DGNA body");
+        let SsDgnaPdu::Assign(assign) = body.ss_pdu else {
+            panic!("expected an ASSIGN, got {}", body.ss_pdu);
+        };
+        assert_eq!(assign.groups.len(), 1, "exactly one group assigned");
+        assert_eq!(assign.groups[0].mnemonic.as_deref(), Some("OPS 42"));
+    }
+
+    #[test]
+    fn test_dgna_assign_to_idle_ms_uses_mcch_acknowledged_llc() {
+        debug::setup_logging_verbose();
+        let (_test, msgs) = run_dgna(true, None);
+
+        let req = find_d_facility_req(&msgs).expect("expected D-FACILITY request");
+        assert_eq!(req.main_address.ssi, DGNA_ISSI);
+        assert_eq!(req.layer2service, tetra_core::Layer2Service::Acknowledged);
+        assert!(!req.stealing_permission, "idle DGNA should stay on MCCH");
+        assert!(req.chan_alloc.is_none(), "idle DGNA should not carry chan_alloc");
+    }
+
+    /// Put DGNA_ISSI into a live group call (so it is parked on a real traffic channel), then
+    /// drive a DGNA to it. The "in call" condition must be a genuine call: `active_call_ts` is a
+    /// projection CMCE rebuilds from the live call tables on every tick (`publish_active_call_ts`),
+    /// so poking it directly does not survive into the DGNA delivery decision. Returns the stack
+    /// and the messages captured during the DGNA phase only.
+    fn run_dgna_to_ms_in_group_call() -> (ComponentTest, Vec<SapMsg>) {
+        const IN_CALL_GSSI: u32 = 7777;
+        let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+        test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
+
+        let (dispatcher, endpoint) = make_control_link();
+        let cmce = CmceBs::new(test.get_shared_config(), None, Some(endpoint));
+        test.register_entity(cmce);
+        let mm = MmBs::new(test.get_shared_config(), None, None);
+        test.register_entity(mm);
+
+        register_terminal_mm(&mut test, DGNA_ISSI);
+        // CC needs the subscriber + its affiliation before it will set up the group call.
+        register_subscriber(&mut test, DGNA_ISSI, IN_CALL_GSSI);
+
+        // DGNA_ISSI opens a group call, becoming the speaker on an allocated traffic channel, so the
+        // live-call projection lists it. This is exactly what the in-call DGNA path keys on.
+        test.submit_message(build_u_setup_msg(DGNA_ISSI, IN_CALL_GSSI));
+        test.run_stack(Some(2));
+        let _ = test.dump_sinks();
+
+        dispatcher.send(ControlCommand::Dgna {
+            issi: DGNA_ISSI,
+            gssi: DGNA_GSSI,
+            mnemonic: None,
+            attachment_mode: 0,
+            attach: true,
+        });
+        test.run_stack(Some(6));
+        let msgs = test.dump_sinks();
+        (test, msgs)
+    }
+
+    #[test]
+    fn test_dgna_assign_to_in_call_ms_uses_facch_stealing() {
+        debug::setup_logging_verbose();
+        let (test, msgs) = run_dgna_to_ms_in_group_call();
+
+        // The traffic channel the call was actually allocated — the DGNA must steal onto exactly it.
+        let (carrier, ts, usage) = test
+            .config
+            .state_read()
+            .active_call_ts
+            .get(&DGNA_ISSI)
+            .copied()
+            .expect("DGNA_ISSI must be parked on a traffic channel while in a group call");
+
+        let req = find_d_facility_req(&msgs).expect("expected D-FACILITY request");
+        assert_eq!(req.main_address.ssi, DGNA_ISSI);
+        assert_eq!(
+            req.layer2service,
+            tetra_core::Layer2Service::Unacknowledged,
+            "in-call DGNA should use FACCH/STCH path"
+        );
+        assert!(req.stealing_permission, "in-call DGNA should request stealing");
+        let chan_alloc = req.chan_alloc.as_ref().expect("in-call DGNA should carry chan_alloc");
+        assert_eq!(chan_alloc.carrier, Some(carrier), "DGNA must steal onto the call's carrier");
+        assert_eq!(chan_alloc.usage, Some(usage), "DGNA must steal onto the call's usage marker");
+        assert_eq!(chan_alloc.ul_dl_assigned, UlDlAssignment::Dl);
+        let mut expected_ts = [false; 4];
+        expected_ts[(ts - 1) as usize] = true;
+        assert_eq!(chan_alloc.timeslots, expected_ts, "DGNA must steal onto the call's timeslot");
+    }
+
     /// Operator DGNA deassign emits a D-FACILITY{DEASSIGN} naming the GSSI and removes the
     /// affiliation.
     #[test]
     fn test_dgna_deassign_emits_d_facility_deassign() {
         debug::setup_logging_verbose();
-        let (test, msgs) = run_dgna(false);
+        let (test, msgs) = run_dgna(false, None);
 
-        let (addr_ssi, facility) = find_d_facility(&msgs)
-            .unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA deassign, got {} msgs", msgs.len()));
+        let (addr_ssi, facility) =
+            find_d_facility(&msgs).unwrap_or_else(|| panic!("expected a D-FACILITY after DGNA deassign, got {} msgs", msgs.len()));
         assert_eq!(addr_ssi, DGNA_ISSI);
 
         let body = facility.facility.expect("D-FACILITY must carry an SS-DGNA body");
@@ -2084,10 +2270,12 @@ mod ss_dgna_tests {
         let mm = MmBs::new(test.get_shared_config(), None, None);
         test.register_entity(mm);
 
-        // No registration first — MM must drop the command, so CMCE never emits a D-FACILITY.
+        // No registration first â€” MM must drop the command, so CMCE never emits a D-FACILITY.
         dispatcher.send(ControlCommand::Dgna {
             issi: 9_999_002,
             gssi: DGNA_GSSI,
+            mnemonic: None,
+            attachment_mode: 0,
             attach: true,
         });
         test.run_stack(Some(6));
@@ -2106,7 +2294,10 @@ mod ss_dgna_tests {
         debug::setup_logging_verbose();
 
         let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
-        test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
+        test.populate_entities(
+            vec![TetraEntity::Cmce],
+            vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+        );
 
         // Build a U-FACILITY{ASSIGN ACK} as the affected MS would send back.
         let ack = AssignAck {

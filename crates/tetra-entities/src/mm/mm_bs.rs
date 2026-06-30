@@ -14,6 +14,7 @@ use tetra_saps::{SapMsg, SapMsgInner};
 
 use crate::mm::components::client_state::{ClientMgrErr, MmClientMgr, MmClientState};
 use crate::mm::components::not_supported::make_ul_mm_pdu_function_not_supported;
+use tetra_pdus::cmce::ss_dgna::enums::results::GroupIdentityAttachmentMode;
 use tetra_pdus::mm::enums::energy_saving_mode::EnergySavingMode;
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
 use tetra_pdus::mm::enums::mm_pdu_type_ul::MmPduTypeUl;
@@ -44,7 +45,7 @@ pub struct MmBs {
     control: Option<ControlEndpoint>,
     client_mgr: MmClientMgr,
 
-    // ── Restart recovery ──────────────────────────────────────────────────────
+    // â”€â”€ Restart recovery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     /// On-disk cache of known terminals. `Some` only after `init_recovery` runs (i.e. when the
     /// `[recovery]` section is enabled); `None` means recovery is off and all the hooks below are
     /// no-ops.
@@ -59,7 +60,7 @@ pub struct MmBs {
     /// Reactive recovery: per-ISSI timestamp of the last D-LOCATION-UPDATE-COMMAND keyed in
     /// response to an *unknown* radio transmitting on the uplink. Rate-limits re-keying the same
     /// ghost while it re-registers (see `maybe_reactive_recovery`). Independent of `recovery`
-    /// above — populated even when the proactive cache is disabled.
+    /// above â€” populated even when the proactive cache is disabled.
     reactive_recovery_cooldown: HashMap<u32, std::time::Instant>,
 }
 
@@ -86,7 +87,7 @@ impl MmBs {
     /// Initialise restart recovery from the resolved cache path. Called once at startup from the
     /// binary, only when `[recovery] enabled = true`. Loads the persisted terminals, restores them
     /// into the client registry as "known but Detached" (so the coverage-return re-affiliation can
-    /// fire when they answer), and seeds the replay queue. Emits no SAP messages — terminals are
+    /// fire when they answer), and seeds the replay queue. Emits no SAP messages â€” terminals are
     /// re-affiliated to CMCE/Brew only when they actually re-register. Honours the current ISSI
     /// whitelist and the optional `[recovery] issi_allowlist`.
     pub fn init_recovery(&mut self, cache_path: PathBuf) {
@@ -107,13 +108,21 @@ impl MmBs {
             }
             let esm = EnergySavingMode::try_from(rec.energy_saving_mode as u64).unwrap_or(EnergySavingMode::StayAlive);
             self.client_mgr.restore_client(rec.issi, &rec.groups, esm);
+            {
+                let mut state = self.config.state_write();
+                for group in rec.dgna_groups {
+                    state
+                        .subscribers
+                        .remember_dgna_group(rec.issi, group.gssi, group.mnemonic, group.attachment_mode);
+                }
+            }
             self.recovery_pending.push_back(rec.issi);
             self.recovery_attempts.insert(rec.issi, 0);
             restored += 1;
         }
 
         tracing::info!(
-            "MM: restart recovery initialised — {} terminal(s) restored from cache ({} skipped by whitelist/allowlist); replaying D-LOCATION-UPDATE-COMMAND",
+            "MM: restart recovery initialised â€” {} terminal(s) restored from cache ({} skipped by whitelist/allowlist); replaying D-LOCATION-UPDATE-COMMAND",
             restored,
             skipped
         );
@@ -140,7 +149,7 @@ impl MmBs {
         let was_pending = self.recovery_attempts.remove(&issi).is_some();
         self.recovery_pending.retain(|&i| i != issi);
         if was_pending {
-            tracing::info!("MM: restart recovery — ISSI {} re-registered, stopping replay", issi);
+            tracing::info!("MM: restart recovery â€” ISSI {} re-registered, stopping replay", issi);
         }
     }
 
@@ -152,7 +161,7 @@ impl MmBs {
         if self.recovery.is_none() || self.recovery_pending.is_empty() {
             return;
         }
-        // Monotonic frame index — emit at most one batch per frame.
+        // Monotonic frame index â€” emit at most one batch per frame.
         let frame = ts.to_int() / 4;
         if self.recovery_last_frame == Some(frame) {
             return;
@@ -171,13 +180,13 @@ impl MmBs {
                 break;
             };
             processed += 1;
-            // Already confirmed (no longer tracked) — drop it from the queue.
+            // Already confirmed (no longer tracked) â€” drop it from the queue.
             let Some(&attempts) = self.recovery_attempts.get(&issi) else {
                 continue;
             };
             if attempts >= rec_cfg.max_replay_attempts {
                 tracing::info!(
-                    "MM: restart recovery — giving up on ISSI {} after {} unanswered COMMANDs",
+                    "MM: restart recovery â€” giving up on ISSI {} after {} unanswered COMMANDs",
                     issi,
                     attempts
                 );
@@ -198,12 +207,14 @@ impl MmBs {
             return;
         };
         cache.maybe_flush(|| {
+            let state = self.config.state_read();
             self.client_mgr
                 .snapshot_for_recovery()
                 .into_iter()
                 .map(|(issi, groups, esm)| TerminalRecord {
                     issi,
                     groups,
+                    dgna_groups: state.subscribers.dgna_groups_of(issi),
                     energy_saving_mode: esm.into_raw() as u8,
                 })
                 .collect()
@@ -213,11 +224,11 @@ impl MmBs {
 
     /// Reactive restart recovery. Called on every uplink RSSI sample (`MsRssiUpdate`), i.e. for
     /// every random-access / PTT / SDS burst MM sees. If the transmitting ISSI is *unknown* to the
-    /// client registry — the tell-tale of a radio still RF-camped on the cell but whose MM record
-    /// was lost to a restart — key it a single D-LOCATION-UPDATE-COMMAND (ETSI EN 300 392-2
-    /// §16.4.4) to force an immediate re-registration with a group report. The existing
+    /// client registry â€” the tell-tale of a radio still RF-camped on the cell but whose MM record
+    /// was lost to a restart â€” key it a single D-LOCATION-UPDATE-COMMAND (ETSI EN 300 392-2
+    /// Â§16.4.4) to force an immediate re-registration with a group report. The existing
     /// location-update path then re-affiliates it to CMCE/Brew and reports it to the dashboard, so
-    /// the next PTT succeeds — no manual DMO/TMO toggle, no wait for the periodic T351.
+    /// the next PTT succeeds â€” no manual DMO/TMO toggle, no wait for the periodic T351.
     ///
     /// This is the catch-all companion to the proactive boot sweep (`drive_recovery_replay`): it
     /// needs no persisted cache, fires only in response to a demonstrably present + active radio,
@@ -240,7 +251,7 @@ impl MmBs {
         if !rec.reactive_enabled {
             return;
         }
-        // Never key a radio that isn't permitted on this network — same scoping as init_recovery:
+        // Never key a radio that isn't permitted on this network â€” same scoping as init_recovery:
         // the access-control whitelist plus the optional recovery allowlist.
         let permitted = cfg.security.is_issi_allowed(issi) && (rec.issi_allowlist.is_empty() || rec.issi_allowlist.contains(&issi));
         if !permitted {
@@ -251,7 +262,7 @@ impl MmBs {
         let now = std::time::Instant::now();
         if let Some(&last) = self.reactive_recovery_cooldown.get(&issi) {
             if now.duration_since(last) < cooldown {
-                // Already commanded recently — give it time to answer rather than spamming COMMANDs
+                // Already commanded recently â€” give it time to answer rather than spamming COMMANDs
                 // across the burst of RSSI samples a single PTT produces.
                 return;
             }
@@ -263,7 +274,7 @@ impl MmBs {
         self.reactive_recovery_cooldown.insert(issi, now);
 
         tracing::info!(
-            "MM: reactive recovery — unknown ISSI {} active on uplink, sending D-LOCATION-UPDATE-COMMAND to force re-registration",
+            "MM: reactive recovery â€” unknown ISSI {} active on uplink, sending D-LOCATION-UPDATE-COMMAND to force re-registration",
             issi
         );
         // handle = 0: addressed by ISSI on the MCCH (see send_d_location_update_command).
@@ -429,7 +440,7 @@ impl MmBs {
             }
         };
 
-        // The terminal answered with a location update — stop the restart-recovery replay to it
+        // The terminal answered with a location update â€” stop the restart-recovery replay to it
         // regardless of how this update is handled below (migration reject, whitelist reject, or
         // normal registration). Hoisted above all early-returns so a migrating/rejected terminal
         // isn't replayed to forever. No-op when recovery is disabled / ISSI not pending.
@@ -442,12 +453,12 @@ impl MmBs {
             || pdu.location_update_type == LocationUpdateType::ServiceRestorationMigratingLocationUpdating
         {
             // Terminal wants to migrate to another network (e.g. SmartConnect).
-            // We don't implement D-LOCATION-UPDATE-PROCEEDING identity exchange (ETSI §16.4.1.1 case b),
+            // We don't implement D-LOCATION-UPDATE-PROCEEDING identity exchange (ETSI Â§16.4.1.1 case b),
             // so we can't accept migration formally. But we MUST release the terminal from Brew
             // so the destination network can register it without identity conflict.
             // Send REJECT so terminal knows to try the other network, but first deregister from Brew.
             let issi = prim.received_address.ssi;
-            tracing::info!("MM: ISSI {} migrating to another network — releasing from Brew", issi);
+            tracing::info!("MM: ISSI {} migrating to another network â€” releasing from Brew", issi);
             let detached = self.client_mgr.remove_client(issi);
             if let Some(client) = detached {
                 self.config.state_write().subscribers.deregister(issi);
@@ -478,11 +489,11 @@ impl MmBs {
         // than requested and the BS assumes that the allocated value will be used."
         // For DemandLocationUpdating (response to D-LOCATION-UPDATE-COMMAND), the terminal
         // often omits energy_saving_mode from the PDU. In that case, reuse the previously
-        // stored ESM — client_mgr retains it because we no longer remove_client at T351 expiry.
+        // stored ESM â€” client_mgr retains it because we no longer remove_client at T351 expiry.
         // Preserve energy saving mode across re-registrations.
         // If the terminal omits ESM from the PDU (common after T351 expiry),
         // reuse the previously granted mode so the terminal stays in EE mode.
-        // We no longer filter out StayAlive — if that's what was granted before, keep it.
+        // We no longer filter out StayAlive â€” if that's what was granted before, keep it.
         let prior_esm = self
             .client_mgr
             .get_client_by_issi(prim.received_address.ssi)
@@ -495,7 +506,7 @@ impl MmBs {
         let issi = prim.received_address.ssi;
         let handle = prim.handle;
 
-        // ISSI whitelist check — reject if whitelist is non-empty and ISSI not in it.
+        // ISSI whitelist check â€” reject if whitelist is non-empty and ISSI not in it.
         // The dashboard can override the config whitelist at runtime (state override takes
         // precedence so edits apply without a restart); fall back to the config value when
         // no override is set. An empty list (in either place) means "open network".
@@ -528,13 +539,13 @@ impl MmBs {
         if !is_new {
             // MS is re-registering while already known. Three cases:
             //
-            // A) RoamingLocationUpdating — MS re-registered from scratch (RF loss / reboot /
+            // A) RoamingLocationUpdating â€” MS re-registered from scratch (RF loss / reboot /
             //    power-cycle, no prior U-ITSI-DETACH). Clean up stale state so CMCE releases
             //    any ghost calls and group_listeners stays accurate.
             //
-            // B) PeriodicLocationUpdating — healthy MS renewing its T351 timer. No cleanup.
+            // B) PeriodicLocationUpdating â€” healthy MS renewing its T351 timer. No cleanup.
             //
-            // C) DemandLocationUpdating — MS responding to our D-LOCATION-UPDATE-COMMAND.
+            // C) DemandLocationUpdating â€” MS responding to our D-LOCATION-UPDATE-COMMAND.
             //    This is the second message in the normal registration flow; the first message
             //    already registered+affiliated the MS. Do NOT clean up here.
             let needs_cleanup = if pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
@@ -542,8 +553,8 @@ impl MmBs {
             {
                 // Some terminals (e.g. Sepura) send RoamingLocationUpdating after every PTT
                 // release, not just on power-cycle or RF loss. If we treat this as a full reboot
-                // and do deregister→register, CMCE has a brief window where it doesn't know the
-                // terminal — a PTT press in that window gets "no listeners" and the terminal
+                // and do deregisterâ†’register, CMCE has a brief window where it doesn't know the
+                // terminal â€” a PTT press in that window gets "no listeners" and the terminal
                 // interprets it as a network error and fully disconnects.
                 //
                 // Heuristic: treat RoamingLocationUpdating as a soft re-attach (no cleanup) if
@@ -555,12 +566,12 @@ impl MmBs {
                     .unwrap_or(false);
                 if recently_registered {
                     tracing::debug!(
-                        "MM: ISSI {} RoamingLocationUpdating within 120s of last register — treating as soft re-attach (Sepura post-PTT)",
+                        "MM: ISSI {} RoamingLocationUpdating within 120s of last register â€” treating as soft re-attach (Sepura post-PTT)",
                         issi
                     );
                     // Even on soft re-attach, force CMCE to release any individual P2P calls
                     // involving this ISSI. Terminals (e.g. Motorola MTP3550) that drop RF for
-                    // 2s and re-attach lose call state but BS keeps the call alive — next PTT
+                    // 2s and re-attach lose call state but BS keeps the call alive â€” next PTT
                     // is rejected ("PTT denied") because the terminal doesn't recognize the call_id
                     // in our D-TX-GRANTED. Releasing the individual call here forces a clean U-SETUP
                     // on the next PTT.
@@ -574,7 +585,7 @@ impl MmBs {
             };
 
             // needs_cleanup: Roaming = MS rebooted, need full CMCE/Brew reset (deregister+register).
-            // was_pending: the MS is answering our T351 COMMAND — Brew still holds the subscriber
+            // was_pending: the MS is answering our T351 COMMAND â€” Brew still holds the subscriber
             // (teardown is deferred to the confirmed-gone second expiry, which this answer prevents),
             // so no Brew action is needed; CMCE is re-affiliated via the coverage-return path below.
             if needs_cleanup {
@@ -591,7 +602,7 @@ impl MmBs {
                 // The Deregister above wipes this subscriber's group affiliations in CMCE/Brew, but
                 // client_mgr still holds them. A roaming MS with persistent attachment
                 // (attachment_lifetime=0) re-reports its groups with group_identity_attach_detach_mode=0
-                // — which is a no-op in client_mgr (the group is already present), so
+                // â€” which is a no-op in client_mgr (the group is already present), so
                 // try_attach_detach_groups emits NO Affiliate and CMCE is left with zero listeners.
                 // The next group PTT is then rejected "no listeners" and inbound group calls are dropped
                 // (observed for a Motorola MTP on RoamingLocationUpdating). Re-affiliate the stored
@@ -615,11 +626,11 @@ impl MmBs {
         // Determine if we need to emit Register toward Brew. Only when Brew was actually torn down
         // (or never had this ISSI):
         //   A) Terminal is genuinely new (never seen before).
-        //   B) Terminal is known but re-attaching via ItsiAttach — migrated from another network.
+        //   B) Terminal is known but re-attaching via ItsiAttach â€” migrated from another network.
         //   C) Terminal was dropped from Brew at a T351 confirmed-gone (second) expiry and is now
         //      back (was_dropped); the re-add path above already restored it locally.
         // A plain T351 re-registration (was_pending) is deliberately NOT here: teardown no longer
-        // happens at first expiry, so Brew still holds the subscriber — re-registering would be a
+        // happens at first expiry, so Brew still holds the subscriber â€” re-registering would be a
         // needless REGISTER every interval (the Brew flap this avoids).
         let is_itsi_attach = pdu.location_update_type == LocationUpdateType::ItsiAttach;
         let needs_brew_register = is_new || (!is_new && is_itsi_attach) || was_dropped;
@@ -641,7 +652,7 @@ impl MmBs {
         // Re-add a radio that had been dropped by a T351 confirmed-gone expiry. The client never
         // left client_mgr (PTT keeps working), but the subscriber registry and the dashboard were
         // torn down at the drop; restore both so SDS routing and the dashboard reflect reality.
-        // register() resets attached_groups — the group-identity processing / coverage-return
+        // register() resets attached_groups â€” the group-identity processing / coverage-return
         // re-affiliation below rebuilds them, so this must run before either.
         if was_dropped {
             self.config.state_write().subscribers.register(issi);
@@ -649,14 +660,14 @@ impl MmBs {
                 sink.send(crate::net_telemetry::TelemetryEvent::MsRegistration { issi });
             }
             tracing::info!(
-                "MM: ISSI {} re-appeared after T351 drop — re-registered in dashboard + subscriber registry",
+                "MM: ISSI {} re-appeared after T351 drop â€” re-registered in dashboard + subscriber registry",
                 issi
             );
         }
         if needs_brew_register {
             if !is_new && is_itsi_attach {
                 tracing::info!(
-                    "MM: ISSI {} re-attaching via ItsiAttach (returned from another network) — re-registering in Brew",
+                    "MM: ISSI {} re-attaching via ItsiAttach (returned from another network) â€” re-registering in Brew",
                     issi
                 );
             }
@@ -717,18 +728,18 @@ impl MmBs {
         };
 
         // Coverage-return re-affiliation (fixes "PTT no longer works after leaving and
-        // returning to coverage", workaround = DMO→TMO).
+        // returning to coverage", workaround = DMOâ†’TMO).
         //
         // Sequence that breaks PTT:
-        //   1. MS affiliates to a GSSI → CMCE group_listeners[gssi] += 1. PTT works.
+        //   1. MS affiliates to a GSSI â†’ CMCE group_listeners[gssi] += 1. PTT works.
         //   2. MS leaves coverage; BS T351 expires and emits Deregister to CMCE, which
-        //      does dec_group_listener() → the GSSI now has 0 listeners.
+        //      does dec_group_listener() â†’ the GSSI now has 0 listeners.
         //   3. MS returns. Because we hand out attachment_lifetime=0 (persistent), the MS
         //      believes it is still affiliated and sends a plain location update WITHOUT a
         //      group identity report.
-        //   4. MM re-registers the MS but never re-affiliates the groups → CMCE still has
-        //      0 listeners for the GSSI → the next PTT is rejected with "no listeners"
-        //      ("please wait" on the radio). DMO→TMO forces an ItsiAttach with a full group
+        //   4. MM re-registers the MS but never re-affiliates the groups â†’ CMCE still has
+        //      0 listeners for the GSSI â†’ the next PTT is rejected with "no listeners"
+        //      ("please wait" on the radio). DMOâ†’TMO forces an ItsiAttach with a full group
         //      report, which is why that clears it.
         //
         // Fix: when a *known* MS re-registers without supplying a group report, but we
@@ -742,7 +753,7 @@ impl MmBs {
                 .unwrap_or_default();
             if !stored_groups.is_empty() {
                 tracing::info!(
-                    "MM: ISSI {} re-registered without group report but has {} stored group(s) {:?} — re-affiliating to resync CMCE/Brew (coverage-return fix)",
+                    "MM: ISSI {} re-registered without group report but has {} stored group(s) {:?} â€” re-affiliating to resync CMCE/Brew (coverage-return fix)",
                     issi,
                     stored_groups.len(),
                     stored_groups
@@ -757,12 +768,7 @@ impl MmBs {
                 // Refresh the dashboard's group list for this MS. It may have just been re-added
                 // with an empty entry by the T351-drop recovery above, and coverage-return emits no
                 // per-group telemetry otherwise, so the radio would show with no groups.
-                if let Some(sink) = &self.telemetry {
-                    sink.send(crate::net_telemetry::TelemetryEvent::MsGroupsSnapshot {
-                        issi,
-                        gssis: stored_groups,
-                    });
-                }
+                self.emit_group_snapshots(issi);
             }
         }
 
@@ -786,7 +792,7 @@ impl MmBs {
         // Reset periodic registration timer on every successful registration.
         self.client_mgr.reset_registration_timer(issi);
 
-        // Registration / affiliation / EE state changed — persist for restart recovery (debounced).
+        // Registration / affiliation / EE state changed â€” persist for restart recovery (debounced).
         self.recovery_mark_dirty();
 
         // Use PeriodicLocationUpdating accept type when periodic registration is enabled.
@@ -876,6 +882,45 @@ impl MmBs {
         self.config.state_write().ee_monitoring_windows = map;
     }
 
+    fn emit_group_snapshots(&self, issi: u32) {
+        let Some(sink) = &self.telemetry else {
+            return;
+        };
+        let state = self.config.state_read();
+        let gssis = state.subscribers.attached_groups_of(issi);
+        let groups = state
+            .subscribers
+            .device_groups_of(issi)
+            .into_iter()
+            .map(|group| crate::net_telemetry::events::MsGroupInfo {
+                gssi: group.gssi,
+                mnemonic: group.mnemonic,
+                attachment_mode: group.attachment_mode,
+                is_dynamic: group.is_dynamic,
+                is_attached: group.is_attached,
+            })
+            .collect();
+        drop(state);
+        sink.send(crate::net_telemetry::TelemetryEvent::MsGroupsSnapshot { issi, gssis });
+        sink.send(crate::net_telemetry::TelemetryEvent::MsGroupCatalogSnapshot { issi, groups });
+    }
+
+    fn emit_dgna_status(&self, issi: u32, gssi: u32, attach: bool, accepted: bool, source: &str, detail: String) {
+        let Some(sink) = &self.telemetry else {
+            return;
+        };
+        sink.send(crate::net_telemetry::TelemetryEvent::DgnaStatus(
+            crate::net_telemetry::events::DgnaStatusInfo {
+                issi,
+                gssi,
+                attach,
+                accepted,
+                source: source.to_string(),
+                detail,
+            },
+        ));
+    }
+
     /// Decide which energy saving mode to grant an MS and compute its monitoring window.
     ///
     /// Per clause 16.7.1 NOTE 1 the BS may allocate a different mode than requested. We cap at
@@ -900,17 +945,17 @@ impl MmBs {
         }
 
         let (frame_number, multiframe_number) = match crate::mm::components::client_state::ee_cycle_frames(granted_esm) {
-            None => (None, None), // StayAlive — no monitoring window
+            None => (None, None), // StayAlive â€” no monitoring window
             Some(cycle) => {
                 // Frame-based start point (ETSI EN 300 392-2 Table 23.9 / clause 23.7.6): the MS
                 // wakes for one TDMA frame every `cycle` frames. Spread MSs across the cycle by
                 // ISSI so they don't all wake in the same frame. The start point's absolute frame
-                // index (m-1)*18+(f-1) must be ≡ phase (mod cycle); anchoring it in multiframe 1
-                // yields a valid Frame Number (1..=18) and Multiframe Number (1..=60 — never the
+                // index (m-1)*18+(f-1) must be â‰¡ phase (mod cycle); anchoring it in multiframe 1
+                // yields a valid Frame Number (1..=18) and Multiframe Number (1..=60 â€” never the
                 // StayAlive-reserved 0 the old `(issi/18)%cycle` formula produced).
-                let phase = (issi % cycle as u32) as u8; // 0..cycle-1, ≤ 5 for capped Eg1..Eg3
+                let phase = (issi % cycle as u32) as u8; // 0..cycle-1, â‰¤ 5 for capped Eg1..Eg3
                 let frame_num = (phase % 18) + 1; // 1..=18
-                let mframe_num = (phase / 18) + 1; // 1..=60 (== 1 for the supported cycles ≤ 6)
+                let mframe_num = (phase / 18) + 1; // 1..=60 (== 1 for the supported cycles â‰¤ 6)
                 tracing::info!(
                     "MS {} granted {:?}: frame-based cycle={} frames, start frame={} multiframe={}",
                     issi,
@@ -971,14 +1016,14 @@ impl MmBs {
                 tracing::info!("MS {} requested mid-session energy saving mode change to {:?}", issi, esm);
 
                 // Grant the mode the same way the initial location update does, so toggling
-                // energy economy on/off at the radio takes effect mid-session — both for actual
+                // energy economy on/off at the radio takes effect mid-session â€” both for actual
                 // paging (monitoring window) and for the dashboard, which mirrors the granted
                 // mode via the MsEnergySaving telemetry emitted by set_client_energy_saving_mode.
                 // Without this the handler used to force StayAlive, so a re-activation never
                 // reached the dashboard until the terminal fully re-registered (power-cycle).
                 let esi = Self::grant_energy_saving(issi, esm);
                 // If the client was concurrently removed (T351 second-expiry race), the
-                // setters return ClientNotFound — log it so the silent no-op is at least
+                // setters return ClientNotFound â€” log it so the silent no-op is at least
                 // visible in the operator log rather than vanishing.
                 if let Err(e) = self.client_mgr.set_client_energy_saving_mode(issi, esi.energy_saving_mode) {
                     tracing::debug!("MM: mid-session ESM update on ISSI {} skipped: {:?}", issi, e);
@@ -1032,7 +1077,7 @@ impl MmBs {
             _ => {
                 // Status types we don't handle (e.g. NetworkOrUserSpecific*, reserved
                 // values). This is a valid-but-unsupported PDU, not a code bug, so log it
-                // as unimplemented rather than asserting — assert_warn made it look like
+                // as unimplemented rather than asserting â€” assert_warn made it look like
                 // an internal fault in the operator's logs. handled stays false, so we
                 // still reply with "function not supported" below.
                 unimplemented_log!("Unhandled UMmStatus type {:?}", pdu.status_uplink);
@@ -1092,11 +1137,11 @@ impl MmBs {
 
         // Check if we can satisfy this request, print unsupported stuff
         if !Self::feature_check_u_attach_detach_group_identity(&pdu) {
-            // group_identity_uplink missing — terminal is sending a group report response
+            // group_identity_uplink missing â€” terminal is sending a group report response
             // without requesting any group changes. Send ACK with current groups so
             // terminal knows it's affiliated and can use PTT.
             tracing::info!(
-                "UAttachDetachGroupIdentity from {} has no uplink groups — sending ACK with current groups",
+                "UAttachDetachGroupIdentity from {} has no uplink groups â€” sending ACK with current groups",
                 issi
             );
             let current_groups: Vec<u32> = self
@@ -1119,15 +1164,15 @@ impl MmBs {
                         self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
                     }
                     Err(e) => {
-                        // ETSI EN 300 392-2 §16.3.4: if MS cannot be registered,
+                        // ETSI EN 300 392-2 Â§16.3.4: if MS cannot be registered,
                         // send D-ATTACH-DETACH-GROUP-IDENTITY-ACKNOWLEDGEMENT with reject.
-                        tracing::warn!("Failed re-registering MS {} on group attach: {:?} — sending reject", issi, e);
+                        tracing::warn!("Failed re-registering MS {} on group attach: {:?} â€” sending reject", issi, e);
                         self.send_d_attach_detach_ack_reject(queue, issi, prim.handle);
                         return;
                     }
                 }
             } else {
-                // Client is known — detach all existing groups first
+                // Client is known â€” detach all existing groups first
                 let prior_groups: Vec<u32> = self
                     .client_mgr
                     .get_client_by_issi(issi)
@@ -1153,15 +1198,15 @@ impl MmBs {
             }
         }
 
-        // ETSI EN 300 392-2 §16.9.2.2: the ACK PDU travels in a single TM-SDU
+        // ETSI EN 300 392-2 Â§16.9.2.2: the ACK PDU travels in a single TM-SDU
         // and there is no MM-level segmentation. Empirically MXP600 and MTP3550
-        // start losing the ACK around 12-15 GroupIdentityDownlink entries — the
+        // start losing the ACK around 12-15 GroupIdentityDownlink entries â€” the
         // PDU exceeds what fits in a FACCH/SACCH burst, the MS times out, and on
         // subsequent retries it eventually de-registers ("Unit not attached").
         //
         // We have to cap the request *before* affiliating on the BS side. A previous
         // version of this code affiliated everything and then truncated only the ACK
-        // response — that desynced the MS and the BS: the BS thought N groups were
+        // response â€” that desynced the MS and the BS: the BS thought N groups were
         // active, but the MS only saw confirmations for the first 12. Inbound calls
         // on the un-confirmed groups would deliver to the BS but never notify the MS
         // (FH-BUG-022 reopened, FH-BUG-025). Now the BS only affiliates what it can
@@ -1192,7 +1237,7 @@ impl MmBs {
         // Try to attach to requested groups, and retrieve list of accepted GroupIdentityDownlink elements
         let accepted_gid = self.try_attach_detach_groups(queue, issi, &giu_clamped);
 
-        // Group affiliations changed — persist for restart recovery (debounced).
+        // Group affiliations changed â€” persist for restart recovery (debounced).
         self.recovery_mark_dirty();
 
         // Build reply PDU
@@ -1274,7 +1319,7 @@ impl MmBs {
 
         for giu in giu_vec.iter() {
             // Currently only address_type=0 (plain GSSI) is implemented. Anything else
-            // (vgssi, address extension, missing gssi) is unsupported — log and skip.
+            // (vgssi, address extension, missing gssi) is unsupported â€” log and skip.
             let Some(gssi) = giu.gssi else {
                 unimplemented_log!("GroupIdentityUplink without gssi field");
                 continue;
@@ -1318,14 +1363,14 @@ impl MmBs {
                         }
                         // We have added the client to this group. Add an entry to the downlink response.
                         //
-                        // group_identity_attachment_lifetime values (ETSI EN 300 392-2 §16.10.19):
-                        //   0 = Attachment not needed → MS keeps the group attached indefinitely
+                        // group_identity_attachment_lifetime values (ETSI EN 300 392-2 Â§16.10.19):
+                        //   0 = Attachment not needed â†’ MS keeps the group attached indefinitely
                         //                                until an explicit detach. This is what we want
                         //                                for scan lists / persistent group attachments.
-                        //   1 = Attachment required for the next ITSI attach → MS re-affiliates on next
+                        //   1 = Attachment required for the next ITSI attach â†’ MS re-affiliates on next
                         //                                ITSI attach (rare event: reboot, cell reselect).
-                        //   2 = Attachment not allowed for next ITSI attach → SwMI denies.
-                        //   3 = Attachment required for next location update → MS re-affiliates at every
+                        //   2 = Attachment not allowed for next ITSI attach â†’ SwMI denies.
+                        //   3 = Attachment required for next location update â†’ MS re-affiliates at every
                         //                                LU (every few minutes), generating churn.
                         //
                         // We previously used 1 with a "good default" comment, but that interacted badly
@@ -1334,8 +1379,8 @@ impl MmBs {
                         // expect the BS-side affiliation to persist between batches. With lifetime=1 the
                         // MS internally drops the affiliation a few minutes later ("5-minute timer" per
                         // dk5ras), then PTT fails with "Unit not attached" until the user changes GSSI.
-                        // Lifetime=0 makes the attachment persistent on the MS side — matching the BS
-                        // side which already keeps affiliations across attach cycles — and resolves
+                        // Lifetime=0 makes the attachment persistent on the MS side â€” matching the BS
+                        // side which already keeps affiliations across attach cycles â€” and resolves
                         // FH-BUG-022.
                         let gid = GroupIdentityDownlink {
                             group_identity_attachment: Some(GroupIdentityAttachment {
@@ -1350,7 +1395,7 @@ impl MmBs {
                         accepted_groups.push(gid);
                     }
                     Err(ClientMgrErr::ClientNotFound { .. }) => {
-                        // Terminal was removed (T351 second expiry) while PDU was in flight — ignore.
+                        // Terminal was removed (T351 second expiry) while PDU was in flight â€” ignore.
                         tracing::debug!("Group attach for ISSI {} gssi={} skipped: client no longer registered", issi, gssi);
                     }
                     Err(e) => {
@@ -1367,17 +1412,9 @@ impl MmBs {
             self.emit_subscriber_update(queue, issi, deaff_groups, BrewSubscriberAction::Deaffiliate);
         }
 
-        // Emit a single snapshot of all current groups so the dashboard always has
-        // the full list (not just incremental add/remove events).
-        let _sink = self.client_mgr.telemetry_sink().cloned();
-        let all_groups: Vec<u32> = self
-            .client_mgr
-            .get_client_by_issi(issi)
-            .map(|c| c.groups.iter().copied().collect())
-            .unwrap_or_default();
-        if let Some(sink) = _sink {
-            sink.send(crate::net_telemetry::TelemetryEvent::MsGroupsSnapshot { issi, gssis: all_groups });
-        }
+        // Emit a full snapshot so the dashboard can render both current affiliations and the
+        // persistent DGNA catalog for this MS.
+        self.emit_group_snapshots(issi);
 
         accepted_groups
     }
@@ -1385,10 +1422,10 @@ impl MmBs {
     /// Sends a D-LOCATION UPDATE COMMAND to force the radio to re-register
     /// with full group identity report
     /// Send D-ATTACH-DETACH-GROUP-IDENTITY-ACKNOWLEDGEMENT with reject.
-    /// ETSI EN 300 392-2 §16.3.4: used when MS is not registered.
+    /// ETSI EN 300 392-2 Â§16.3.4: used when MS is not registered.
     fn send_d_attach_detach_ack_reject(&self, queue: &mut MessageQueue, issi: u32, handle: u32) {
         let pdu = DAttachDetachGroupIdentityAcknowledgement {
-            group_identity_accept_reject: 1, // 1 = reject per ETSI §14.8.7
+            group_identity_accept_reject: 1, // 1 = reject per ETSI Â§14.8.7
             reserved: false,
             proprietary: None,
             group_identity_downlink: None,
@@ -1472,7 +1509,7 @@ impl MmBs {
     /// behave identically to ones the radio affiliated itself.
     const DGNA_CLASS_OF_USAGE: u8 = 4;
 
-    /// DGNA (Dynamic Group Number Assignment) — BS-initiated group attach/detach for one terminal,
+    /// DGNA (Dynamic Group Number Assignment) â€” BS-initiated group attach/detach for one terminal,
     /// driven from the dashboard. SS-DGNA = TS 100 392-12-22 V1.5.1; legacy fallback = EN 300 392-2
     /// V2.4.1 cl.16.8.
     ///
@@ -1482,16 +1519,66 @@ impl MmBs {
     /// back to an unsolicited MM D-ATTACH/DETACH GROUP IDENTITY. Brew is intentionally not involved.
     ///
     /// Returns `true` if the command was accepted and the regroup was put on the air.
-    fn do_dgna(&mut self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) -> bool {
+    fn do_dgna(
+        &mut self,
+        queue: &mut MessageQueue,
+        issi: u32,
+        gssi: u32,
+        mnemonic: Option<String>,
+        attachment_mode: u8,
+        attach: bool,
+    ) -> bool {
         let verb = if attach { "assign" } else { "deassign" };
+        let is_dynamic = self.config.state_read().subscribers.has_dgna_group(issi, gssi);
+        let is_attached = self.config.state_read().subscribers.attached_groups_of(issi).contains(&gssi);
+        let route_gssi_hint = (!attach && is_attached).then_some(gssi);
 
-        // The terminal must be registered on the cell — we cannot regroup a radio that is not here.
+        // The terminal must be registered on the cell â€” we cannot regroup a radio that is not here.
         if !self.client_mgr.client_is_known(issi) {
             tracing::warn!(
-                "DGNA: ISSI {} is not registered on this cell — ignoring {} of GSSI {}",
+                "DGNA: ISSI {} is not registered on this cell â€” ignoring {} of GSSI {}",
                 issi,
                 verb,
                 gssi
+            );
+            self.emit_dgna_status(
+                issi,
+                gssi,
+                attach,
+                false,
+                "MM",
+                format!("Rejected: ISSI {} is not registered on this cell", issi),
+            );
+            return false;
+        }
+
+        if attach && GroupIdentityAttachmentMode::try_from(attachment_mode as u64).is_err() {
+            tracing::warn!(
+                "DGNA: refusing assign of GSSI {} to ISSI {} with invalid attachment mode {}",
+                gssi,
+                issi,
+                attachment_mode
+            );
+            self.emit_dgna_status(
+                issi,
+                gssi,
+                attach,
+                false,
+                "MM",
+                format!("Rejected: invalid attachment mode {}", attachment_mode),
+            );
+            return false;
+        }
+
+        if !attach && !is_dynamic && !is_attached {
+            tracing::warn!("DGNA: refusing deassign of unknown GSSI {} from ISSI {}", gssi, issi);
+            self.emit_dgna_status(
+                issi,
+                gssi,
+                false,
+                false,
+                "MM",
+                format!("Rejected: GSSI {} is neither attached nor in the DGNA registry", gssi),
             );
             return false;
         }
@@ -1502,23 +1589,45 @@ impl MmBs {
             Ok(_changed) => {
                 // Mirror into the shared subscriber state used for local call/SDS routing and notify
                 // CMCE. Done unconditionally on success so DGNA stays authoritative even if the BS
-                // believed the affiliation already matched (no desync window — FH-BUG-022/025).
+                // believed the affiliation already matched (no desync window â€” FH-BUG-022/025).
                 if attach {
-                    self.config.state_write().subscribers.affiliate(issi, gssi);
+                    let mut state = self.config.state_write();
+                    state.subscribers.remember_dgna_group(issi, gssi, mnemonic.clone(), attachment_mode);
+                    state.subscribers.affiliate(issi, gssi);
                     self.emit_subscriber_update(queue, issi, vec![gssi], BrewSubscriberAction::Affiliate);
                 } else {
-                    self.config.state_write().subscribers.deaffiliate(issi, gssi);
+                    let mut state = self.config.state_write();
+                    state.subscribers.deaffiliate(issi, gssi);
+                    if is_dynamic {
+                        state.subscribers.forget_dgna_group(issi, gssi);
+                    }
                     self.emit_subscriber_update(queue, issi, vec![gssi], BrewSubscriberAction::Deaffiliate);
                 }
             }
             Err(e) => {
                 tracing::warn!("DGNA: cannot {} GSSI {} on ISSI {}: {:?}", verb, gssi, issi, e);
+                self.emit_dgna_status(issi, gssi, attach, false, "MM", format!("Rejected: {:?}", e));
                 return false;
             }
         }
 
+        self.emit_dgna_status(
+            issi,
+            gssi,
+            attach,
+            true,
+            "MM",
+            if attach {
+                format!("Queued: GSSI {} assigned in MM state", gssi)
+            } else if is_dynamic {
+                format!("Queued: dynamic GSSI {} deassigned in MM state", gssi)
+            } else {
+                format!("Queued: static GSSI {} detached in MM state", gssi)
+            },
+        );
+
         // Put the regroup on the air. By default this is an SS-DGNA ASSIGN/DEASSIGN carried in a
-        // CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; transport EN 300 392-9 V1.7.1) — that SS PDU
+        // CMCE D-FACILITY (TS 100 392-12-22 V1.5.1; transport EN 300 392-9 V1.7.1) - that SS PDU
         // both *defines* the group and attaches it (cl.6.5.2.1), which is what makes the dynamic
         // talkgroup appear and be selectable on a real terminal. The group attach/detach state and
         // affiliation above are unchanged; CMCE owns only the air-interface emission, so we hand the
@@ -1530,7 +1639,14 @@ impl MmBs {
                 sap: Sap::Control,
                 src: TetraEntity::Mm,
                 dest: TetraEntity::Cmce,
-                msg: SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach },
+                msg: SapMsgInner::CmceSsDgnaAssign {
+                    issi,
+                    gssi,
+                    mnemonic,
+                    attachment_mode,
+                    route_gssi_hint,
+                    attach,
+                },
             });
         } else {
             self.send_d_attach_detach_group_identity(queue, issi, gssi, attach);
@@ -1538,14 +1654,7 @@ impl MmBs {
 
         // Persist for restart recovery (debounced) and refresh the dashboard with the full group set.
         self.recovery_mark_dirty();
-        let all_groups: Vec<u32> = self
-            .client_mgr
-            .get_client_by_issi(issi)
-            .map(|c| c.groups.iter().copied().collect())
-            .unwrap_or_default();
-        if let Some(sink) = &self.telemetry {
-            sink.send(crate::net_telemetry::TelemetryEvent::MsGroupsSnapshot { issi, gssis: all_groups });
-        }
+        self.emit_group_snapshots(issi);
 
         tracing::info!(
             "DGNA: {} GSSI {} {} ISSI {}",
@@ -1563,7 +1672,7 @@ impl MmBs {
     fn send_d_attach_detach_group_identity(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) {
         let gid = GroupIdentityDownlink {
             group_identity_attachment: attach.then_some(GroupIdentityAttachment {
-                // 0 = "attachment not needed" → persistent on the MS until an explicit detach.
+                // 0 = "attachment not needed" â†’ persistent on the MS until an explicit detach.
                 // Matches the affiliation-ACK path; see try_attach_detach_groups for why lifetime=0
                 // (not 1) is correct for scan-list-heavy Motorola radios (FH-BUG-022).
                 group_identity_attachment_lifetime: 0,
@@ -1601,6 +1710,17 @@ impl MmBs {
             issi,
             sdu.dump_bin()
         );
+        self.emit_dgna_status(
+            issi,
+            gssi,
+            attach,
+            true,
+            "MM",
+            format!(
+                "Queued legacy MM D-ATTACH/DETACH GROUP IDENTITY ({})",
+                if attach { "attach" } else { "detach" }
+            ),
+        );
 
         queue.push_back(SapMsg {
             sap: Sap::LmmSap,
@@ -1608,7 +1728,7 @@ impl MmBs {
             dest: TetraEntity::Mle,
             msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
                 sdu,
-                handle: 0, // unsolicited, BS-initiated — no inbound L2 handle to echo
+                handle: 0, // unsolicited, BS-initiated â€” no inbound L2 handle to echo
                 address: TetraAddress::issi(issi),
                 layer2service: Layer2Service::Acknowledged,
                 stealing_permission: false,
@@ -1620,7 +1740,7 @@ impl MmBs {
         });
     }
 
-    /// Handle U-ATTACH/DETACH GROUP IDENTITY ACKNOWLEDGEMENT — the terminal's reply to a BS-initiated
+    /// Handle U-ATTACH/DETACH GROUP IDENTITY ACKNOWLEDGEMENT â€” the terminal's reply to a BS-initiated
     /// D-ATTACH/DETACH GROUP IDENTITY (DGNA). BS-side group state is committed optimistically when the
     /// DGNA is issued, so this is confirmation/telemetry only: log the outcome.
     fn rx_u_attach_detach_group_identity_ack(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
@@ -1630,13 +1750,35 @@ impl MmBs {
         };
         let issi = prim.received_address.ssi;
         match UAttachDetachGroupIdentityAcknowledgement::from_bitbuf(&mut prim.sdu) {
-            Ok(pdu) => tracing::info!("DGNA: ISSI {} acknowledged group identity change: {:?}", issi, pdu),
-            Err(e) => tracing::warn!(
-                "DGNA: failed parsing U-ATTACH/DETACH GROUP IDENTITY ACK from {}: {:?} {}",
-                issi,
-                e,
-                prim.sdu.dump_bin()
-            ),
+            Ok(pdu) => {
+                tracing::info!("DGNA: ISSI {} acknowledged group identity change: {:?}", issi, pdu);
+                if let Some(groups) = &pdu.group_identity_uplink {
+                    for group in groups {
+                        if let Some(gssi) = group.gssi {
+                            let attach = group.class_of_usage.is_some();
+                            self.emit_dgna_status(
+                                issi,
+                                gssi,
+                                attach,
+                                true,
+                                "MM",
+                                format!("Legacy MM ACK received ({})", if attach { "attach" } else { "detach" }),
+                            );
+                        }
+                    }
+                } else {
+                    self.emit_dgna_status(issi, 0, true, true, "MM", "Legacy MM ACK received".to_string());
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "DGNA: failed parsing U-ATTACH/DETACH GROUP IDENTITY ACK from {}: {:?} {}",
+                    issi,
+                    e,
+                    prim.sdu.dump_bin()
+                );
+                self.emit_dgna_status(issi, 0, true, false, "MM", format!("Legacy MM ACK parse failed: {:?}", e));
+            }
         }
     }
 
@@ -1795,7 +1937,7 @@ impl MmBs {
         };
 
         let issi = prim.received_address.ssi;
-        tracing::info!("MM: TEI received from ISSI {} → TEI={} ({:060b})", issi, pdu.tei_hex(), pdu.tei,);
+        tracing::info!("MM: TEI received from ISSI {} â†’ TEI={} ({:060b})", issi, pdu.tei_hex(), pdu.tei,);
 
         // Store TEI in client state for future use (e.g. whitelist checking)
         if let Err(e) = self.client_mgr.set_client_tei(issi, pdu.tei) {
@@ -1881,7 +2023,7 @@ impl TetraEntityTrait for MmBs {
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
         // Drain control commands addressed to the MM entity. We collect into a Vec first so the
-        // immutable borrow on `self.control` is released before the handlers run — DGNA needs
+        // immutable borrow on `self.control` is released before the handlers run â€” DGNA needs
         // `&mut self` (client registry, subscriber state, telemetry).
         if self.control.is_some() {
             let mut cmds = Vec::new();
@@ -1892,8 +2034,14 @@ impl TetraEntityTrait for MmBs {
             }
             for cmd in cmds {
                 match cmd {
-                    ControlCommand::Dgna { issi, gssi, attach } => {
-                        self.do_dgna(queue, issi, gssi, attach);
+                    ControlCommand::Dgna {
+                        issi,
+                        gssi,
+                        mnemonic,
+                        attachment_mode,
+                        attach,
+                    } => {
+                        self.do_dgna(queue, issi, gssi, mnemonic, attachment_mode, attach);
                     }
                     _ => {
                         tracing::warn!("MM: ignoring unsupported control command {:?}", cmd);
@@ -1902,16 +2050,16 @@ impl TetraEntityTrait for MmBs {
             }
         }
 
-        // Periodic registration expiry check (T351 equivalent, ETSI EN 300 392-2 §16.9).
-        // Uses wall-clock time — no TDMA precision needed.
+        // Periodic registration expiry check (T351 equivalent, ETSI EN 300 392-2 Â§16.9).
+        // Uses wall-clock time â€” no TDMA precision needed.
         let interval_secs = self.config.config().cell.periodic_registration_secs;
         let expired = self.client_mgr.collect_expired_registrations(interval_secs);
         for issi in expired {
             // Restart-recovery interlock: never expire/remove a client the recovery sweep is
-            // still replaying to. The sweep owns its lifecycle until it confirms (re-register →
+            // still replaying to. The sweep owns its lifecycle until it confirms (re-register â†’
             // recovery_confirm) or gives up (attempt cap). Without this, a restored client at
-            // the tail of the replay queue could reach T351 second-expiry and be removed —
-            // wiping its stored groups, the exact failure recovery exists to prevent — when
+            // the tail of the replay queue could reach T351 second-expiry and be removed â€”
+            // wiping its stored groups, the exact failure recovery exists to prevent â€” when
             // periodic_registration_secs is clamped low. recovery_attempts is empty unless
             // recovery is active, so this is a cheap no-op otherwise. It also prevents a
             // double-COMMAND (T351 + recovery) to the same ISSI in one window.
@@ -1919,7 +2067,7 @@ impl TetraEntityTrait for MmBs {
                 continue;
             }
             tracing::info!(
-                "MM: ISSI {} periodic registration expired ({}s) — sending D-LOCATION-UPDATE-COMMAND",
+                "MM: ISSI {} periodic registration expired ({}s) â€” sending D-LOCATION-UPDATE-COMMAND",
                 issi,
                 interval_secs
             );
@@ -1940,36 +2088,36 @@ impl TetraEntityTrait for MmBs {
             //    COMMAND after RoamingLocationUpdating.
             let already_sent = self.client_mgr.is_pending_command(issi);
             if already_sent {
-                // Second expiry — the terminal didn't answer the first COMMAND within the grace
+                // Second expiry â€” the terminal didn't answer the first COMMAND within the grace
                 // period. We deliberately do NOT remove the client and do NOT send
                 // D-LOCATION-UPDATE-REJECT(ExpiryOfTimer):
                 //   - removing wipes the terminal's stored groups, so a Motorola that later
-                //     re-registers WITHOUT a group report (it still believes it is affiliated —
+                //     re-registers WITHOUT a group report (it still believes it is affiliated â€”
                 //     persistent attachment_lifetime=0) leaves the coverage-return re-affiliation
                 //     nothing to restore, and the next group PTT is denied (FH-BUG-031);
                 //   - REJECT(ExpiryOfTimer) drops Motorola radios to "no service".
-                // Instead, re-attract once more (handle 0 — the L2 handle is inert) and reset the
+                // Instead, re-attract once more (handle 0 â€” the L2 handle is inert) and reset the
                 // registration clock. The client and its groups stay in the registry; a genuinely
                 // gone radio just lingers harmlessly (re-attracted at most once per interval), and
                 // when it returns the coverage-return re-affiliation restores its group state so
-                // PTT works immediately. (Trade-off: the registry isn't pruned by T351 anymore —
+                // PTT works immediately. (Trade-off: the registry isn't pruned by T351 anymore â€”
                 // acceptable: it's bounded by the fleet and cleared on restart.)
                 tracing::info!(
-                    "MM: ISSI {} still unresponsive — re-attracting and keeping groups (no REJECT, no removal)",
+                    "MM: ISSI {} still unresponsive â€” re-attracting and keeping groups (no REJECT, no removal)",
                     issi
                 );
                 Self::send_d_location_update_command(queue, issi, 0);
                 // Confirmed gone: the terminal ignored the first COMMAND through the whole grace
-                // period. NOW tear it down everywhere — Brew backhaul, the dashboard, and the local
-                // subscriber registry — but keep it in client_mgr so its groups survive for
+                // period. NOW tear it down everywhere â€” Brew backhaul, the dashboard, and the local
+                // subscriber registry â€” but keep it in client_mgr so its groups survive for
                 // coverage-return re-affiliation if it ever comes back. The guard makes this fire
-                // once, on the registered→gone transition: this branch re-runs every interval for a
+                // once, on the registeredâ†’gone transition: this branch re-runs every interval for a
                 // radio that stays away. The client is NOT removed, so MsDeregistration is never
                 // emitted; MsTimeoutDrop is the sole drop signal here.
-                // Presence guard (FH-BUG-044 — present stations vanishing from the dashboard at
+                // Presence guard (FH-BUG-044 â€” present stations vanishing from the dashboard at
                 // the T351 interval): only tear a radio down if it is genuinely gone. A radio we
                 // have heard transmitting within the re-registration interval is demonstrably
-                // present even if it never answered the unsolicited COMMAND — e.g. an
+                // present even if it never answered the unsolicited COMMAND â€” e.g. an
                 // energy-economy radio that was asleep when the (un-gated) COMMAND was sent on the
                 // MCCH. Dropping it here would make a live station disappear from the dashboard
                 // every interval. Keep it (the reset_registration_timer below re-arms the clock);
@@ -1979,7 +2127,7 @@ impl TetraEntityTrait for MmBs {
                 let still_registered = self.config.state_read().subscribers.is_registered(issi);
                 if still_registered && heard_on_air {
                     tracing::info!(
-                        "MM: ISSI {} ignored the T351 COMMAND but was heard on air within {}s — keeping it (present, not dropping from dashboard)",
+                        "MM: ISSI {} ignored the T351 COMMAND but was heard on air within {}s â€” keeping it (present, not dropping from dashboard)",
                         issi,
                         interval_secs
                     );
@@ -2008,12 +2156,12 @@ impl TetraEntityTrait for MmBs {
                 self.recovery_mark_dirty();
                 continue;
             }
-            // First expiry — send the COMMAND and arm the 60s grace, nothing else. Emit NO teardown
+            // First expiry â€” send the COMMAND and arm the 60s grace, nothing else. Emit NO teardown
             // (Brew, dashboard, or local registry). The terminal almost always answers within grace
-            // and re-registers (MTM800/MXP600/MTM5400 rely on BS initiative — see above), so any
+            // and re-registers (MTM800/MXP600/MTM5400 rely on BS initiative â€” see above), so any
             // teardown here is a flap: it stayed registered on the air (PTT kept working) but, when
             // it answered, the re-registration path took the `is_new == false` branch and never
-            // re-added it — so it vanished from the dashboard forever, SDS to it was misrouted as
+            // re-added it â€” so it vanished from the dashboard forever, SDS to it was misrouted as
             // non-local, and Brew was needlessly deregistered+reregistered every interval. All
             // teardown is deferred to the confirmed-gone second expiry above, which fires only if
             // the grace elapses with no answer.
@@ -2028,7 +2176,7 @@ impl TetraEntityTrait for MmBs {
             // unanswered COMMAND and are restored by coverage-return re-affiliation on its return
             // (FH-BUG-031 fix).
             //
-            // EE gating (FH-BUG-044 follow-up — present energy-economy radios vanishing from the
+            // EE gating (FH-BUG-044 follow-up â€” present energy-economy radios vanishing from the
             // dashboard): a sleeping EE MS only listens to the downlink during its monitoring
             // window, so an un-gated COMMAND sent while it sleeps is missed; it then never answers
             // and is dropped at the second expiry. Send the COMMAND only when the MS is reachable
@@ -2056,7 +2204,7 @@ impl TetraEntityTrait for MmBs {
         // Republish the per-MS energy-economy monitoring windows into shared state every tick, from
         // the authoritative client registry, so the downlink scheduler (CMCE/SDS) can gate
         // unsolicited traffic to a sleeping MS's wake window without reading stale data. Rebuilt
-        // wholesale (like CMCE's active_call_ts) — empty when no MS is in energy economy.
+        // wholesale (like CMCE's active_call_ts) â€” empty when no MS is in energy economy.
         self.publish_monitoring_windows();
     }
 
@@ -2104,7 +2252,7 @@ impl TetraEntityTrait for MmBs {
                         if update.action == BrewSubscriberAction::Deregister {
                             let issi = update.issi;
                             tracing::info!(
-                                "MM: kicking ISSI {} — sending D-LOCATION-UPDATE-COMMAND to force re-registration",
+                                "MM: kicking ISSI {} â€” sending D-LOCATION-UPDATE-COMMAND to force re-registration",
                                 issi
                             );
                             // D-LOCATION-UPDATE-COMMAND forces the terminal to immediately
@@ -2118,7 +2266,7 @@ impl TetraEntityTrait for MmBs {
                             // uplink ind hardcodes handle 0 (mle_bs.rs:132), so last_handle is
                             // always 0 anyway. The COMMAND reaches the camped radio by its ISSI.
                             // (NB: this means whatever makes FH-BUG-028 vendor-specific is NOT the
-                            // handle — that root cause is still open.)
+                            // handle â€” that root cause is still open.)
                             Self::send_d_location_update_command(queue, issi, 0);
                             let groups: Vec<u32> = self
                                 .client_mgr
@@ -2134,10 +2282,16 @@ impl TetraEntityTrait for MmBs {
                             self.recovery_mark_dirty();
                         }
                     }
-                    SapMsgInner::MmDgnaRequest { issi, gssi, attach } => {
+                    SapMsgInner::MmDgnaRequest {
+                        issi,
+                        gssi,
+                        mnemonic,
+                        attachment_mode,
+                        attach,
+                    } => {
                         // Dashboard-originated DGNA, forwarded by CMCE (the dashboard control channel
                         // terminates there). The group machinery lives here in MM.
-                        self.do_dgna(queue, issi, gssi, attach);
+                        self.do_dgna(queue, issi, gssi, mnemonic, attachment_mode, attach);
                     }
                     _ => {
                         tracing::warn!("mm_bs: unexpected Control message from {:?}", message.src);
@@ -2158,18 +2312,18 @@ impl MmBs {
     fn rx_brew_reconnected(&mut self, queue: &mut MessageQueue) {
         let issis = self.client_mgr.all_known_issis();
         if issis.is_empty() {
-            tracing::info!("mm_bs: BrewReconnected — no registered MS to re-register");
+            tracing::info!("mm_bs: BrewReconnected â€” no registered MS to re-register");
             return;
         }
         tracing::info!(
-            "mm_bs: BrewReconnected — sending D-LOCATION-UPDATE-COMMAND to {} MS unit(s)",
+            "mm_bs: BrewReconnected â€” sending D-LOCATION-UPDATE-COMMAND to {} MS unit(s)",
             issis.len()
         );
         for issi in issis {
-            // handle = 0: addressed by ISSI on the MCCH (the handle is inert — see
+            // handle = 0: addressed by ISSI on the MCCH (the handle is inert â€” see
             // all_known_issis). This path was previously dead because it filtered on
             // last_handle != 0, which is never true, so no MS was ever re-registered after a
-            // Brew reconnect — the cause of "PTT denied after the backhaul blips".
+            // Brew reconnect â€” the cause of "PTT denied after the backhaul blips".
             tracing::debug!("mm_bs: re-registering ISSI {}", issi);
             Self::send_d_location_update_command(queue, issi, 0);
         }
@@ -2183,8 +2337,8 @@ mod ee_tests {
 
     #[test]
     fn grant_energy_saving_produces_spec_valid_start_point() {
-        // ETSI Table 16.40: Frame Number ∈ 1..=18, Multiframe Number ∈ 1..=60 (MN=0 is reserved
-        // ONLY for StayAlive). The old (issi/18)%cycle formula produced MN=0 for half the radios —
+        // ETSI Table 16.40: Frame Number âˆˆ 1..=18, Multiframe Number âˆˆ 1..=60 (MN=0 is reserved
+        // ONLY for StayAlive). The old (issi/18)%cycle formula produced MN=0 for half the radios â€”
         // an invalid anchor a conformant radio rejects (FH-BUG-034). Every active grant must now be
         // valid AND its start point must itself be a wake frame in the matching gating window.
         for mode in [
@@ -2217,7 +2371,7 @@ mod ee_tests {
 
     #[test]
     fn grant_energy_saving_stay_alive_and_eg4_7_capping() {
-        // StayAlive → no monitoring window.
+        // StayAlive â†’ no monitoring window.
         let esi = MmBs::grant_energy_saving(42, EnergySavingMode::StayAlive);
         assert_eq!(esi.energy_saving_mode, EnergySavingMode::StayAlive);
         assert!(esi.frame_number.is_none() && esi.multiframe_number.is_none());

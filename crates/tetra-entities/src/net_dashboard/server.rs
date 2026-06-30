@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
 use tungstenite::{
@@ -11,7 +11,7 @@ use tungstenite::{
 
 use crate::net_control::commands::ControlCommand;
 use crate::net_dashboard::html::DASHBOARD_HTML;
-use crate::net_dashboard::state::{CallEntry, DashboardState, DashboardStateInner, MsEntry};
+use crate::net_dashboard::state::{CallEntry, DashboardState, DashboardStateInner, MsEntry, MsGroupState};
 use crate::net_telemetry::TelemetryEvent;
 use crate::tpg2200::build_tpg2200_callout_payload;
 
@@ -29,6 +29,95 @@ const WS_CLIENT_QUEUE: usize = 256;
 /// Hard cap on concurrent WS clients, so many idle/non-draining connections can't grow memory and
 /// thread count without bound. New upgrades past this are refused.
 const WS_MAX_CLIENTS: usize = 64;
+
+fn cp1252_byte(ch: char) -> Option<u8> {
+    match ch {
+        '\u{20AC}' => Some(0x80),
+        '\u{201A}' => Some(0x82),
+        '\u{0192}' => Some(0x83),
+        '\u{201E}' => Some(0x84),
+        '\u{2026}' => Some(0x85),
+        '\u{2020}' => Some(0x86),
+        '\u{2021}' => Some(0x87),
+        '\u{02C6}' => Some(0x88),
+        '\u{2030}' => Some(0x89),
+        '\u{0160}' => Some(0x8A),
+        '\u{2039}' => Some(0x8B),
+        '\u{0152}' => Some(0x8C),
+        '\u{017D}' => Some(0x8E),
+        '\u{2018}' => Some(0x91),
+        '\u{2019}' => Some(0x92),
+        '\u{201C}' => Some(0x93),
+        '\u{201D}' => Some(0x94),
+        '\u{2022}' => Some(0x95),
+        '\u{2013}' => Some(0x96),
+        '\u{2014}' => Some(0x97),
+        '\u{02DC}' => Some(0x98),
+        '\u{2122}' => Some(0x99),
+        '\u{0161}' => Some(0x9A),
+        '\u{203A}' => Some(0x9B),
+        '\u{0153}' => Some(0x9C),
+        '\u{017E}' => Some(0x9E),
+        '\u{0178}' => Some(0x9F),
+        ch if (ch as u32) <= 0xFF => Some(ch as u8),
+        _ => None,
+    }
+}
+
+fn looks_mojibake_token(s: &str) -> bool {
+    s.contains('Ã') || s.contains('Â') || s.contains('â') || s.contains("ðŸ") || s.contains("Ãƒ")
+}
+
+fn fix_mojibake_token_once(token: &str) -> Option<String> {
+    if !looks_mojibake_token(token) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(token.len());
+    for ch in token.chars() {
+        bytes.push(cp1252_byte(ch)?);
+    }
+    let decoded = std::str::from_utf8(&bytes).ok()?.to_string();
+    if decoded == token || looks_mojibake_token(&decoded) && decoded.matches('Ã').count() >= token.matches('Ã').count() {
+        return None;
+    }
+    Some(decoded)
+}
+
+fn normalize_mojibake_html(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut token = String::new();
+    let flush = |out: &mut String, token: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        let mut cur = std::mem::take(token);
+        for _ in 0..3 {
+            let Some(next) = fix_mojibake_token_once(&cur) else { break };
+            cur = next;
+        }
+        out.push_str(&cur);
+    };
+    for ch in src.chars() {
+        if ch.is_whitespace() {
+            flush(&mut out, &mut token);
+            out.push(ch);
+        } else {
+            token.push(ch);
+        }
+    }
+    flush(&mut out, &mut token);
+    out
+}
+
+fn dashboard_html_body() -> &'static str {
+    static HTML: OnceLock<String> = OnceLock::new();
+    HTML.get_or_init(|| normalize_mojibake_html(&DASHBOARD_HTML.replace("{{STACK_VERSION}}", tetra_core::STACK_VERSION)))
+}
+
+fn login_html_body() -> &'static str {
+    static HTML: OnceLock<String> = OnceLock::new();
+    HTML.get_or_init(|| normalize_mojibake_html(crate::net_dashboard::html::LOGIN_HTML))
+}
 
 // ---------------------------------------------------------------------------
 // OTA update state — shared between the HTTP handler and the update thread.
@@ -787,6 +876,7 @@ impl DashboardServer {
                         MsEntry {
                             issi: *issi,
                             groups: Vec::new(),
+                            group_catalog: Vec::new(),
                             selected_group: None,
                             rssi_dbfs: None,
                             registered_at: Instant::now(),
@@ -818,6 +908,9 @@ impl DashboardServer {
                 TelemetryEvent::MsGroupsSnapshot { issi, gssis } => {
                     if let Some(e) = s.ms_map.get_mut(issi) {
                         e.groups = gssis.clone();
+                        for group in &mut e.group_catalog {
+                            group.is_attached = e.groups.contains(&group.gssi);
+                        }
                         // If the previously-selected TG is no longer affiliated, drop the
                         // pointer so the dashboard doesn't carry a stale ▶ marker into the
                         // next render (or, worse, fail to re-render anything because the
@@ -829,9 +922,53 @@ impl DashboardServer {
                         }
                     }
                 }
+                TelemetryEvent::MsGroupCatalogSnapshot { issi, groups } => {
+                    if let Some(e) = s.ms_map.get_mut(issi) {
+                        e.group_catalog = groups
+                            .iter()
+                            .map(|group| MsGroupState {
+                                gssi: group.gssi,
+                                mnemonic: group.mnemonic.clone(),
+                                attachment_mode: group.attachment_mode,
+                                is_dynamic: group.is_dynamic,
+                                is_attached: group.is_attached,
+                            })
+                            .collect();
+                        e.groups = e
+                            .group_catalog
+                            .iter()
+                            .filter(|group| group.is_attached)
+                            .map(|group| group.gssi)
+                            .collect();
+                        if let Some(sel) = e.selected_group
+                            && !e.groups.contains(&sel)
+                        {
+                            e.selected_group = None;
+                        }
+                    }
+                }
+                TelemetryEvent::DgnaStatus(status) => {
+                    s.push_dgna_log(status.clone());
+                    s.push_log(
+                        if status.accepted { "INFO" } else { "WARN" },
+                        format!(
+                            "DGNA {} ISSI {} GSSI {} [{}]: {}",
+                            if status.attach { "assign" } else { "deassign" },
+                            status.issi,
+                            status.gssi,
+                            status.source,
+                            status.detail
+                        ),
+                    );
+                }
                 TelemetryEvent::MsGroupDetach { issi, gssis } => {
                     if let Some(e) = s.ms_map.get_mut(issi) {
                         e.groups.retain(|g| !gssis.contains(g));
+                        for group in &mut e.group_catalog {
+                            if gssis.contains(&group.gssi) {
+                                group.is_attached = false;
+                            }
+                        }
                         // Same stale-pointer guard as the snapshot path above.
                         if let Some(sel) = e.selected_group
                             && gssis.contains(&sel)
@@ -1176,6 +1313,18 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
         TelemetryEvent::MsGroupAttach { issi, gssis } => serde_json::json!({"type":"ms_groups","issi":issi,"groups":gssis}),
         TelemetryEvent::MsGroupDetach { issi, gssis } => serde_json::json!({"type":"ms_groups_detach","issi":issi,"groups":gssis}),
         TelemetryEvent::MsGroupsSnapshot { issi, gssis } => serde_json::json!({"type":"ms_groups_all","issi":issi,"groups":gssis}),
+        TelemetryEvent::MsGroupCatalogSnapshot { issi, groups } => {
+            serde_json::json!({"type":"ms_group_catalog","issi":issi,"groups":groups})
+        }
+        TelemetryEvent::DgnaStatus(status) => serde_json::json!({
+            "type":"dgna_status",
+            "issi":status.issi,
+            "gssi":status.gssi,
+            "attach":status.attach,
+            "accepted":status.accepted,
+            "source":status.source,
+            "detail":status.detail,
+        }),
         TelemetryEvent::MsRssi { issi, rssi_dbfs } => serde_json::json!({"type":"ms_rssi","issi":issi,"rssi_dbfs":rssi_dbfs}),
         TelemetryEvent::MsEnergySaving { issi, mode } => serde_json::json!({"type":"ms_energy_saving","issi":issi,"mode":mode}),
         TelemetryEvent::GroupCallStarted {
@@ -1382,6 +1531,16 @@ fn serve_sds_log(stream: TcpStream, state: &DashboardState) {
     let body = {
         let s = state.read().unwrap();
         let list: Vec<_> = s.sds_log.iter().rev().cloned().collect();
+        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+    };
+    http_json_response(stream, 200, &body);
+}
+
+/// GET /api/dgna-log — the persisted DGNA activity log as a JSON array, newest entry first.
+fn serve_dgna_log(stream: TcpStream, state: &DashboardState) {
+    let body = {
+        let s = state.read().unwrap();
+        let list: Vec<_> = s.dgna_log.iter().rev().cloned().collect();
         serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
     };
     http_json_response(stream, 200, &body);
@@ -1609,7 +1768,7 @@ fn handle_connection(
     // browser running on the BTS that connects via the box's LAN IP from a remote one, so it wrongly
     // blocked operators doing DGNA/SDS from the BTS itself. Set a username/password to lock it down.
     if req_line.contains("/ws") {
-        handle_ws(stream, state, clients, cmd_tx, update_state);
+        handle_ws(stream, state, clients, cmd_tx, update_state, shared_config.clone());
     } else if req_line.contains("GET /api/system/brightness") {
         // Backlight status probe (FH-FEAT-008) — lets the UI hide the slider on a panel-less host.
         drain_http_headers(&mut stream);
@@ -1965,10 +2124,18 @@ fn handle_connection(
         let mut s = stream;
         drain_http_headers(&mut s);
         serve_dapnet_log_clear(s, &state);
+    } else if req_line.contains("DELETE /api/dgna-log") {
+        let mut s = stream;
+        drain_http_headers(&mut s);
+        serve_dgna_log_clear(s, &state);
     } else if req_line.contains("GET /api/dapnet-log") {
         let mut s = stream;
         drain_http_headers(&mut s);
         serve_dapnet_log(s, &state);
+    } else if req_line.contains("GET /api/dgna-log") {
+        let mut s = stream;
+        drain_http_headers(&mut s);
+        serve_dgna_log(s, &state);
     } else if req_line.contains("POST /api/dapnet/send") {
         let (inner, body_str) = read_post_body(stream);
         serve_dapnet_send(inner, &shared_config, &state, &clients, &body_str);
@@ -2246,6 +2413,7 @@ fn handle_ws(
     clients: WsClients,
     cmd_tx: Arc<Mutex<Option<CmdSender>>>,
     update_state: SharedUpdateState,
+    shared_config: Option<tetra_config::bluestation::SharedConfig>,
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(50)));
 
@@ -2292,7 +2460,21 @@ fn handle_ws(
         let last_sdr_health = s.last_sdr_health.clone();
         let last_sys_health = s.last_sys_health.clone();
         let last_health = s.last_health.clone();
+        let dgna_log: Vec<_> = s.dgna_log.iter().rev().cloned().collect();
         drop(s);
+        let (dgna_default_attachment_mode, dgna_attachment_mode_picker_enabled) = shared_config
+            .as_ref()
+            .map(|cfg| {
+                (
+                    cfg.config().cell.dgna_attachment_mode,
+                    cfg.config()
+                        .dashboard
+                        .as_ref()
+                        .map(|d| d.show_dgna_attachment_mode_picker)
+                        .unwrap_or(false),
+                )
+            })
+            .unwrap_or((0, false));
         if let Ok(json) = serde_json::to_string(&serde_json::json!({
             "type": "snapshot", "ms": ms, "calls": calls, "emergencies": emergencies, "log": logs,
             "brew_online": brew_online, "brew_version": brew_version, "last_heard": last_heard,
@@ -2302,6 +2484,9 @@ fn handle_ws(
             "last_sdr_health": last_sdr_health,
             "last_sys_health": last_sys_health,
             "health": last_health,
+            "dgna_log": dgna_log,
+            "dgna_default_attachment_mode": dgna_default_attachment_mode,
+            "dgna_attachment_mode_picker_enabled": dgna_attachment_mode_picker_enabled,
         })) {
             let _ = ws.send(Message::Text(json));
         }
@@ -2320,7 +2505,7 @@ fn handle_ws(
         // Then check for inbound messages from browser
         match ws.read() {
             Ok(Message::Text(text)) => {
-                handle_ws_command(&text, &state, &cmd_tx, &update_state);
+                handle_ws_command(&text, &state, &cmd_tx, &update_state, &shared_config);
             }
             Ok(Message::Close(_)) => break,
             Ok(Message::Ping(data)) => {
@@ -2339,6 +2524,7 @@ fn handle_ws_command(
     state: &DashboardState,
     cmd_tx: &Arc<Mutex<Option<CmdSender>>>,
     update_state: &SharedUpdateState,
+    shared_config: &Option<tetra_config::bluestation::SharedConfig>,
 ) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
         return;
@@ -2431,24 +2617,158 @@ fn handle_ws_command(
         Some("dgna") => {
             let issi = v.get("issi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             let gssi = v.get("gssi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let mnemonic = v
+                .get("mnemonic")
+                .and_then(|m| m.as_str())
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(|m| m.chars().take(15).collect::<String>());
             let attach = v.get("attach").and_then(|a| a.as_bool()).unwrap_or(true);
+            let (default_attachment_mode, picker_enabled) = shared_config
+                .as_ref()
+                .map(|cfg| {
+                    (
+                        cfg.config().cell.dgna_attachment_mode,
+                        cfg.config()
+                            .dashboard
+                            .as_ref()
+                            .map(|d| d.show_dgna_attachment_mode_picker)
+                            .unwrap_or(false),
+                    )
+                })
+                .unwrap_or((0, false));
+            let attachment_mode = if picker_enabled {
+                v.get("attachment_mode")
+                    .and_then(|m| m.as_u64())
+                    .map(|m| m.min(5) as u8)
+                    .unwrap_or(default_attachment_mode)
+            } else {
+                default_attachment_mode
+            };
             if issi == 0 || gssi == 0 {
                 return;
             }
             let verb = if attach { "assign" } else { "deassign" };
-            tracing::info!("Dashboard: DGNA {} GSSI {} on ISSI {}", verb, gssi, issi);
-            if !send_cmd(ControlCommand::Dgna { issi, gssi, attach }) {
+            tracing::info!(
+                "Dashboard: DGNA {} GSSI {} on ISSI {} (mnemonic={:?}, attachment_mode={})",
+                verb,
+                gssi,
+                issi,
+                mnemonic,
+                attachment_mode
+            );
+            if !send_cmd(ControlCommand::Dgna {
+                issi,
+                gssi,
+                mnemonic: if attach { mnemonic.clone() } else { None },
+                attachment_mode,
+                attach,
+            }) {
                 tracing::warn!("Dashboard: no control dispatcher for DGNA");
             }
             let mut s = state.write().unwrap();
             s.push_log(
                 "INFO",
                 format!(
-                    "DGNA {} requested: GSSI {} {} ISSI {}",
+                    "DGNA {} requested: GSSI {} {} ISSI {}{}",
                     verb,
                     gssi,
                     if attach { "to" } else { "from" },
-                    issi
+                    issi,
+                    format!(
+                        "{} (mode: {})",
+                        mnemonic.as_ref().map(|m| format!(" (name: {})", m)).unwrap_or_default(),
+                        attachment_mode
+                    )
+                ),
+            );
+        }
+        Some("dgna_bulk") => {
+            let gssi = v.get("gssi").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let mnemonic = v
+                .get("mnemonic")
+                .and_then(|m| m.as_str())
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(|m| m.chars().take(15).collect::<String>());
+            let attach = v.get("attach").and_then(|a| a.as_bool()).unwrap_or(true);
+            let all_radios = v.get("all_radios").and_then(|a| a.as_bool()).unwrap_or(false);
+            let (default_attachment_mode, picker_enabled) = shared_config
+                .as_ref()
+                .map(|cfg| {
+                    (
+                        cfg.config().cell.dgna_attachment_mode,
+                        cfg.config()
+                            .dashboard
+                            .as_ref()
+                            .map(|d| d.show_dgna_attachment_mode_picker)
+                            .unwrap_or(false),
+                    )
+                })
+                .unwrap_or((0, false));
+            let attachment_mode = if picker_enabled {
+                v.get("attachment_mode")
+                    .and_then(|m| m.as_u64())
+                    .map(|m| m.min(5) as u8)
+                    .unwrap_or(default_attachment_mode)
+            } else {
+                default_attachment_mode
+            };
+            if gssi == 0 {
+                return;
+            }
+            let mut targets = Vec::<u32>::new();
+            if all_radios {
+                let mut issis: Vec<u32> = state.read().unwrap().ms_map.keys().copied().collect();
+                issis.sort_unstable();
+                issis.dedup();
+                targets = issis;
+            } else if let Some(arr) = v.get("targets").and_then(|t| t.as_array()) {
+                for value in arr {
+                    let issi = value.as_u64().unwrap_or(0) as u32;
+                    if issi != 0 && !targets.contains(&issi) {
+                        targets.push(issi);
+                    }
+                }
+                targets.sort_unstable();
+            }
+            if targets.is_empty() {
+                return;
+            }
+            let verb = if attach { "assign" } else { "deassign" };
+            tracing::info!(
+                "Dashboard: DGNA bulk {} GSSI {} on {} radios (mnemonic={:?}, attachment_mode={})",
+                verb,
+                gssi,
+                targets.len(),
+                mnemonic,
+                attachment_mode
+            );
+            let mut sent = 0usize;
+            for issi in &targets {
+                if send_cmd(ControlCommand::Dgna {
+                    issi: *issi,
+                    gssi,
+                    mnemonic: if attach { mnemonic.clone() } else { None },
+                    attachment_mode,
+                    attach,
+                }) {
+                    sent += 1;
+                }
+            }
+            if sent == 0 {
+                tracing::warn!("Dashboard: no control dispatcher for DGNA bulk");
+            }
+            let mut s = state.write().unwrap();
+            s.push_log(
+                "INFO",
+                format!(
+                    "DGNA bulk {} requested: GSSI {} on {} radios{} (mode: {})",
+                    verb,
+                    gssi,
+                    targets.len(),
+                    mnemonic.as_ref().map(|m| format!(" (name: {m})")).unwrap_or_default(),
+                    attachment_mode
                 ),
             );
         }
@@ -2619,11 +2939,7 @@ fn serve_bts_info(mut stream: TcpStream, shared_config: &Option<tetra_config::bl
 /// GET /api/dualcarrier — current Dual-Carrier ON/OFF state for the first-page toggle.
 /// Reads the switch + configured secondary carrier from the TOML (so the number is shown even while
 /// off), plus the running effective state and the main carrier.
-fn serve_dual_carrier_get(
-    mut stream: TcpStream,
-    shared_config: &Option<tetra_config::bluestation::SharedConfig>,
-    config_path: &str,
-) {
+fn serve_dual_carrier_get(mut stream: TcpStream, shared_config: &Option<tetra_config::bluestation::SharedConfig>, config_path: &str) {
     let st = crate::net_dashboard::dual_carrier::read_dual_carrier(config_path);
     let main_carrier = shared_config.as_ref().map(|c| c.config().cell.main_carrier);
     // What the running stack is actually doing right now (may lag the file until the restart lands).
@@ -2726,10 +3042,7 @@ fn serve_dual_carrier_post(
         if enabled { "ON" } else { "OFF" },
         secondary
     );
-    crate::service_control::schedule_service_action(
-        crate::service_control::ServiceAction::Restart,
-        std::time::Duration::from_secs(2),
-    );
+    crate::service_control::schedule_service_action(crate::service_control::ServiceAction::Restart, std::time::Duration::from_secs(2));
 
     http_response(
         stream,
@@ -3489,8 +3802,7 @@ fn activate_config_profile(config_path: &str, profile_name: &str) -> Result<(), 
 }
 
 fn serve_html(mut stream: TcpStream) {
-    let body = DASHBOARD_HTML.replace("{{STACK_VERSION}}", tetra_core::STACK_VERSION);
-    let body = body.as_bytes();
+    let body = dashboard_html_body().as_bytes();
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
@@ -3672,7 +3984,9 @@ fn read_http_body(stream: &mut TcpStream) -> Vec<u8> {
             break;
         }
     }
-    if content_length == 0 { return Vec::new(); }
+    if content_length == 0 {
+        return Vec::new();
+    }
     let mut body = vec![0u8; content_length.min(512 * 1024)];
     let _ = stream.read_exact(&mut body);
     body
@@ -3791,7 +4105,7 @@ fn serve_logout(mut stream: TcpStream) {
 }
 
 fn serve_login_page(mut stream: TcpStream) {
-    let body = crate::net_dashboard::html::LOGIN_HTML;
+    let body = login_html_body();
     let header = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: text/html; charset=utf-8\r\n\
@@ -3813,6 +4127,14 @@ fn serve_login_page(mut stream: TcpStream) {
 fn serve_sds_log_clear(stream: TcpStream, state: &DashboardState) {
     if let Ok(mut s) = state.write() {
         s.clear_sds_log();
+    }
+    http_json_response(stream, 200, "{\"ok\":true}");
+}
+
+/// DELETE /api/dgna-log — clear the persisted DGNA activity log.
+fn serve_dgna_log_clear(stream: TcpStream, state: &DashboardState) {
+    if let Ok(mut s) = state.write() {
+        s.clear_dgna_log();
     }
     http_json_response(stream, 200, "{\"ok\":true}");
 }
@@ -5115,7 +5437,7 @@ fn serve_dapnet_send(
 
 #[cfg(test)]
 mod tests {
-    use super::{DashboardServer, binary_built_from, mask_config_secrets, write_config_validated};
+    use super::{DashboardServer, binary_built_from, mask_config_secrets, normalize_mojibake_html, write_config_validated};
     use crate::net_telemetry::TelemetryEvent;
 
     /// A minimal config.toml that parses + validates (mirrors tetra-config's own minimal fixture).
@@ -5192,6 +5514,15 @@ enabled = true
         assert!(masked.contains("[telegram_alerts]"));
         assert!(masked.contains("enabled = true"));
         assert!(masked.contains("# password = \"commented-should-stay\""), "comments untouched");
+    }
+
+    #[test]
+    fn html_mojibake_normalizer_repairs_common_dashboard_tokens() {
+        assert_eq!(
+            normalize_mojibake_html("Open Ã¢â‚¬â€ all ISSI may register"),
+            "Open — all ISSI may register"
+        );
+        assert_eq!(normalize_mojibake_html("waitingÃ¢â‚¬Â¦"), "waiting…");
     }
 
     /// FH-BUG (brew shown as v0): the transport reports version 0 ("unknown") on every (re)connect

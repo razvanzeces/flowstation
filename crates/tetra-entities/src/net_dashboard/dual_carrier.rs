@@ -50,7 +50,10 @@ pub fn read_dual_carrier(config_path: &str) -> DualCarrierState {
             enabled = value_token(v) == "true";
         }
     }
-    DualCarrierState { enabled, secondary_carrier }
+    DualCarrierState {
+        enabled,
+        secondary_carrier,
+    }
 }
 
 /// For an active (uncommented) `key = <value>` line, return the trimmed value part; else None.
@@ -83,9 +86,7 @@ pub fn compute_toml(original: &str, enabled: bool, secondary_carrier: Option<u16
 
     // True if `trimmed` is an active (uncommented) `key = ...` assignment.
     let is_active_key = |trimmed: &str, key: &str| {
-        !trimmed.starts_with('#')
-            && trimmed.starts_with(key)
-            && trimmed[key.len()..].trim_start().starts_with('=')
+        !trimmed.starts_with('#') && trimmed.starts_with(key) && trimmed[key.len()..].trim_start().starts_with('=')
     };
 
     let flush_missing = |out: &mut Vec<String>, wrote_enabled: &mut bool, wrote_secondary: &mut bool| {
@@ -233,7 +234,13 @@ issi_whitelist = []
         let path_str = path.to_str().unwrap();
         std::fs::write(&path, compute_toml(SAMPLE, true, Some(1522))).unwrap();
         let st = read_dual_carrier(path_str);
-        assert_eq!(st, DualCarrierState { enabled: true, secondary_carrier: Some(1522) });
+        assert_eq!(
+            st,
+            DualCarrierState {
+                enabled: true,
+                secondary_carrier: Some(1522)
+            }
+        );
         assert!(st.active());
         let _ = std::fs::remove_file(&path);
     }

@@ -31,7 +31,10 @@ impl GroupDeassignment {
         } else {
             None
         };
-        Ok(GroupDeassignment { group_ssi, group_extension })
+        Ok(GroupDeassignment {
+            group_ssi,
+            group_extension,
+        })
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) -> Result<(), PduParseErr> {

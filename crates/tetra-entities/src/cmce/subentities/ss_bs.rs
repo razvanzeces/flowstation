@@ -1,17 +1,23 @@
 use crate::MessageQueue;
+use crate::net_telemetry::{TelemetryEvent, TelemetrySink};
+use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, SsiType, TetraAddress};
 use tetra_pdus::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
 use tetra_pdus::cmce::pdus::cmce_function_not_supported::CmceFunctionNotSupported;
 use tetra_pdus::cmce::pdus::d_facility::{DFacility, DFacilitySsBody};
 use tetra_pdus::cmce::pdus::u_facility::UFacility;
-use tetra_pdus::cmce::ss_dgna::enums::results::GroupIdentityAttachmentMode;
+use tetra_pdus::cmce::ss_dgna::enums::results::{
+    GroupIdentityAttachmentMode, ResultOfAssignment, ResultOfAttachment, ResultOfDeassignment,
+};
 use tetra_pdus::cmce::ss_dgna::fields::group_assignment::GroupAssignment;
 use tetra_pdus::cmce::ss_dgna::fields::group_deassignment::GroupDeassignment;
 use tetra_pdus::cmce::ss_dgna::pdus::assign::Assign;
 use tetra_pdus::cmce::ss_dgna::pdus::deassign::Deassign;
 use tetra_pdus::cmce::ss_dgna::ss_dgna_pdu::SsDgnaPdu;
 use tetra_saps::lcmc::LcmcMleUnitdataReq;
+use tetra_saps::lcmc::enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment};
+use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
 /// Clause 12 Supplementary Services CMCE sub-entity.
@@ -21,7 +27,16 @@ use tetra_saps::{SapMsg, SapMsgInner};
 /// cl.4.1-4.2) and consumes the affected MS's ASSIGN ACK / DEASSIGN ACK off the
 /// uplink U-FACILITY. The group registry and affiliation state are owned by MM;
 /// this sub-entity only puts the SS PDU on the air and logs the ACK.
-pub struct SsBsSubentity {}
+pub struct SsBsSubentity {
+    config: SharedConfig,
+    telemetry: Option<TelemetrySink>,
+}
+
+enum DgnaDelivery {
+    McchOnly,
+    DirectTraffic { carrier_num: u16, ts: u8, usage: u8 },
+    AmbiguousGroupTraffic { carrier_num: u16, ts: u8, usage: u8 },
+}
 
 /// Class of usage advertised in SS-DGNA group assignments. 4 mirrors the value
 /// the MM affiliation/ACK path uses (`mm_bs.rs` `DGNA_CLASS_OF_USAGE`), so an
@@ -30,8 +45,29 @@ pub struct SsBsSubentity {}
 const DGNA_CLASS_OF_USAGE: u8 = 4;
 
 impl SsBsSubentity {
-    pub fn new() -> Self {
-        SsBsSubentity {}
+    pub fn new(config: SharedConfig) -> Self {
+        SsBsSubentity { config, telemetry: None }
+    }
+
+    pub fn set_config(&mut self, config: SharedConfig) {
+        self.config = config;
+    }
+
+    pub fn set_telemetry(&mut self, sink: TelemetrySink) {
+        self.telemetry = Some(sink);
+    }
+
+    fn emit_dgna_status(&self, issi: u32, gssi: u32, attach: bool, accepted: bool, source: &str, detail: String) {
+        if let Some(sink) = &self.telemetry {
+            sink.send(TelemetryEvent::DgnaStatus(crate::net_telemetry::events::DgnaStatusInfo {
+                issi,
+                gssi,
+                attach,
+                accepted,
+                source: source.to_string(),
+                detail,
+            }));
+        }
     }
 
     /// Emit an SS-DGNA D-FACILITY to a single ISSI: an ASSIGN when `attach`, a
@@ -39,28 +75,36 @@ impl SsBsSubentity {
     /// Table 4 SS-PDU container (Routeing = 00, one SS PDU) inside the CMCE
     /// D-FACILITY (EN 300 392-2 V2.4.1 cl.14.7.1.7).
     ///
-    /// ASSIGN uses attachment mode 000 (attached permanently, TS Table 51) so
-    /// the PDU both defines and attaches the group in one step (cl.6.5.2.1) —
-    /// the same MLE handoff the MM D-ATTACH does, but only after the radio has
-    /// the group definition. No mnemonic is carried in v1: a real terminal shows
-    /// its own provisioned name for the GSSI, or the bare number.
+    /// ASSIGN carries the requested Table-51 attachment mode so the operator can
+    /// choose whether the group is attached permanently, reattached later, or just
+    /// defined without attachment. When present, the mnemonic is carried as the
+    /// Table-45 "Mnemonic group name" so the terminal can label the TG directly
+    /// from the operator request.
     ///
     /// Reliability rests on the LLC ACK of the FACILITY transport, not a
     /// DGNA-layer retransmit (cl.6.6 mandates no protocol timer), so this is sent
     /// with `Layer2Service::Acknowledged` — the same choice the MM DGNA path made
     /// for its individually-addressed D-ATTACH.
-    pub fn send_d_facility_dgna(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) {
+    pub fn send_d_facility_dgna(
+        &self,
+        queue: &mut MessageQueue,
+        issi: u32,
+        gssi: u32,
+        mnemonic: Option<String>,
+        attachment_mode: u8,
+        route_gssi_hint: Option<u32>,
+        attach: bool,
+    ) {
+        let attachment_mode =
+            GroupIdentityAttachmentMode::try_from(attachment_mode as u64).unwrap_or(GroupIdentityAttachmentMode::AttachedPermanently);
         let ss_pdu = if attach {
             SsDgnaPdu::Assign(Assign {
                 groups: vec![GroupAssignment {
                     group_ssi: gssi,
                     group_extension: None,
-                    // 000 = attached permanently: no re-attach at the next ITSI attach / location
-                    // update, matching the persistent (lifetime=0) MM D-ATTACH the legacy path sent.
-                    attachment_mode: GroupIdentityAttachmentMode::AttachedPermanently,
+                    attachment_mode,
                     class_of_usage: Some(DGNA_CLASS_OF_USAGE),
-                    // No group-name config in v1 — the radio displays its own provisioned name.
-                    mnemonic: None,
+                    mnemonic: mnemonic.as_deref().map(Self::encode_mnemonic),
                     security_related_information: None,
                     additional_group_information: None,
                     vgssi: None,
@@ -96,29 +140,55 @@ impl SsBsSubentity {
             issi,
             sdu.dump_bin()
         );
+        let delivery = self.resolve_traffic_delivery(issi, route_gssi_hint);
+        let route_detail = match delivery {
+            DgnaDelivery::McchOnly => "via MCCH".to_string(),
+            DgnaDelivery::DirectTraffic { carrier_num, ts, .. } => {
+                format!("via FACCH stealing on carrier={} ts={}", carrier_num, ts)
+            }
+            DgnaDelivery::AmbiguousGroupTraffic { carrier_num, ts, .. } => {
+                format!("via MCCH + FACCH fallback on carrier={} ts={}", carrier_num, ts)
+            }
+        };
+        self.emit_dgna_status(
+            issi,
+            gssi,
+            attach,
+            true,
+            "CMCE",
+            format!(
+                "Queued SS-DGNA {} D-FACILITY {}",
+                if attach { "ASSIGN" } else { "DEASSIGN" },
+                route_detail
+            ),
+        );
 
-        queue.push_back(SapMsg {
-            sap: Sap::LcmcSap,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Mle,
-            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu,
-                // Unsolicited, BS-initiated — no inbound L2 context to echo.
-                handle: 0,
-                endpoint_id: 0,
-                link_id: 0,
-                // Individually-addressed SS PDU: acknowledged BL-DATA, so the LLC layer carries the
-                // delivery guarantee the SS-DGNA layer does not (TS 100 392-12-22 cl.6.6).
-                layer2service: Layer2Service::Acknowledged,
-                pdu_prio: 0,
-                layer2_qos: 0,
-                stealing_permission: false,
-                stealing_repeats_flag: false,
-                chan_alloc: None,
-                main_address: TetraAddress::new(issi, SsiType::Issi),
-                tx_reporter: None,
-            }),
-        });
+        match delivery {
+            DgnaDelivery::McchOnly => {
+                self.enqueue_dgna(queue, issi, sdu, Layer2Service::Acknowledged, false, None);
+            }
+            DgnaDelivery::DirectTraffic { carrier_num, ts, usage } => {
+                self.enqueue_dgna(
+                    queue,
+                    issi,
+                    sdu,
+                    Layer2Service::Unacknowledged,
+                    true,
+                    Some(Self::traffic_chan_alloc(carrier_num, ts, usage)),
+                );
+            }
+            DgnaDelivery::AmbiguousGroupTraffic { carrier_num, ts, usage } => {
+                self.enqueue_dgna(queue, issi, sdu.clone(), Layer2Service::Acknowledged, false, None);
+                self.enqueue_dgna(
+                    queue,
+                    issi,
+                    sdu,
+                    Layer2Service::Unacknowledged,
+                    true,
+                    Some(Self::traffic_chan_alloc(carrier_num, ts, usage)),
+                );
+            }
+        }
     }
 
     pub fn route_re_deliver(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
@@ -137,9 +207,7 @@ impl SsBsSubentity {
         // rx_u_attach_detach_group_identity_ack). We do NOT reply
         // function-not-supported in that case.
         match UFacility::from_bitbuf(&mut prim.sdu) {
-            Ok(UFacility {
-                facility: Some(body),
-            }) => {
+            Ok(UFacility { facility: Some(body) }) => {
                 match &body.ss_pdu {
                     SsDgnaPdu::AssignAck(ack) => {
                         for ie in &ack.acks {
@@ -150,6 +218,19 @@ impl SsBsSubentity {
                                 ie.result_of_assignment,
                                 ie.result_of_attachment
                             );
+                            let accepted = matches!(ie.result_of_assignment, ResultOfAssignment::Accepted)
+                                && matches!(ie.result_of_attachment, ResultOfAttachment::Attached);
+                            self.emit_dgna_status(
+                                issi,
+                                ie.group_ssi,
+                                true,
+                                accepted,
+                                "CMCE",
+                                format!(
+                                    "SS-DGNA ASSIGN ACK assignment={} attachment={}",
+                                    ie.result_of_assignment, ie.result_of_attachment
+                                ),
+                            );
                         }
                     }
                     SsDgnaPdu::DeassignAck(ack) => {
@@ -159,6 +240,18 @@ impl SsBsSubentity {
                                 issi,
                                 ie.group_ssi,
                                 ie.result_of_deassignment
+                            );
+                            let accepted = matches!(
+                                ie.result_of_deassignment,
+                                ResultOfDeassignment::DefinitionKeptDetached | ResultOfDeassignment::DefinitionRemoved
+                            );
+                            self.emit_dgna_status(
+                                issi,
+                                ie.group_ssi,
+                                false,
+                                accepted,
+                                "CMCE",
+                                format!("SS-DGNA DEASSIGN ACK deassignment={}", ie.result_of_deassignment),
                             );
                         }
                     }
@@ -227,5 +320,75 @@ impl SsBsSubentity {
                 tx_reporter: None,
             }),
         });
+    }
+
+    fn encode_mnemonic(name: &str) -> String {
+        let mut out = String::with_capacity(name.len().min(15));
+        for ch in name.chars().take(15) {
+            let cp = ch as u32;
+            out.push(if cp <= 0xFF { ch } else { '?' });
+        }
+        out
+    }
+
+    fn enqueue_dgna(
+        &self,
+        queue: &mut MessageQueue,
+        issi: u32,
+        sdu: BitBuffer,
+        layer2service: Layer2Service,
+        stealing_permission: bool,
+        chan_alloc: Option<CmceChanAllocReq>,
+    ) {
+        queue.push_back(SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu,
+                handle: 0,
+                endpoint_id: 0,
+                link_id: 0,
+                layer2service,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission,
+                stealing_repeats_flag: false,
+                chan_alloc,
+                main_address: TetraAddress::new(issi, SsiType::Issi),
+                tx_reporter: None,
+            }),
+        });
+    }
+
+    fn traffic_chan_alloc(carrier_num: u16, ts: u8, usage: u8) -> CmceChanAllocReq {
+        let mut timeslots = [false; 4];
+        timeslots[(ts - 1) as usize] = true;
+        CmceChanAllocReq {
+            usage: Some(usage),
+            carrier: Some(carrier_num),
+            timeslots,
+            alloc_type: ChanAllocType::Replace,
+            ul_dl_assigned: UlDlAssignment::Dl,
+        }
+    }
+
+    fn resolve_traffic_delivery(&self, issi: u32, route_gssi_hint: Option<u32>) -> DgnaDelivery {
+        let state = self.config.state_read();
+        if let Some((carrier_num, ts, usage)) = state.active_call_ts.get(&issi).copied()
+            && (1..=4).contains(&ts)
+        {
+            return DgnaDelivery::DirectTraffic { carrier_num, ts, usage };
+        }
+        let hinted_gssis: Vec<u32> = route_gssi_hint
+            .into_iter()
+            .chain(state.subscribers.attached_groups_of(issi))
+            .collect();
+        if let Some((carrier_num, ts, usage)) = hinted_gssis.into_iter().find_map(|gssi| state.active_call_ts.get(&gssi).copied())
+            && (1..=4).contains(&ts)
+        {
+            return DgnaDelivery::AmbiguousGroupTraffic { carrier_num, ts, usage };
+        }
+        DgnaDelivery::McchOnly
     }
 }

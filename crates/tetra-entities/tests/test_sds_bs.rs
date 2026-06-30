@@ -154,7 +154,11 @@ fn test_raw_sds_type4_from_control_delivered_verbatim() {
     let msgs = test.dump_sinks();
 
     // The fix: the command is no longer dropped — exactly one D-SDS-DATA is delivered locally.
-    assert_eq!(count_d_sds_data(&msgs), 1, "raw Type-4 SDS must be delivered, not ignored (FH-BUG-052)");
+    assert_eq!(
+        count_d_sds_data(&msgs),
+        1,
+        "raw Type-4 SDS must be delivered, not ignored (FH-BUG-052)"
+    );
     assert_eq!(count_brew_sds(&msgs), 0, "a local dest must not be forwarded to Brew");
 
     // And the Type-4 SDU is delivered byte-for-byte, with NO SDS-TL wrap prepended.

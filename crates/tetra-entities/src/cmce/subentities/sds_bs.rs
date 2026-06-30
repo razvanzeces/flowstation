@@ -543,16 +543,10 @@ impl SdsBsSubentity {
         // an on-air requester that may legitimately be absent from the static registry, and those
         // must keep going out over RF — so they are intentionally excluded here.
         const DASHBOARD_ISSI: u32 = 9999;
-        let is_local_issi =
-            !dest_is_group && self.config.state_read().subscribers.is_registered(dest_ssi);
-        let is_local_group =
-            dest_is_group && self.config.state_read().subscribers.has_group_members(dest_ssi);
+        let is_local_issi = !dest_is_group && self.config.state_read().subscribers.is_registered(dest_ssi);
+        let is_local_group = dest_is_group && self.config.state_read().subscribers.has_group_members(dest_ssi);
 
-        if source_ssi == DASHBOARD_ISSI
-            && !is_local_issi
-            && !is_local_group
-            && net_brew::feature_sds_enabled(&self.config)
-        {
+        if source_ssi == DASHBOARD_ISSI && !is_local_issi && !is_local_group && net_brew::feature_sds_enabled(&self.config) {
             tracing::info!("SDS: forwarding dashboard SDS to Brew: {} -> {}", source_ssi, dest_ssi);
             queue.push_back(SapMsg {
                 sap: Sap::Control,

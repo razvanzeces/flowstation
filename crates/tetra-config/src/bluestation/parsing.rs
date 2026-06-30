@@ -665,6 +665,18 @@ main_carrier_number = 1586
     }
 
     #[test]
+    fn dgna_attachment_mode_defaults_to_permanent_and_clamps() {
+        let cfg = from_toml_str(&minimal_toml("")).expect("parse");
+        assert_eq!(cfg.cell.dgna_attachment_mode, 0, "absent mode => Attached permanently");
+
+        let cfg = from_toml_str(&minimal_toml("dgna_attachment_mode = 4")).expect("parse");
+        assert_eq!(cfg.cell.dgna_attachment_mode, 4);
+
+        let cfg = from_toml_str(&minimal_toml("dgna_attachment_mode = 99")).expect("parse");
+        assert_eq!(cfg.cell.dgna_attachment_mode, 5, "mode is clamped to the valid Table 16.51 range");
+    }
+
+    #[test]
     fn telegram_alerts_section_parses() {
         let toml = minimal_toml("")
             + r#"

@@ -51,6 +51,8 @@ struct ActiveCall {
     dest_gssi: u32,
     /// Number of voice frames received
     frame_count: u64,
+    /// Last downlink TDMA time at which we told CMCE this call still had network media.
+    last_media_activity_signal: Option<TdmaTime>,
 }
 
 /// Group call in hangtime with circuit still allocated.
@@ -266,7 +268,7 @@ impl BrewEntity {
                     self.handle_group_call_end(queue, uuid, cause);
                 }
                 BrewEvent::VoiceFrame { uuid, length_bits, data } => {
-                    self.handle_voice_frame(uuid, length_bits, data);
+                    self.handle_voice_frame(queue, uuid, length_bits, data);
                 }
                 BrewEvent::SdsTransfer {
                     uuid,
@@ -749,6 +751,7 @@ impl BrewEntity {
                 source_issi,
                 dest_gssi,
                 frame_count: hanging.frame_count,
+                last_media_activity_signal: None,
             };
             self.active_calls.insert(uuid, call);
             self.dl_jitter
@@ -788,6 +791,7 @@ impl BrewEntity {
             source_issi,
             dest_gssi,
             frame_count: 0,
+            last_media_activity_signal: None,
         };
         self.active_calls.insert(uuid, call);
         self.dl_jitter
@@ -814,20 +818,19 @@ impl BrewEntity {
             return;
         };
 
-        // Move jitter buffer to draining instead of dropping it — remaining frames
-        // will continue to be played out until the buffer empties naturally.
-        if let Some(jitter) = self.dl_jitter.remove(&uuid) {
-            if let (Some(carrier_num), Some(ts)) = (call.carrier_num, call.ts) {
-                if !jitter.is_empty() {
-                    tracing::debug!(
-                        "BrewEntity: GROUP_IDLE uuid={} moving {} buffered frames to drain",
-                        uuid,
-                        jitter.len()
-                    );
-                    self.draining_jitter.insert(uuid, (carrier_num, ts, jitter, Instant::now()));
-                }
-            }
+        // GROUP_IDLE is followed immediately by a CMCE release of the traffic slot. Keeping
+        // buffered DL audio alive after this point only feeds UMAC with frames for a circuit that
+        // is already being torn down, which produces repeated "inactive circuit" drops.
+        if let Some(jitter) = self.dl_jitter.remove(&uuid)
+            && !jitter.is_empty()
+        {
+            tracing::debug!(
+                "BrewEntity: GROUP_IDLE uuid={} dropping {} buffered frames before call release",
+                uuid,
+                jitter.len()
+            );
         }
+        self.draining_jitter.remove(&uuid);
 
         tracing::info!(
             "BrewEntity: group call ended uuid={} call_id={:?} gssi={} frames={}",
@@ -899,7 +902,7 @@ impl BrewEntity {
     }
 
     /// Handle a voice frame from Brew — inject into the downlink
-    fn handle_voice_frame(&mut self, uuid: Uuid, _length_bits: u16, data: Vec<u8>) {
+    fn handle_voice_frame(&mut self, queue: &mut MessageQueue, uuid: Uuid, _length_bits: u16, data: Vec<u8>) {
         let Some(call) = self.active_calls.get_mut(&uuid) else {
             // Voice frame for unknown call — might arrive before GROUP_TX or after GROUP_IDLE
             tracing::trace!("BrewEntity: voice frame for unknown uuid={} ({} bytes)", uuid, data.len());
@@ -908,6 +911,20 @@ impl BrewEntity {
 
         call.frame_count += 1;
         let frame_count = call.frame_count;
+        const NETWORK_CALL_ACTIVITY_REFRESH_TS: i32 = 72; // ~1 second
+        let should_refresh_activity = call.dest_gssi != 0
+            && call
+                .last_media_activity_signal
+                .is_none_or(|last| last.age(self.dltime) >= NETWORK_CALL_ACTIVITY_REFRESH_TS);
+        if should_refresh_activity {
+            call.last_media_activity_signal = Some(self.dltime);
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Brew,
+                dest: TetraEntity::Cmce,
+                msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallMediaActivity { brew_uuid: uuid }),
+            });
+        }
         // `ts` is None until NetworkCallReady opens the traffic channel (a brief window after
         // NetworkCallStart). We still buffer early frames below — see the playout note.
         let carrier_num = call.carrier_num;
@@ -1336,6 +1353,7 @@ impl TetraEntityTrait for BrewEntity {
                     source_issi: 0,
                     dest_gssi: 0,
                     frame_count: 0,
+                    last_media_activity_signal: None,
                 });
                 self.dl_jitter
                     .entry(brew_uuid)

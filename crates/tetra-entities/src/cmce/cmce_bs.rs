@@ -36,6 +36,11 @@ impl CmceBs {
             cc.set_telemetry(sink.clone());
         }
 
+        let mut ss = SsBsSubentity::new(config.clone());
+        if let Some(ref sink) = telemetry {
+            ss.set_telemetry(sink.clone());
+        }
+
         Self {
             config: config.clone(),
             telemetry,
@@ -44,7 +49,7 @@ impl CmceBs {
             pc: PcBs::new(),
             sds,
             cc,
-            ss: SsBsSubentity::new(),
+            ss,
         }
     }
 
@@ -90,21 +95,34 @@ impl CmceBs {
                     cep.respond(ControlResponse::KickMsResponse { issi, success });
                 }
             }
-            ControlCommand::Dgna { issi, gssi, attach } => {
+            ControlCommand::Dgna {
+                issi,
+                gssi,
+                mnemonic,
+                attachment_mode,
+                attach,
+            } => {
                 // The dashboard control channel terminates at CMCE, but DGNA is a Mobility
                 // Management procedure — group attach/detach state and the D-ATTACH/DETACH GROUP
                 // IDENTITY send path both live in MM. Forward the request there.
                 tracing::info!(
-                    "CMCE: forwarding DGNA {} of GSSI {} on ISSI {} to MM",
+                    "CMCE: forwarding DGNA {} of GSSI {} on ISSI {} to MM (mnemonic={:?})",
                     if attach { "assign" } else { "deassign" },
                     gssi,
-                    issi
+                    issi,
+                    mnemonic
                 );
                 queue.push_back(SapMsg {
                     sap: Sap::Control,
                     src: TetraEntity::Cmce,
                     dest: TetraEntity::Mm,
-                    msg: SapMsgInner::MmDgnaRequest { issi, gssi, attach },
+                    msg: SapMsgInner::MmDgnaRequest {
+                        issi,
+                        gssi,
+                        mnemonic,
+                        attachment_mode,
+                        attach,
+                    },
                 });
             }
             ControlCommand::RestartService => {
@@ -196,7 +214,9 @@ impl TetraEntityTrait for CmceBs {
     }
 
     fn set_config(&mut self, config: SharedConfig) {
-        self.config = config;
+        self.config = config.clone();
+        self.cc.set_config(config.clone());
+        self.ss.set_config(config);
     }
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
@@ -278,12 +298,21 @@ impl TetraEntityTrait for CmceBs {
                     self.sds.rx_sds_from_brew(queue, message);
                 }
                 ControlRoute::SsDgnaAssign => {
-                    let SapMsgInner::CmceSsDgnaAssign { issi, gssi, attach } = message.msg else {
+                    let SapMsgInner::CmceSsDgnaAssign {
+                        issi,
+                        gssi,
+                        mnemonic,
+                        attachment_mode,
+                        route_gssi_hint,
+                        attach,
+                    } = message.msg
+                    else {
                         unreachable!();
                     };
                     // MM owns the group registry/affiliation; it has already committed the change and
                     // asks CMCE only to put the SS-DGNA ASSIGN/DEASSIGN on the air as a D-FACILITY.
-                    self.ss.send_d_facility_dgna(queue, issi, gssi, attach);
+                    self.ss
+                        .send_d_facility_dgna(queue, issi, gssi, mnemonic, attachment_mode, route_gssi_hint, attach);
                 }
                 ControlRoute::Unsupported => {
                     panic!("Unexpected control message: {:?}", message.msg);

@@ -190,7 +190,11 @@ impl HealthRegistry {
         // Radios. Informational, with a Degraded signal for "attached but silent".
         let radios = self.registered_radios.load(Ordering::Relaxed);
         let last_act = self.last_radio_activity_ms.load(Ordering::Relaxed);
-        let silent_ms = if last_act == 0 { self.now_ms() } else { self.now_ms().saturating_sub(last_act) };
+        let silent_ms = if last_act == 0 {
+            self.now_ms()
+        } else {
+            self.now_ms().saturating_sub(last_act)
+        };
         // Respect the periodic-registration window (ETSI T351): between two periodic
         // registrations a radio is legitimately quiet, so only flag Degraded once the cell has
         // been silent for clearly longer than that window (1.5 × T351, floored by the config).
@@ -198,10 +202,15 @@ impl HealthRegistry {
         let silent_check = floor > 0; // 0 disables the silent-radio signal
         let effective_secs = effective_radios_silent_secs(floor, t.periodic_registration_secs);
         let (rad, rad_detail) = if radios > 0 && silent_check && silent_ms >= effective_secs * 1000 {
-            (HealthLevel::Degraded, format!(
-                "{} attached, silent {}s (exceeds {}s T351 window)",
-                radios, silent_ms / 1000, effective_secs
-            ))
+            (
+                HealthLevel::Degraded,
+                format!(
+                    "{} attached, silent {}s (exceeds {}s T351 window)",
+                    radios,
+                    silent_ms / 1000,
+                    effective_secs
+                ),
+            )
         } else {
             (HealthLevel::Ok, format!("{} attached", radios))
         };

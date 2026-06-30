@@ -8,6 +8,25 @@
 use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
+pub struct MsGroupInfo {
+    pub gssi: u32,
+    pub mnemonic: Option<String>,
+    pub attachment_mode: Option<u8>,
+    pub is_dynamic: bool,
+    pub is_attached: bool,
+}
+
+#[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
+pub struct DgnaStatusInfo {
+    pub issi: u32,
+    pub gssi: u32,
+    pub attach: bool,
+    pub accepted: bool,
+    pub source: String,
+    pub detail: String,
+}
+
 /// TelemetryEvent enum sent by a TetraEntity through the TelemetrySink
 /// then, serializable by any codec for transmission over the network,
 /// using any Transport.
@@ -26,6 +45,11 @@ pub enum TelemetryEvent {
     MsGroupAttach { issi: u32, gssis: Vec<u32> },
     /// Full snapshot of all currently attached groups — emitted after any attach/detach
     MsGroupsSnapshot { issi: u32, gssis: Vec<u32> },
+    /// Full per-MS group catalog, including DGNA/static classification and detached DGNA records.
+    MsGroupCatalogSnapshot { issi: u32, groups: Vec<MsGroupInfo> },
+    /// Backend status for an operator DGNA request. Emitted by MM for acceptance/rejection and by
+    /// CMCE/SS for air-interface progress and SS-DGNA ACK outcomes.
+    DgnaStatus(DgnaStatusInfo),
     /// MS detached from groups
     MsGroupDetach { issi: u32, gssis: Vec<u32> },
     /// RSSI measurement for a known MS (dBFS)
