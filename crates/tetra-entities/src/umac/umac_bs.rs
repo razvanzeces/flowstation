@@ -305,7 +305,7 @@ impl UmacBs {
     /// Otherwise, value from config is used.
     fn get_system_wide_services_state(config: &SharedConfig) -> bool {
         let cfg = config.config();
-        if cfg.brew.is_some() {
+        if cfg.brew.is_some() || cfg.brew2.is_some() {
             config.state_read().network_connected
         } else {
             cfg.cell.system_wide_services
@@ -1658,20 +1658,24 @@ impl UmacBs {
                     });
                 }
 
-                // Forward UL voice to Brew (User plane) if loaded
-                if self.config.config().brew.is_some() {
+                // Fan UL voice out to every configured Brew entity. Each entity accepts only
+                // calls and subscribers assigned to it, preventing cross-server media loops.
+                if self.config.config().brew.is_some() || self.config.config().brew2.is_some() {
                     if self.scheduler_for(carrier_num).circuit_is_active(Direction::Ul, ts) {
-                        let msg = SapMsg {
-                            sap: Sap::TmdSap,
-                            src: TetraEntity::Umac,
-                            dest: TetraEntity::Brew,
-                            msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd {
-                                carrier_num,
-                                ts,
-                                data: data.clone(),
-                            }),
-                        };
-                        queue.push_back(msg);
+                        for dest in crate::net_brew::BREW_ENTITIES {
+                            if crate::net_brew::is_active_for_entity(&self.config, dest) {
+                                queue.push_back(SapMsg {
+                                    sap: Sap::TmdSap,
+                                    src: TetraEntity::Umac,
+                                    dest,
+                                    msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd {
+                                        carrier_num,
+                                        ts,
+                                        data: data.clone(),
+                                    }),
+                                });
+                            }
+                        }
                     } else {
                         tracing::trace!("rx_tmd_prim: no active UL circuit on ts={}, dropping UL voice to Brew", ts);
                     }

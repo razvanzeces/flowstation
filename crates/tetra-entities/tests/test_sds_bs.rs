@@ -198,6 +198,13 @@ fn test_sds_brew_forward() {
         feature_rssi_export: false,
         whitelisted_ssis: None,
         pbx_gateway_issis: None,
+        local_issi_allowlist: None,
+        local_issi_blocklist: Vec::new(),
+        subscriber_type_deregister: 0,
+        subscriber_type_register: 1,
+        subscriber_type_reregister: 2,
+        subscriber_type_affiliate: 8,
+        subscriber_type_deaffiliate: 9,
     });
     let mut test = ComponentTest::from_config(config, Some(dltime));
 
@@ -391,6 +398,13 @@ fn test_brew_inbound_allowed_bypasses_whitelist_but_honors_local_ranges() {
         feature_rssi_export: false,
         whitelisted_ssis: Some(vec![91]), // only GSSI 91 is whitelisted for OUTBOUND forwarding
         pbx_gateway_issis: None,
+        local_issi_allowlist: None,
+        local_issi_blocklist: Vec::new(),
+        subscriber_type_deregister: 0,
+        subscriber_type_register: 1,
+        subscriber_type_reregister: 2,
+        subscriber_type_affiliate: 8,
+        subscriber_type_deaffiliate: 9,
     });
     let test = ComponentTest::from_config(config, None);
 
@@ -496,6 +510,13 @@ fn test_u_status_brew_forward() {
         feature_rssi_export: false,
         whitelisted_ssis: None,
         pbx_gateway_issis: None,
+        local_issi_allowlist: None,
+        local_issi_blocklist: Vec::new(),
+        subscriber_type_deregister: 0,
+        subscriber_type_register: 1,
+        subscriber_type_reregister: 2,
+        subscriber_type_affiliate: 8,
+        subscriber_type_deaffiliate: 9,
     });
     let mut test = ComponentTest::from_config(config, Some(dltime));
 
@@ -1008,6 +1029,13 @@ fn brew_test_config() -> tetra_config::bluestation::StackConfig {
         feature_rssi_export: false,
         whitelisted_ssis: None,
         pbx_gateway_issis: None,
+        local_issi_allowlist: None,
+        local_issi_blocklist: Vec::new(),
+        subscriber_type_deregister: 0,
+        subscriber_type_register: 1,
+        subscriber_type_reregister: 2,
+        subscriber_type_affiliate: 8,
+        subscriber_type_deaffiliate: 9,
     });
     config
 }

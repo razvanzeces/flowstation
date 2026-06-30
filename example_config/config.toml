@@ -686,6 +686,45 @@ voice_service = true
 # Optional PBX gateway ISSIs that should always be considered Brew-routable
 # (useful for phone/PBX interconnect IDs that do not follow normal Tetrapack ISSI rules)
 # pbx_gateway_issis = [16777184, 16777186]
+#
+# OPTIONAL: local ISSI partition for multi-Brew setups.
+# With only one Brew server this can stay commented for legacy behaviour. If [brew2]
+# is configured too, both [brew] and [brew2] MUST set a non-empty local_issi_allowlist,
+# and the two lists must not overlap. This prevents the same radio from registering
+# or forwarding traffic through both Brew servers.
+# Include the source ISSI used by dashboard/integration SDS (normally 9999) on
+# exactly one server when those messages should leave through Brew.
+# local_issi_allowlist = [2632585, 2635411, 9999]
+# local_issi_blocklist = []
+#
+# Subscriber message type mapping. These TetraPack defaults can be overridden
+# independently for Brew servers that use another mapping.
+# subscriber_type_deregister = 0
+# subscriber_type_register = 1
+# subscriber_type_reregister = 2
+# subscriber_type_affiliate = 8
+# subscriber_type_deaffiliate = 9
+#
+# OPTIONAL: second Brew server. Same keys as [brew]. Use non-overlapping
+# local_issi_allowlist entries so every local ISSI belongs to exactly one server.
+# [brew2]
+# host = "second.brew.example"
+# port = 9000
+# tls = true
+# username = 123456701
+# password = "012345"
+# reconnect_delay_secs = 15
+# feature_sds_enabled = true
+# feature_rssi_export = false
+# whitelisted_ssis = [92]
+# pbx_gateway_issis = []
+# local_issi_allowlist = [2636000, 2636001]
+# local_issi_blocklist = []
+# subscriber_type_deregister = 0
+# subscriber_type_register = 1
+# subscriber_type_reregister = 2
+# subscriber_type_affiliate = 8
+# subscriber_type_deaffiliate = 9
 
 ###############################################################################
 

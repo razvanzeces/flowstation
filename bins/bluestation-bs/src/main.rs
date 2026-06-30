@@ -209,7 +209,7 @@ fn build_bs_stack(
         let hcfg = cfg.config().health.clone();
         if hcfg.enabled {
             use std::time::Duration;
-            tetra_entities::health::registry().set_brew_configured(cfg.config().brew.is_some());
+            tetra_entities::health::registry().set_brew_configured(cfg.config().brew.is_some() || cfg.config().brew2.is_some());
             tetra_entities::health::spawn_health_monitor(
                 sink.clone(),
                 tetra_entities::health::HealthMonitorConfig {
@@ -284,12 +284,21 @@ fn build_bs_stack(
     // Register Brew entity if enabled
     if let Some(ref brew_cfg) = cfg.config().brew {
         let transport = new_websocket_transport(brew_cfg);
-        let mut brew_entity = BrewEntity::new(cfg.clone(), transport);
+        let mut brew_entity = BrewEntity::new(cfg.clone(), TetraEntity::Brew, brew_cfg.clone(), transport);
         if let Some(ref sink) = tsink {
             brew_entity.set_telemetry_sink(sink.clone());
         }
         router.register_entity(Box::new(brew_entity));
         eprintln!(" -> Brew/TetraPack integration enabled");
+    }
+    if let Some(ref brew_cfg) = cfg.config().brew2 {
+        let transport = new_websocket_transport(brew_cfg);
+        let mut brew_entity = BrewEntity::new(cfg.clone(), TetraEntity::Brew2, brew_cfg.clone(), transport);
+        if let Some(ref sink) = tsink {
+            brew_entity.set_telemetry_sink(sink.clone());
+        }
+        router.register_entity(Box::new(brew_entity));
+        eprintln!(" -> Brew2/TetraPack integration enabled");
     }
 
     // Register Asterisk SIP/RTP entity if enabled. Only compiled in with the

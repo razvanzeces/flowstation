@@ -335,28 +335,34 @@ impl MmBs {
         // decides whether to send REGISTER or REREGISTER based on its own state.
         // Affiliate/Deaffiliate only sent when there are brew-routable groups.
         if net_brew::is_active(&self.config) {
-            let brew_groups = groups
-                .iter()
-                .filter(|gssi| net_brew::is_brew_gssi_routable(&self.config, **gssi))
-                .copied()
-                .collect::<Vec<u32>>();
-            let should_send = match action {
-                BrewSubscriberAction::Register | BrewSubscriberAction::Deregister => net_brew::is_brew_issi_routable(&self.config, issi),
-                BrewSubscriberAction::Affiliate | BrewSubscriberAction::Deaffiliate => !brew_groups.is_empty(),
-            };
-            if should_send {
-                let brew_update = MmSubscriberUpdate {
-                    issi,
-                    groups: brew_groups,
-                    action,
+            for dest in net_brew::BREW_ENTITIES {
+                if !net_brew::is_brew_local_issi_allowed_for_entity(&self.config, dest, issi)
+                    || !net_brew::is_brew_issi_routable_for_entity(&self.config, dest, issi)
+                {
+                    continue;
+                }
+                let brew_groups = groups
+                    .iter()
+                    .filter(|gssi| net_brew::is_brew_gssi_routable_for_entity(&self.config, dest, **gssi))
+                    .copied()
+                    .collect::<Vec<u32>>();
+                let should_send = match action {
+                    BrewSubscriberAction::Register | BrewSubscriberAction::Deregister => true,
+                    BrewSubscriberAction::Affiliate | BrewSubscriberAction::Deaffiliate => !brew_groups.is_empty(),
                 };
-                let msg = SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Mm,
-                    dest: TetraEntity::Brew,
-                    msg: SapMsgInner::MmSubscriberUpdate(brew_update),
-                };
-                queue.push_back(msg);
+                if should_send {
+                    let brew_update = MmSubscriberUpdate {
+                        issi,
+                        groups: brew_groups,
+                        action,
+                    };
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Mm,
+                        dest,
+                        msg: SapMsgInner::MmSubscriberUpdate(brew_update),
+                    });
+                }
             }
         }
 
@@ -2092,12 +2098,16 @@ impl TetraEntityTrait for MmBs {
                         }
                         // Forward to Brew entity for optional export to Brew server.
                         // BrewEntity applies its own rate limiting and checks feature_rssi_export.
-                        queue.push_back(SapMsg {
-                            sap: Sap::Control,
-                            src: TetraEntity::Mm,
-                            dest: TetraEntity::Brew,
-                            msg: SapMsgInner::MsRssiUpdate { issi, rssi_dbfs },
-                        });
+                        for dest in net_brew::BREW_ENTITIES {
+                            if net_brew::is_active_for_entity(&self.config, dest) {
+                                queue.push_back(SapMsg {
+                                    sap: Sap::Control,
+                                    src: TetraEntity::Mm,
+                                    dest,
+                                    msg: SapMsgInner::MsRssiUpdate { issi, rssi_dbfs },
+                                });
+                            }
+                        }
                     }
                     SapMsgInner::MmSubscriberUpdate(update) => {
                         // CMCE can ask MM to deregister an MS (e.g. kick from dashboard)

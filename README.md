@@ -289,11 +289,63 @@ username = 123456700
 password = "your_password"
 ```
 
+Optional second Brew backhaul:
+
+```toml
+[brew]
+host = "core-a.example"
+username = 123456700
+password = "..."
+local_issi_allowlist = [2632585]
+local_issi_blocklist = []
+
+[brew2]
+host = "core-b.example"
+username = 123456701
+password = "..."
+local_issi_allowlist = [2635411]
+local_issi_blocklist = []
+```
+
+When both `[brew]` and `[brew2]` are configured, each section must define a
+non-empty `local_issi_allowlist`, and the lists must not overlap. Registrations,
+SDS, voice forwarding, RSSI export, and group-call lifecycle events are routed to
+exactly one Brew server by the local source ISSI, preventing loops or A↔B
+forwarding between Brew backhauls. `local_issi_blocklist` is applied after the
+allowlist and can be used to exclude a terminal from one Brew server without
+changing larger allowlist ranges/lists.
+
+`local_issi_whitelist` / `issi_whitelist` and
+`local_issi_blacklist` / `issi_blacklist` remain accepted aliases. The explicit
+`allowlist` and `blocklist` names above are preferred.
+
+Different Brew implementations may use different subscriber message type
+numbers. Defaults are compatible with TetraPack (`0/1/2/8/9`); override them per
+server only when its documentation requires it:
+
+```toml
+subscriber_type_deregister = 0
+subscriber_type_register = 1
+subscriber_type_reregister = 2
+subscriber_type_affiliate = 8
+subscriber_type_deaffiliate = 9
+```
+
+Loop protection also rejects Brew-originated subscriber state for
+`cell_info.local_ssi_ranges` and for every ISSI assigned to either local Brew
+allowlist. A local terminal is therefore never mirrored back from Brew into
+CMCE as an external listener.
+
+In a dual-Brew setup, assign the configured source ISSI for dashboard and
+integration-generated SDS (normally `9999`) to exactly one server's
+`local_issi_allowlist`. This selects which backhaul carries those messages; it
+does not expose Brew-originated state for that reserved local ISSI.
+
 ### Asterisk SIP/RTP bridge
 
 FlowStation can register as a PJSIP endpoint and bridge calls between TETRA
 terminals and Asterisk phones. Brew remains available in parallel; only configured
-service numbers are routed to Asterisk.
+service numbers are routed to Asterisk, unless a wildcard is configured.
 
 ```toml
 [asterisk]
@@ -360,6 +412,12 @@ qualify_frequency=30
 
 `service_numbers` is deliberately an allowlist. If a TETRA user dials `91385`,
 FlowStation strips `91`, checks that `385` is listed, then calls SIP user `385`.
+To route every `91...` dial to Asterisk, set `service_numbers = ["*"]`.
+Alternatively, `outbound_prefix = "91*"` makes the prefix itself a wildcard. More
+specific prefix wildcards are also allowed inside `service_numbers`, for example
+`["38*"]` routes `9138...` to Asterisk after stripping `91`. Exact entries still
+work as before, so `service_numbers = ["385"]` permits `91385` and direct `385`,
+but not `91600`.
 
 ### Telegram alerts
 

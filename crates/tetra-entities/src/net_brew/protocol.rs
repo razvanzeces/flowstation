@@ -576,83 +576,64 @@ pub fn build_dtmf_frame(session_uuid: &Uuid, length_bits: u16, data: &[u8]) -> V
 }
 
 pub fn build_subscriber_register(issi: u32, groups: &[u32]) -> Vec<u8> {
+    build_subscriber_register_with_type(issi, groups, BREW_SUBSCRIBER_REGISTER)
+}
+
+pub fn build_subscriber_register_with_type(issi: u32, groups: &[u32], msg_type: u8) -> Vec<u8> {
+    build_subscriber_message(issi, msg_type, groups)
+}
+
+fn build_subscriber_message(issi: u32, msg_type: u8, groups: &[u32]) -> Vec<u8> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
 
     let mut buf = Vec::with_capacity(18 + groups.len() * 4);
     buf.push(BREW_CLASS_SUBSCRIBER);
-    buf.push(BREW_SUBSCRIBER_REGISTER);
+    buf.push(msg_type);
     write_u32_le(&mut buf, issi);
     write_u64_le(&mut buf, now.as_secs());
     write_u32_le(&mut buf, now.subsec_nanos());
+    for &gssi in groups {
+        write_u32_le(&mut buf, gssi);
+    }
     buf
 }
 
 /// Build a subscriber re-registration message (for already-registered subscribers)
 pub fn build_subscriber_reregister(issi: u32) -> Vec<u8> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    build_subscriber_reregister_with_type(issi, BREW_SUBSCRIBER_REREGISTER)
+}
 
-    let mut buf = Vec::with_capacity(18);
-    buf.push(BREW_CLASS_SUBSCRIBER);
-    buf.push(BREW_SUBSCRIBER_REREGISTER);
-    write_u32_le(&mut buf, issi);
-    write_u64_le(&mut buf, now.as_secs());
-    write_u32_le(&mut buf, now.subsec_nanos());
-    buf
+pub fn build_subscriber_reregister_with_type(issi: u32, msg_type: u8) -> Vec<u8> {
+    build_subscriber_message(issi, msg_type, &[])
 }
 
 /// Build a subscriber affiliation message
 pub fn build_subscriber_affiliate(issi: u32, groups: &[u32]) -> Vec<u8> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    build_subscriber_affiliate_with_type(issi, groups, BREW_SUBSCRIBER_AFFILIATE)
+}
 
-    let mut buf = Vec::with_capacity(18 + groups.len() * 4);
-    buf.push(BREW_CLASS_SUBSCRIBER);
-    buf.push(BREW_SUBSCRIBER_AFFILIATE);
-    write_u32_le(&mut buf, issi);
-    write_u64_le(&mut buf, now.as_secs());
-    write_u32_le(&mut buf, now.subsec_nanos());
-    for &gssi in groups {
-        write_u32_le(&mut buf, gssi);
-    }
-    buf
+pub fn build_subscriber_affiliate_with_type(issi: u32, groups: &[u32], msg_type: u8) -> Vec<u8> {
+    build_subscriber_message(issi, msg_type, groups)
 }
 
 /// Build a subscriber deaffiliation message
 pub fn build_subscriber_deaffiliate(issi: u32, groups: &[u32]) -> Vec<u8> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    build_subscriber_deaffiliate_with_type(issi, groups, BREW_SUBSCRIBER_DEAFFILIATE)
+}
 
-    let mut buf = Vec::with_capacity(18 + groups.len() * 4);
-    buf.push(BREW_CLASS_SUBSCRIBER);
-    buf.push(BREW_SUBSCRIBER_DEAFFILIATE);
-    write_u32_le(&mut buf, issi);
-    write_u64_le(&mut buf, now.as_secs());
-    write_u32_le(&mut buf, now.subsec_nanos());
-    for &gssi in groups {
-        write_u32_le(&mut buf, gssi);
-    }
-    buf
+pub fn build_subscriber_deaffiliate_with_type(issi: u32, groups: &[u32], msg_type: u8) -> Vec<u8> {
+    build_subscriber_message(issi, msg_type, groups)
 }
 
 /// Build a subscriber deregistration message
 pub fn build_subscriber_deregister(issi: u32) -> Vec<u8> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    build_subscriber_deregister_with_type(issi, BREW_SUBSCRIBER_DEREGISTER)
+}
 
-    let mut buf = Vec::with_capacity(18);
-    buf.push(BREW_CLASS_SUBSCRIBER);
-    buf.push(BREW_SUBSCRIBER_DEREGISTER);
-    write_u32_le(&mut buf, issi);
-    write_u64_le(&mut buf, now.as_secs());
-    write_u32_le(&mut buf, now.subsec_nanos());
-    buf
+pub fn build_subscriber_deregister_with_type(issi: u32, msg_type: u8) -> Vec<u8> {
+    build_subscriber_message(issi, msg_type, &[])
 }
 
 /// Build a group call transmission start message (GROUP_TX)
