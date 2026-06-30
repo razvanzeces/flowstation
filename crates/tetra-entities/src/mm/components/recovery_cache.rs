@@ -235,6 +235,7 @@ mod tests {
             vec![TerminalRecord {
                 issi: 7,
                 groups: vec![],
+                dgna_groups: vec![],
                 energy_saving_mode: 0,
             }]
         });
@@ -246,6 +247,7 @@ mod tests {
             vec![TerminalRecord {
                 issi: 7,
                 groups: vec![],
+                dgna_groups: vec![],
                 energy_saving_mode: 0,
             }]
         });

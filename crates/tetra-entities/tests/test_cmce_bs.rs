@@ -2057,10 +2057,6 @@ mod ss_dgna_tests {
     /// Build a MM(+control)/CMCE stack with the Mle sink, register the terminal, drive a DGNA, and
     /// return everything captured at the sinks.
     fn run_dgna(attach: bool, mnemonic: Option<&str>) -> (ComponentTest, Vec<SapMsg>) {
-        run_dgna_with_traffic(attach, mnemonic, None)
-    }
-
-    fn run_dgna_with_traffic(attach: bool, mnemonic: Option<&str>, traffic: Option<(u16, u8, u8)>) -> (ComponentTest, Vec<SapMsg>) {
         let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
         test.populate_entities(vec![], vec![TetraEntity::Mle]);
 
@@ -2074,9 +2070,6 @@ mod ss_dgna_tests {
 
         register_terminal_mm(&mut test, DGNA_ISSI);
         let _ = test.dump_sinks();
-        if let Some(call_ts) = traffic {
-            test.config.state_write().active_call_ts.insert(DGNA_ISSI, call_ts);
-        }
 
         if !attach {
             // Assign first so there is something to deassign.
@@ -2166,10 +2159,57 @@ mod ss_dgna_tests {
         assert!(req.chan_alloc.is_none(), "idle DGNA should not carry chan_alloc");
     }
 
+    /// Put DGNA_ISSI into a live group call (so it is parked on a real traffic channel), then
+    /// drive a DGNA to it. The "in call" condition must be a genuine call: `active_call_ts` is a
+    /// projection CMCE rebuilds from the live call tables on every tick (`publish_active_call_ts`),
+    /// so poking it directly does not survive into the DGNA delivery decision. Returns the stack
+    /// and the messages captured during the DGNA phase only.
+    fn run_dgna_to_ms_in_group_call() -> (ComponentTest, Vec<SapMsg>) {
+        const IN_CALL_GSSI: u32 = 7777;
+        let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+        test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
+
+        let (dispatcher, endpoint) = make_control_link();
+        let cmce = CmceBs::new(test.get_shared_config(), None, Some(endpoint));
+        test.register_entity(cmce);
+        let mm = MmBs::new(test.get_shared_config(), None, None);
+        test.register_entity(mm);
+
+        register_terminal_mm(&mut test, DGNA_ISSI);
+        // CC needs the subscriber + its affiliation before it will set up the group call.
+        register_subscriber(&mut test, DGNA_ISSI, IN_CALL_GSSI);
+
+        // DGNA_ISSI opens a group call, becoming the speaker on an allocated traffic channel, so the
+        // live-call projection lists it. This is exactly what the in-call DGNA path keys on.
+        test.submit_message(build_u_setup_msg(DGNA_ISSI, IN_CALL_GSSI));
+        test.run_stack(Some(2));
+        let _ = test.dump_sinks();
+
+        dispatcher.send(ControlCommand::Dgna {
+            issi: DGNA_ISSI,
+            gssi: DGNA_GSSI,
+            mnemonic: None,
+            attachment_mode: 0,
+            attach: true,
+        });
+        test.run_stack(Some(6));
+        let msgs = test.dump_sinks();
+        (test, msgs)
+    }
+
     #[test]
     fn test_dgna_assign_to_in_call_ms_uses_facch_stealing() {
         debug::setup_logging_verbose();
-        let (_test, msgs) = run_dgna_with_traffic(true, None, Some((SECONDARY_CARRIER, 3, 9)));
+        let (test, msgs) = run_dgna_to_ms_in_group_call();
+
+        // The traffic channel the call was actually allocated — the DGNA must steal onto exactly it.
+        let (carrier, ts, usage) = test
+            .config
+            .state_read()
+            .active_call_ts
+            .get(&DGNA_ISSI)
+            .copied()
+            .expect("DGNA_ISSI must be parked on a traffic channel while in a group call");
 
         let req = find_d_facility_req(&msgs).expect("expected D-FACILITY request");
         assert_eq!(req.main_address.ssi, DGNA_ISSI);
@@ -2180,10 +2220,12 @@ mod ss_dgna_tests {
         );
         assert!(req.stealing_permission, "in-call DGNA should request stealing");
         let chan_alloc = req.chan_alloc.as_ref().expect("in-call DGNA should carry chan_alloc");
-        assert_eq!(chan_alloc.carrier, Some(SECONDARY_CARRIER));
-        assert_eq!(chan_alloc.usage, Some(9));
+        assert_eq!(chan_alloc.carrier, Some(carrier), "DGNA must steal onto the call's carrier");
+        assert_eq!(chan_alloc.usage, Some(usage), "DGNA must steal onto the call's usage marker");
         assert_eq!(chan_alloc.ul_dl_assigned, UlDlAssignment::Dl);
-        assert_eq!(chan_alloc.timeslots, [false, false, true, false]);
+        let mut expected_ts = [false; 4];
+        expected_ts[(ts - 1) as usize] = true;
+        assert_eq!(chan_alloc.timeslots, expected_ts, "DGNA must steal onto the call's timeslot");
     }
 
     /// Operator DGNA deassign emits a D-FACILITY{DEASSIGN} naming the GSSI and removes the

@@ -57,6 +57,7 @@ pub fn default_cell_info(freq_info: FreqInfo) -> CfgCellInfo {
     CfgCellInfo {
         colour_code: 1,
         location_area: 2,
+        dgna_attachment_mode: 0,
         main_carrier: freq_info.carrier,
         secondary_carrier: None,
         freq_band: freq_info.band,

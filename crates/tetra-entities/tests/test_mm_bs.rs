@@ -71,6 +71,7 @@ fn find_ss_dgna_request(msgs: &[SapMsg]) -> Option<(u32, u32, Option<String>, u8
             gssi,
             ref mnemonic,
             attachment_mode,
+            route_gssi_hint: _,
             attach,
         } if m.dest == TetraEntity::Cmce => Some((issi, gssi, mnemonic.clone(), attachment_mode, attach)),
         _ => None,
