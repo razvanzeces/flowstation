@@ -507,7 +507,11 @@ struct OpenedDevice {
     soapyremote_used: bool,
 }
 
-fn open_given_device(dev_args: soapysdr::Args) -> Result<OpenedDevice, soapysdr::Error> {
+/// Open one device and classify it. `allow_generic` decides what happens to a device
+/// whose keys we don't recognise: an explicitly configured `device=` (true) runs with
+/// generic settings so the user isn't blocked, while auto-detect (false) skips it and
+/// keeps looking rather than grabbing arbitrary hardware.
+fn open_given_device(dev_args: soapysdr::Args, allow_generic: bool) -> Result<OpenedDevice, soapysdr::Error> {
     let soapyremote_used = match dev_args.get("driver") {
         Some("remote") => true,
         _ => false,
@@ -525,39 +529,70 @@ fn open_given_device(dev_args: soapysdr::Args) -> Result<OpenedDevice, soapysdr:
     let driver_key = dev.driver_key().unwrap_or_default();
     let hardware_key = dev.hardware_key().unwrap_or_default();
 
-    // Check whether the device is supported
-    if let Some(detected_device) = SupportedDevice::detect(&driver_key, &hardware_key) {
-        tracing::info!(
-            "Found supported device with driver_key '{}' hardware_key '{}'",
-            driver_key,
-            hardware_key
-        );
-        Ok(OpenedDevice {
-            dev_args,
-            dev,
-            driver_key,
-            hardware_key,
-            detected_device,
-            soapyremote_used,
-        })
-    } else {
-        tracing::info!(
-            "Skipping unsupported device with driver_key '{}' hardware_key '{}'",
-            driver_key,
-            hardware_key
-        );
-        Err(soapysdr::Error {
-            code: soapysdr::ErrorCode::NotSupported,
-            message: "Unsupported device".to_string(),
-        })
-    }
+    // Log the raw keys on EVERY probe (matched or not). This is the only place the real
+    // driver_key/hardware_key surface, so it's what lets us identify a misdetected or
+    // brand-new board from the journal without guessing (see FH-BUG-081).
+    tracing::info!("Probing SoapySDR device: driver_key='{}' hardware_key='{}'", driver_key, hardware_key);
+
+    // Classify the device.
+    let detected_device = match SupportedDevice::detect(&driver_key, &hardware_key) {
+        Some(device) => device,
+        None if allow_generic => {
+            tracing::warn!(
+                "Unrecognised SDR (driver_key='{}' hardware_key='{}'), using generic settings",
+                driver_key,
+                hardware_key
+            );
+            SupportedDevice::Generic {
+                driver_key: driver_key.clone(),
+                hardware_key: hardware_key.clone(),
+            }
+        }
+        None => {
+            tracing::info!(
+                "Unrecognised SDR (driver_key='{}' hardware_key='{}'), skipping in auto-detect; \
+                 set `device=` in [phy_io.soapysdr] to force it (runs with generic settings)",
+                driver_key,
+                hardware_key
+            );
+            return Err(soapysdr::Error {
+                code: soapysdr::ErrorCode::NotSupported,
+                message: "Unsupported device".to_string(),
+            });
+        }
+    };
+
+    Ok(OpenedDevice {
+        dev_args,
+        dev,
+        driver_key,
+        hardware_key,
+        detected_device,
+        soapyremote_used,
+    })
 }
 
 /// Enumerate devices and find the first supported device
 fn find_supported_device(filter_args: soapysdr::Args) -> Result<OpenedDevice, soapysdr::Error> {
-    for dev_args in soapycheck!("Enumerate SoapySDR devices", soapysdr::enumerate(filter_args)) {
-        //tracing::info!("Trying to open a device with arguments: {}", args_formatted);
-        match open_given_device(dev_args) {
+    let devices = soapycheck!("Enumerate SoapySDR devices", soapysdr::enumerate(filter_args));
+    tracing::info!("SoapySDR enumerated {} device(s)", devices.len());
+    if devices.len() > 1 {
+        // More than one SDR on the same host (e.g. an SXceiver *and* a µCell on the same
+        // Pi). We take the first *supported* one, which is enumeration order, not user
+        // intent, so the dashboard badge can end up showing the wrong board. Make that
+        // explicit and point at the fix instead of silently picking one. This is the
+        // actual mechanism behind FH-BUG-081.
+        tracing::warn!(
+            "Multiple SoapySDR devices present ({}); auto-selecting the first supported one. \
+             Set `device=` in [phy_io.soapysdr] to pick a specific board.",
+            devices.len()
+        );
+        for (i, d) in devices.iter().enumerate() {
+            tracing::info!("  enumerated device {}: {}", i, d);
+        }
+    }
+    for dev_args in devices {
+        match open_given_device(dev_args, false) {
             Ok(opened_device) => return Ok(opened_device),
             Err(_) => {}
         }
@@ -572,10 +607,16 @@ fn find_supported_device(filter_args: soapysdr::Args) -> Result<OpenedDevice, so
 /// automatically find the first supported device if not.
 fn open_device(soapy_cfg: &CfgSoapySdr, mode: StackMode) -> Result<(soapysdr::Device, SdrSettings), soapysdr::Error> {
     let mut opened_device = if let Some(arg_string) = &soapy_cfg.device {
-        open_given_device(arg_string.as_str().into())
+        // User named a specific device: honour it even if we don't recognise its keys.
+        open_given_device(arg_string.as_str().into(), true)
     } else {
         find_supported_device(soapysdr::Args::new())
     }?;
+
+    // Record the raw driver_key/hardware_key next to the friendly name (which
+    // get_settings sets), so the dashboard/telemetry can show what the SDR actually
+    // reports and a misdetection is visible without SSH.
+    soapy_settings::set_detected_sdr_keys(&opened_device.driver_key, &opened_device.hardware_key);
 
     let mut sdr_settings = match SdrSettings::get_settings(&soapy_cfg, opened_device.detected_device, mode) {
         Ok(sdr_settings) => sdr_settings,

@@ -640,6 +640,16 @@ voice_service = true
 # Format: {"issi": 2260570, "rssi_dbfs": -42.3}
 # feature_rssi_export = false
 
+# FH-BUG-079: accept the ISSI registration whitelist pushed by the core over Brew
+# (Service 0xf4 type 0x30, payload {"issi_whitelist":[...]}). For firewalled cells the
+# dashboard /api/whitelist HTTP path is unreachable, so the core delivers it over the
+# outbound Brew link instead. DISABLED by default — enabling it lets the remote core drive
+# this cell's access control, so it is opt-in. The pushed list is applied via the same path
+# as the dashboard (runtime override + [security] issi_whitelist rewrite), and an empty list
+# is interpreted by the local [security] whitelist_mode (open under "auto", deny-all under
+# "enforce"), never forced open.
+# feature_issi_whitelist_sync = false
+
 # OPTIONAL: restrict OUTBOUND Brew forwarding to selected SSIs.
 # This is an OUTBOUND-only filter (FH-FEAT-032 R3): only calls/SDS TO these SSIs are
 # forwarded from this cell out to Brew. INBOUND Brew traffic is NOT filtered by this

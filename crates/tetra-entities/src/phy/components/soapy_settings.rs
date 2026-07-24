@@ -14,6 +14,24 @@ pub fn detected_sdr_name() -> Option<String> {
     DETECTED_SDR_NAME.get().cloned()
 }
 
+/// Raw SoapySDR `(driver_key, hardware_key)` of the opened device, recorded next to
+/// the friendly name. The name is a best-effort guess; these keys are the ground truth.
+/// Exposing them lets the dashboard show what the SDR actually reports, so a
+/// misdetection (FH-BUG-081) is visible without SSHing in to read the log.
+static DETECTED_SDR_KEYS: OnceLock<(String, String)> = OnceLock::new();
+
+/// Public accessor for the dashboard / telemetry. `(driver_key, hardware_key)`.
+/// Returns `None` if no SDR has been opened yet.
+pub fn detected_sdr_keys() -> Option<(String, String)> {
+    DETECTED_SDR_KEYS.get().cloned()
+}
+
+/// Record the raw device keys. Called by soapyio once a device is opened.
+/// First device wins, like `DETECTED_SDR_NAME`; calling again is a no-op.
+pub fn set_detected_sdr_keys(driver_key: &str, hardware_key: &str) {
+    let _ = DETECTED_SDR_KEYS.set((driver_key.to_string(), hardware_key.to_string()));
+}
+
 /// Enum of all supported devices
 pub enum SupportedDevice {
     LimeSdr(LimeSdrModel),
@@ -21,6 +39,10 @@ pub enum SupportedDevice {
     MuCell,
     PlutoSdr,
     Usrp(UsrpModel),
+    /// A device that opened but whose keys we don't recognise. Carries the raw keys
+    /// so the badge can read "Unknown SDR (..)" instead of confidently guessing a
+    /// specific board. Only produced when the user pointed us at an explicit `device=`.
+    Generic { driver_key: String, hardware_key: String },
 }
 
 #[derive(Debug, PartialEq)]
@@ -53,6 +75,12 @@ impl SupportedDevice {
             ("FT601", "LimeNET-Micro") => Some(Self::LimeSdr(LimeSdrModel::LimeNetMicro)),
             ("FT601", _) => Some(Self::LimeSdr(LimeSdrModel::OtherFt601)),
 
+            // These two custom TETRA boards ship distinct SoapySDR drivers, so they are
+            // told apart purely by driver_key ("sx" vs "mucell"). hardware_key isn't
+            // reliably populated by either, hence the wildcard. Keep these mutually
+            // exclusive: if a future board ever *shares* a driver_key, matching must move
+            // to hardware_key or a device arg (label/serial) or one board will be shown as
+            // the other. (FH-BUG-081 was actually enumeration order, not cross-mapping.)
             ("sx", _) => Some(Self::SXceiver),
             ("mucell", _) => Some(Self::MuCell),
 
@@ -173,6 +201,10 @@ impl SdrSettings {
             SupportedDevice::PlutoSdr => Self::settings_pluto(mode),
 
             SupportedDevice::Usrp(model) => Self::settings_usrp(mode, model),
+
+            SupportedDevice::Generic { driver_key, hardware_key } => {
+                Self::settings_generic(mode, &driver_key, &hardware_key)
+            }
         }
     }
 
@@ -342,6 +374,17 @@ impl SdrSettings {
             ..Self::default(mode)
         }
     }
+
+    /// Fallback for a device that opened but whose keys we don't recognise.
+    /// Uses the neutral defaults and puts the raw keys in the name, so the dashboard
+    /// badge stays honest ("Unknown SDR (..)") instead of mislabelling the board.
+    /// Only reached via an explicit `device=` — auto-detect skips unknown devices.
+    fn settings_generic(mode: StackMode, driver_key: &str, hardware_key: &str) -> Self {
+        Self {
+            name: format!("Unknown SDR ({} / {})", driver_key, hardware_key),
+            ..Self::default(mode)
+        }
+    }
 }
 
 /// Get processing block size in samples for a given sample rate.
@@ -351,4 +394,48 @@ pub fn block_size(fs: f64) -> usize {
     // It is a bit bug prone to have it here in case
     // FCFB parameters are changed, but it makes things simpler for now.
     (fs * 1.5e-3).round() as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_distinguishes_sxceiver_and_mucell() {
+        // The two custom TETRA boards report distinct driver_keys ("sx" vs "mucell",
+        // per the reporter's `SoapySDRUtil --find`); each must map to its own device
+        // regardless of hardware_key. This is the arm behind FH-BUG-081's badge.
+        assert!(matches!(SupportedDevice::detect("sx", ""), Some(SupportedDevice::SXceiver)));
+        assert!(matches!(SupportedDevice::detect("sx", "whatever"), Some(SupportedDevice::SXceiver)));
+        assert!(matches!(SupportedDevice::detect("mucell", ""), Some(SupportedDevice::MuCell)));
+        assert!(matches!(SupportedDevice::detect("mucell", "whatever"), Some(SupportedDevice::MuCell)));
+    }
+
+    #[test]
+    fn detect_does_not_cross_map_or_guess() {
+        // sx must never resolve to µCell and vice-versa...
+        assert!(!matches!(SupportedDevice::detect("sx", ""), Some(SupportedDevice::MuCell)));
+        assert!(!matches!(SupportedDevice::detect("mucell", ""), Some(SupportedDevice::SXceiver)));
+        // ...and an unknown / ambiguous driver_key must fall through to None, not be
+        // guessed as either board. detect() never fabricates a Generic; that decision
+        // (explicit device -> generic, auto-detect -> skip) belongs to the caller.
+        assert!(SupportedDevice::detect("lime", "SomeSharedBoard").is_none());
+        assert!(SupportedDevice::detect("SX", "").is_none()); // case-sensitive on purpose
+        assert!(SupportedDevice::detect("", "").is_none());
+        assert!(SupportedDevice::detect("rtlsdr", "generic").is_none());
+    }
+
+    #[test]
+    fn detect_still_covers_untouched_arms() {
+        // Guard the exact-tuple arms we deliberately left as-is.
+        assert!(matches!(
+            SupportedDevice::detect("FX3", "LimeSDR-USB"),
+            Some(SupportedDevice::LimeSdr(LimeSdrModel::LimeSdrUsb))
+        ));
+        assert!(matches!(
+            SupportedDevice::detect("b200", "B210"),
+            Some(SupportedDevice::Usrp(UsrpModel::B210))
+        ));
+        assert!(matches!(SupportedDevice::detect("PlutoSDR", ""), Some(SupportedDevice::PlutoSdr)));
+    }
 }

@@ -117,6 +117,11 @@ pub enum BrewEvent {
 
     /// Error from server
     ServerError { error_type: u8, data: Vec<u8> },
+
+    /// ISSI registration whitelist pushed by the core over Brew Service 0xf4 type 0x30
+    /// (FH-BUG-079). The entity applies it as the runtime whitelist override. Already sanitised
+    /// (sorted, deduped, each ISSI in `1..=0xFF_FFFF`).
+    IssiWhitelistUpdate { issi_whitelist: Vec<u32> },
 }
 
 /// Commands the BrewEntity sends to the worker
@@ -227,6 +232,27 @@ struct PendingSds {
     received_at: Instant,
 }
 
+/// JSON payload of a `BREW_SERVICE_ISSI_WHITELIST` (0x30) Service message pushed by the core:
+/// `{"issi_whitelist":[889468, 980001, ...]}` (FH-BUG-079).
+#[derive(serde::Deserialize)]
+struct IssiWhitelistServiceRequest {
+    issi_whitelist: Vec<u32>,
+}
+
+/// Parse and sanitise the JSON body of an ISSI-whitelist Service message.
+///
+/// Returns the cleaned list — each ISSI constrained to the valid TETRA range `1..=0xFF_FFFF`,
+/// then sorted and deduplicated — or `None` if the JSON is malformed. Out-of-range entries are
+/// dropped individually rather than rejecting the whole push, so one stray value from the core
+/// cannot void an otherwise-good update. Matches the dashboard whitelist contract (sorted, deduped).
+fn sanitize_issi_whitelist(json: &str) -> Option<Vec<u32>> {
+    let req: IssiWhitelistServiceRequest = serde_json::from_str(json).ok()?;
+    let mut list: Vec<u32> = req.issi_whitelist.into_iter().filter(|&n| (1..=0xFF_FFFF).contains(&n)).collect();
+    list.sort_unstable();
+    list.dedup();
+    Some(list)
+}
+
 /// Brew protocol worker, generic over the network transport.
 ///
 /// Runs in a separate thread. Communicates with [`super::entity::BrewEntity`] via
@@ -248,6 +274,10 @@ pub struct BrewWorker<T: NetworkTransport> {
     voice_dropped: u64,
     /// When we last warned about dropped voice
     last_voice_drop_warn: Option<Instant>,
+    /// FH-BUG-079 opt-in: accept the ISSI whitelist pushed over Brew (Service 0x30). Snapshotted
+    /// from `[brew] feature_issi_whitelist_sync` at construction; when false the 0x30 handler is a
+    /// no-op so a remote core cannot touch local access control.
+    accept_issi_whitelist: bool,
 }
 
 impl<T: NetworkTransport> BrewWorker<T> {
@@ -263,6 +293,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
             pending_sds: HashMap::new(),
             voice_dropped: 0,
             last_voice_drop_warn: None,
+            accept_issi_whitelist: tetra_config::bluestation::accept_issi_whitelist_over_brew(),
         }
     }
 
@@ -651,11 +682,32 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 }
                 BrewMessage::Service(svc) => {
                     tracing::debug!("BrewWorker: service type={}: {}", svc.service_type, svc.json_data);
+                    if svc.service_type == BREW_SERVICE_ISSI_WHITELIST {
+                        self.handle_issi_whitelist_service(&svc.json_data);
+                    }
                 }
             },
             Err(e) => {
                 tracing::warn!("BrewWorker: failed to parse message ({} bytes): {}", data.len(), e);
             }
+        }
+    }
+
+    /// FH-BUG-079: a `BREW_SERVICE_ISSI_WHITELIST` (0x30) push. Gated behind the
+    /// `[brew] feature_issi_whitelist_sync` opt-in (snapshotted into `accept_issi_whitelist`): when
+    /// off we ignore it entirely so a remote core cannot drive local access control. Otherwise we
+    /// sanitise the JSON and hand the cleaned list to the entity as `IssiWhitelistUpdate`.
+    fn handle_issi_whitelist_service(&mut self, json: &str) {
+        if !self.accept_issi_whitelist {
+            tracing::debug!("BrewWorker: ignoring ISSI whitelist push — feature_issi_whitelist_sync is off");
+            return;
+        }
+        match sanitize_issi_whitelist(json) {
+            Some(list) => {
+                tracing::info!("BrewWorker: ISSI whitelist update ({} entries, via Brew service)", list.len());
+                self.send_event(BrewEvent::IssiWhitelistUpdate { issi_whitelist: list });
+            }
+            None => tracing::warn!("BrewWorker: bad ISSI whitelist JSON '{}'", json),
         }
     }
 
@@ -953,5 +1005,103 @@ mod tests {
         // Full: with no backpressure window it is reported as undelivered rather than queued.
         assert!(offer_event(&tx, signalling(), Duration::ZERO).is_err());
         assert_eq!(rx.len(), 1);
+    }
+
+    // ── FH-BUG-079: ISSI whitelist over Brew (Service 0x30) ────────────────────
+
+    use crate::net_brew::protocol::{BREW_CLASS_SERVICE, BREW_SERVICE_ISSI_WHITELIST};
+    use crate::network::transports::mock::MockTransport;
+    use tetra_config::bluestation::{SharedConfig, parsing::from_toml_str};
+
+    /// A parsed 0x30 push: `sanitize` sorts, dedups, and drops out-of-range ISSIs.
+    #[test]
+    fn sanitize_filters_sorts_and_dedups() {
+        // 0 and 0x100_0000 are out of the 1..=0xFF_FFFF range and dropped; the rest sorted+deduped.
+        let got = sanitize_issi_whitelist(r#"{"issi_whitelist":[980001,0,889468,16777216,889468,1]}"#).unwrap();
+        assert_eq!(got, vec![1, 889468, 980001]);
+    }
+
+    #[test]
+    fn sanitize_rejects_bad_json() {
+        assert!(sanitize_issi_whitelist("not json").is_none());
+        assert!(sanitize_issi_whitelist("{").is_none());
+        assert!(sanitize_issi_whitelist(r#"{"wrong_key":[1]}"#).is_none());
+    }
+
+    #[test]
+    fn sanitize_accepts_empty_list() {
+        assert_eq!(sanitize_issi_whitelist(r#"{"issi_whitelist":[]}"#).unwrap(), Vec::<u32>::new());
+    }
+
+    fn brew_worker(accept: bool) -> (BrewWorker<MockTransport>, Receiver<BrewEvent>) {
+        let toml = r#"
+config_version = "0.6"
+stack_mode = "Bs"
+
+[phy_io]
+backend = "None"
+
+[net_info]
+mcc = 901
+mnc = 9999
+
+[cell_info]
+main_carrier = 1584
+freq_band = 4
+freq_offset = 0
+duplex_spacing = 4
+reverse_operation = false
+location_area = 1
+
+[brew]
+host = "example.invalid"
+port = 443
+tls = true
+username = 0
+password = ""
+"#;
+        let cfg = SharedConfig::from_parts(from_toml_str(toml).expect("test config parses"), None);
+        let (event_sender, event_receiver) = bounded::<BrewEvent>(BREW_EVENT_CHANNEL_CAPACITY);
+        // The command channel is unused here (handle_incoming_binary never reads it), so the sender
+        // may drop immediately.
+        let (_cmd_tx, command_receiver) = crossbeam_channel::unbounded::<BrewCommand>();
+        let mut worker = BrewWorker::new(cfg, event_sender, command_receiver, MockTransport::new());
+        // Inject the gate directly so the test is independent of the process-global feature flag.
+        worker.accept_issi_whitelist = accept;
+        (worker, event_receiver)
+    }
+
+    fn issi_whitelist_msg(json: &str) -> Vec<u8> {
+        let mut m = vec![BREW_CLASS_SERVICE, BREW_SERVICE_ISSI_WHITELIST];
+        m.extend_from_slice(json.as_bytes());
+        m.push(0); // NULL terminator
+        m
+    }
+
+    #[test]
+    fn service_0x30_emits_event_when_enabled() {
+        let (mut worker, rx) = brew_worker(true);
+        worker.handle_incoming_binary(&issi_whitelist_msg(r#"{"issi_whitelist":[980001,889468,889468]}"#));
+        match rx.try_recv() {
+            Ok(BrewEvent::IssiWhitelistUpdate { issi_whitelist }) => {
+                assert_eq!(issi_whitelist, vec![889468, 980001], "sorted + deduped into the event");
+            }
+            other => panic!("expected IssiWhitelistUpdate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn service_0x30_ignored_when_disabled() {
+        // The gate defaults off: a core push must be dropped unless the operator opted in.
+        let (mut worker, rx) = brew_worker(false);
+        worker.handle_incoming_binary(&issi_whitelist_msg(r#"{"issi_whitelist":[980001]}"#));
+        assert!(rx.try_recv().is_err(), "disabled gate must drop the push");
+    }
+
+    #[test]
+    fn service_0x30_bad_json_dropped() {
+        let (mut worker, rx) = brew_worker(true);
+        worker.handle_incoming_binary(&issi_whitelist_msg("definitely not json"));
+        assert!(rx.try_recv().is_err(), "malformed JSON must not emit an event");
     }
 }

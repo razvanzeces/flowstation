@@ -32,6 +32,9 @@ const TDMA_CONTROL_FRAME: u8 = 18;
 const CANCEL_REAP_AFTER: Duration = Duration::from_secs(32);
 /// Silence longer than this counts as a new talkspurt, so the next RTP packet gets a marker.
 const TALKSPURT_GAP: Duration = Duration::from_millis(100);
+/// Duration we advertise in a DTMF INFO body. CMCE drops the tone-end U-INFO upstream, so we
+/// never learn the real key-press length and just quote a sane fixed value (FH-BUG-080).
+const DTMF_INFO_DURATION_MS: u32 = 250;
 
 #[derive(Clone, Debug)]
 struct DigestChallenge {
@@ -245,6 +248,65 @@ fn build_teardown_request(p: &TeardownParams) -> String {
          {}\
          Content-Length: 0\r\n\r\n",
         method, request_uri, p.via_host, p.via_port, branch, p.from_uri, p.local_tag, to, p.call_id, cseq, method, contact_line
+    )
+}
+
+/// Map one DTMF byte received from CMCE to its ASCII symbol. CMCE already decodes the U-INFO
+/// DTMF field to ASCII digit chars (cc_bs/dtmf.rs) and forwards one NetworkCircuitDtmf per digit
+/// with `data = [ascii]` (cc_bs/procedures/uplink.rs), so this is really a sanity filter: relay
+/// the byte only if it is a legal DTMF symbol (0-9, *, #, A-D), normalising A-D to upper case.
+fn dtmf_digit_from_byte(byte: u8) -> Option<char> {
+    match byte {
+        b'0'..=b'9' | b'*' | b'#' => Some(char::from(byte)),
+        b'A'..=b'D' => Some(char::from(byte)),
+        b'a'..=b'd' => Some(char::from(byte.to_ascii_uppercase())),
+        _ => None,
+    }
+}
+
+struct DtmfInfoParams<'a> {
+    /// Peer address-of-record, used in the To header and as the fallback Request-URI.
+    request_uri: &'a str,
+    /// Where the request actually goes: the Contact the answer advertised.
+    remote_target: Option<&'a str>,
+    via_host: &'a str,
+    via_port: u16,
+    branch: &'a str,
+    from_uri: &'a str,
+    local_tag: &'a str,
+    remote_tag: Option<&'a str>,
+    call_id: &'a str,
+    cseq: u32,
+    contact: &'a str,
+    digit: char,
+    duration_ms: u32,
+}
+
+/// FH-BUG-080: relay a subscriber's DTMF digit to the SIP peer as an in-dialog INFO carrying an
+/// `application/dtmf-relay` body. INFO needs no SDP negotiation (unlike RFC 2833 telephone-event,
+/// which this bridge never negotiates), so FreePBX/Asterisk accept it on any established call.
+/// Like the BYE it is a fresh transaction inside the dialog: new branch, next CSeq, the
+/// negotiated To tag, aimed at the remote target.
+fn build_dtmf_info(p: &DtmfInfoParams) -> String {
+    let request_uri = p.remote_target.unwrap_or(p.request_uri);
+    let to = match p.remote_tag {
+        Some(tag) => format!("<{}>;tag={}", p.request_uri, tag),
+        None => format!("<{}>", p.request_uri),
+    };
+    let body = format!("Signal={}\r\nDuration={}\r\n", p.digit, p.duration_ms);
+    format!(
+        "INFO {} SIP/2.0\r\n\
+         Via: SIP/2.0/UDP {}:{};branch={};rport\r\n\
+         Max-Forwards: 70\r\n\
+         From: <{}>;tag={}\r\n\
+         To: {}\r\n\
+         Call-ID: {}\r\n\
+         CSeq: {} INFO\r\n\
+         Contact: <{}>\r\n\
+         Content-Type: application/dtmf-relay\r\n\
+         Content-Length: {}\r\n\r\n\
+         {}",
+        request_uri, p.via_host, p.via_port, p.branch, p.from_uri, p.local_tag, to, p.call_id, p.cseq, p.contact, body.len(), body
     )
 }
 
@@ -590,6 +652,50 @@ impl AsteriskEntity {
         match dialog.peer_addr {
             Some(addr) => self.send_sip_to(request, addr, format!("{} {}", method, uuid)),
             None => self.send_sip(request, format!("{} {}", method, uuid)),
+        }
+    }
+
+    /// Relay one decoded DTMF digit to the SIP peer as an in-dialog INFO (FH-BUG-080).
+    fn send_dtmf_info(&mut self, uuid: Uuid, digit: char) {
+        // Only an established call has a remote party to signal. A digit for a leg that is still
+        // ringing, already gone, or an unknown uuid has no dialog to carry it - drop it quietly.
+        let established = self
+            .dialogs
+            .get(&uuid)
+            .is_some_and(|dialog| matches!(dialog.state, DialogState::Established));
+        if !established {
+            tracing::debug!("AsteriskEntity: DTMF '{}' for uuid={} with no established dialog, dropping", digit, uuid);
+            return;
+        }
+        let fresh_branch = self.next_branch();
+        // Each INFO is a new transaction inside the dialog, so bump and persist the CSeq: back-to-
+        // back digits (and the eventual BYE) must stay strictly increasing (RFC 3261 §12.2.1.1).
+        let snapshot = {
+            let Some(dialog) = self.dialogs.get_mut(&uuid) else {
+                return;
+            };
+            dialog.cseq = dialog.cseq.saturating_add(1);
+            SipDialogSnapshot::from_dialog(dialog)
+        };
+        let request = build_dtmf_info(&DtmfInfoParams {
+            request_uri: &self.request_uri(&snapshot.number),
+            remote_target: snapshot.remote_target.as_deref(),
+            via_host: &self.asterisk_config.contact_host,
+            via_port: self.asterisk_config.bind_port,
+            branch: &fresh_branch,
+            from_uri: &snapshot.local_uri,
+            local_tag: &snapshot.local_tag,
+            remote_tag: snapshot.remote_tag.as_deref(),
+            call_id: &snapshot.call_id_header,
+            cseq: snapshot.cseq,
+            contact: &self.contact_uri(),
+            digit,
+            duration_ms: DTMF_INFO_DURATION_MS,
+        });
+        // Inbound dialogs answer back to whoever sent us the INVITE, not to the configured peer.
+        match snapshot.peer_addr {
+            Some(addr) => self.send_sip_to(request, addr, format!("INFO DTMF {} {}", digit, uuid)),
+            None => self.send_sip(request, format!("INFO DTMF {} {}", digit, uuid)),
         }
     }
 
@@ -1691,7 +1797,15 @@ impl TetraEntityTrait for AsteriskEntity {
                 self.release_dialog(brew_uuid, true);
             }
             SapMsgInner::CmceCallControl(CallControl::NetworkCircuitDtmf { brew_uuid, data, .. }) => {
-                tracing::debug!("AsteriskEntity: DTMF for uuid={} bytes={} currently ignored", brew_uuid, data.len());
+                // CMCE hands us the already-decoded ASCII digits, one message per key-press, with
+                // tone-end filtered out upstream (cc_bs/procedures/uplink.rs). Relay each valid
+                // symbol as its own SIP INFO with a fixed nominal duration; skip any junk byte.
+                for &byte in &data {
+                    match dtmf_digit_from_byte(byte) {
+                        Some(digit) => self.send_dtmf_info(brew_uuid, digit),
+                        None => tracing::debug!("AsteriskEntity: uuid={} dropping non-DTMF byte 0x{:02x}", brew_uuid, byte),
+                    }
+                }
             }
             SapMsgInner::TmdCircuitDataInd(prim) => {
                 self.handle_ul_voice(prim);
@@ -1763,5 +1877,58 @@ mod tests {
             Some("sip:1001@10.0.0.9")
         );
         assert_eq!(AsteriskEntity::parse_contact_uri(Some("*")), None);
+    }
+
+    #[test]
+    fn dtmf_byte_maps_to_ascii_symbols() {
+        assert_eq!(dtmf_digit_from_byte(b'4'), Some('4'));
+        assert_eq!(dtmf_digit_from_byte(b'*'), Some('*'));
+        assert_eq!(dtmf_digit_from_byte(b'#'), Some('#'));
+        assert_eq!(dtmf_digit_from_byte(b'A'), Some('A'));
+        // A-D arrive case-normalised.
+        assert_eq!(dtmf_digit_from_byte(b'd'), Some('D'));
+        // 0x04 is ASCII EOT, not the digit '4': CMCE sends ASCII, so a raw nibble is junk here.
+        assert_eq!(dtmf_digit_from_byte(0x04), None);
+        assert_eq!(dtmf_digit_from_byte(b'E'), None);
+    }
+
+    fn dtmf_params(digit: char) -> DtmfInfoParams<'static> {
+        DtmfInfoParams {
+            request_uri: "sip:1001@pbx.local",
+            remote_target: Some("sip:1001@10.0.0.9:5060"),
+            via_host: "10.0.0.2",
+            via_port: 5062,
+            branch: "z9hG4bKflow0000000a",
+            from_uri: "sip:flowstation@pbx.local",
+            local_tag: "flowabcd",
+            remote_tag: Some("as1234"),
+            call_id: "flow-uuid@10.0.0.2",
+            cseq: 3,
+            contact: "sip:flowstation@10.0.0.2:5062",
+            digit,
+            duration_ms: 250,
+        }
+    }
+
+    #[test]
+    fn dtmf_info_is_an_in_dialog_request_to_the_remote_target() {
+        let request = build_dtmf_info(&dtmf_params('4'));
+        // Request-URI is the answer's Contact (remote target), not the AOR.
+        assert!(request.starts_with("INFO sip:1001@10.0.0.9:5060 SIP/2.0\r\n"), "{}", request);
+        assert!(request.contains("branch=z9hG4bKflow0000000a;"), "{}", request);
+        assert!(request.contains("\r\nCSeq: 3 INFO\r\n"), "{}", request);
+        assert!(request.contains("\r\nFrom: <sip:flowstation@pbx.local>;tag=flowabcd\r\n"), "{}", request);
+        // To keeps the AOR plus the negotiated remote tag, exactly like the BYE.
+        assert!(request.contains("\r\nTo: <sip:1001@pbx.local>;tag=as1234\r\n"), "{}", request);
+    }
+
+    #[test]
+    fn dtmf_info_body_is_a_dtmf_relay_signal() {
+        let request = build_dtmf_info(&dtmf_params('#'));
+        assert!(request.contains("\r\nContent-Type: application/dtmf-relay\r\n"), "{}", request);
+        let body = "Signal=#\r\nDuration=250\r\n";
+        // Body follows the blank line unchanged and Content-Length has to count its bytes.
+        assert!(request.ends_with(&format!("\r\n\r\n{}", body)), "{}", request);
+        assert!(request.contains(&format!("\r\nContent-Length: {}\r\n", body.len())), "{}", request);
     }
 }

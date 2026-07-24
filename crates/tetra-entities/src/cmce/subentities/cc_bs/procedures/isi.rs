@@ -710,9 +710,13 @@ impl CcBsSubentity {
             return;
         }
 
-        if !self.has_listener(dest_gssi) {
+        // Admit only when a *local* MS is currently attached to this GSSI. has_listener also counts
+        // external/network-side subscribers Brew mirrors in (every worldwide affiliate of a busy
+        // BrandMeister TG, an EchoLink gateway, or a stale count), so gating on it let a busy backhaul
+        // TG with zero local members set up a call and pin a traffic timeslot forever (FH-BUG-069).
+        if !self.has_local_listener(dest_gssi) {
             tracing::info!(
-                "CMCE: ignoring network call start uuid={} gssi={} (no listeners)",
+                "CMCE: ignoring network call start uuid={} gssi={} (no local listeners)",
                 brew_uuid,
                 dest_gssi
             );

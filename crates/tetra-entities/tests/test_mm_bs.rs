@@ -11,6 +11,8 @@ use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
 use tetra_pdus::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
 use tetra_pdus::mm::pdus::d_attach_detach_group_identity::DAttachDetachGroupIdentity;
 use tetra_pdus::mm::pdus::d_mm_status::DMmStatus;
+use tetra_pdus::mm::fields::group_identity_uplink::GroupIdentityUplink;
+use tetra_pdus::mm::pdus::u_attach_detach_group_identity::UAttachDetachGroupIdentity;
 use tetra_pdus::mm::pdus::u_itsi_detach::UItsiDetach;
 use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
 use tetra_saps::control::brew::BrewSubscriberAction;
@@ -82,6 +84,37 @@ fn submit_itsi_detach(test: &mut ComponentTest, issi: u32, handle: u32) {
     let prim = LmmMleUnitdataInd {
         sdu,
         handle,
+        received_address: TetraAddress {
+            ssi_type: SsiType::Issi,
+            ssi: issi,
+        },
+    };
+    test.submit_message(SapMsg {
+        sap: Sap::LmmSap,
+        src: TetraEntity::Mle,
+        dest: TetraEntity::Mm,
+        msg: SapMsgInner::LmmMleUnitdataInd(prim),
+    });
+    test.run_stack(Some(2));
+}
+
+/// Submit a U-ATTACH/DETACH GROUP IDENTITY carrying a single group element as if it arrived from
+/// `issi`. Whether it attaches or detaches follows the element: `class_of_usage=Some` attaches,
+/// `group_identity_detachment_uplink=Some` detaches (mirrors what a scanning radio sends).
+fn submit_group_attach_detach(test: &mut ComponentTest, issi: u32, group: GroupIdentityUplink) {
+    let pdu = UAttachDetachGroupIdentity {
+        group_identity_report: false,
+        group_identity_attach_detach_mode: false,
+        group_report_response: None,
+        group_identity_uplink: Some(vec![group]),
+        proprietary: None,
+    };
+    let mut sdu = BitBuffer::new_autoexpand(32);
+    pdu.to_bitbuf(&mut sdu).expect("serialize U-ATTACH/DETACH GROUP IDENTITY");
+    sdu.seek(0);
+    let prim = LmmMleUnitdataInd {
+        sdu,
+        handle: 0,
         received_address: TetraAddress {
             ssi_type: SsiType::Issi,
             ssi: issi,
@@ -847,6 +880,57 @@ fn test_dgna_registry_survives_group_detach() {
             .iter()
             .any(|group| group.gssi == TEST_GSSI && group.mnemonic.as_deref() == Some("OPS")),
         "detaching a dynamic group must not erase the DGNA registry entry"
+    );
+}
+
+/// FH-BUG-069 (MM side): turning scan off detaches the scanned group. That detach must clear the
+/// group from the local subscriber registry so `has_group_members` — which the CMCE network-call
+/// admission gate reads to tell a live local member from an external Brew subscriber — goes false.
+#[test]
+fn test_scan_off_group_detach_clears_local_listener() {
+    debug::setup_logging_verbose();
+    const TEST_ISSI: u32 = 2260707;
+    const SCAN_GSSI: u32 = 91; // BrandMeister worldwide TG from the field report
+
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+    test.populate_entities(vec![], vec![TetraEntity::Mle, TetraEntity::Cmce]);
+    let mm = MmBs::new(test.get_shared_config(), None, None);
+    test.register_entity(mm);
+    register_terminal(&mut test, TEST_ISSI);
+    let _ = test.dump_sinks();
+
+    // Scan on: the radio attaches the scanned group.
+    submit_group_attach_detach(
+        &mut test,
+        TEST_ISSI,
+        GroupIdentityUplink {
+            class_of_usage: Some(4),
+            group_identity_detachment_uplink: None,
+            gssi: Some(SCAN_GSSI),
+            address_extension: None,
+            vgssi: None,
+        },
+    );
+    assert!(
+        test.config.state_read().subscribers.has_group_members(SCAN_GSSI),
+        "precondition: while scanning, the radio is a live local member of the TG"
+    );
+
+    // Scan off: the radio detaches that group.
+    submit_group_attach_detach(
+        &mut test,
+        TEST_ISSI,
+        GroupIdentityUplink {
+            class_of_usage: None,
+            group_identity_detachment_uplink: Some(1),
+            gssi: Some(SCAN_GSSI),
+            address_extension: None,
+            vgssi: None,
+        },
+    );
+    assert!(
+        !test.config.state_read().subscribers.has_group_members(SCAN_GSSI),
+        "scan-off detach must drop the local listener so network calls for the TG are no longer set up"
     );
 }
 

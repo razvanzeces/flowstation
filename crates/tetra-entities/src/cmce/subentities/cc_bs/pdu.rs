@@ -304,6 +304,18 @@ impl CcBsSubentity {
         self.group_listeners.get(&gssi).copied().unwrap_or(0) > 0
     }
 
+    /// True only when a *locally-registered* MS currently has this GSSI attached.
+    ///
+    /// `has_listener` (group_listeners) also counts external/network-side subscribers that Brew
+    /// mirrors in — an EchoLink gateway, or every worldwide affiliate of a busy BrandMeister TG —
+    /// and it can hold a stale count. Network-initiated group calls exist solely to serve a *local*
+    /// member, so their admission must consult the authoritative local-attachment registry MM keeps
+    /// from live U-ATTACH/DETACH, not the mixed listener count. Without this a busy backhaul TG
+    /// (e.g. TG-91) with zero local members pins a traffic timeslot forever (FH-BUG-069).
+    pub(super) fn has_local_listener(&self, gssi: u32) -> bool {
+        self.config.state_read().subscribers.has_group_members(gssi)
+    }
+
     pub(super) fn inc_group_listener(&mut self, gssi: u32) {
         let entry = self.group_listeners.entry(gssi).or_insert(0);
         *entry += 1;
@@ -380,19 +392,27 @@ impl CcBsSubentity {
     }
 
     pub(super) fn drop_group_calls_if_unlistened(&mut self, queue: &mut MessageQueue, gssi: u32) {
-        if self.has_listener(gssi) {
-            return;
-        }
+        let has_local = self.has_local_listener(gssi);
+        let has_any = self.has_listener(gssi);
 
+        // Network-initiated calls only serve local members: once the last local listener detaches
+        // (e.g. scan turned off) a busy backhaul TG must give its traffic slot back, even while
+        // external/network-side subscribers still hold it (FH-BUG-069). A locally-originated call
+        // may still be kept up by an external listener (e.g. an EchoLink gateway bridged to the TG),
+        // so it stays on the combined count.
         let to_drop: Vec<(u16, CallOrigin)> = self
             .active_calls
             .iter()
             .filter(|(_, call)| call.dest_gssi == gssi)
+            .filter(|(_, call)| match call.origin {
+                CallOrigin::Network { .. } => !has_local,
+                CallOrigin::Local { .. } => !has_any,
+            })
             .map(|(call_id, call)| (*call_id, call.origin.clone()))
             .collect();
 
         for (call_id, origin) in to_drop {
-            tracing::info!("CMCE: dropping call_id={} gssi={} (no listeners)", call_id, gssi);
+            tracing::info!("CMCE: dropping call_id={} gssi={} (no local listeners)", call_id, gssi);
             if let CallOrigin::Network { brew_uuid } = origin {
                 if brew::is_brew_gssi_routable(&self.config, gssi) {
                     self.notify_network_call_end(queue, brew_uuid);

@@ -3852,6 +3852,10 @@ fn serve_system_info(mut stream: TcpStream, config_path: &str) {
     // Auto-detected SDR name — set by `phy::components::soapy_settings::get_settings()`
     // at stack startup. None if no SoapySDR-backed phy is in use (file backend etc).
     let sdr_name = crate::phy::components::soapy_settings::detected_sdr_name().unwrap_or_else(|| "unknown".to_string());
+    // Raw SoapySDR driver/hardware keys next to the friendly name, so a misdetection
+    // (FH-BUG-081: right board, wrong badge on a multi-SDR host) is diagnosable from the
+    // dashboard without SSHing in to read the probe log.
+    let (sdr_driver_key, sdr_hardware_key) = crate::phy::components::soapy_settings::detected_sdr_keys().unwrap_or_default();
 
     let body = serde_json::to_string(&serde_json::json!({
         "hostname": hostname,
@@ -3868,6 +3872,8 @@ fn serve_system_info(mut stream: TcpStream, config_path: &str) {
         "cpu_temp_c": cpu_temp_c,
         "soapy_info": soapy_info,
         "sdr_name": sdr_name,
+        "sdr_driver_key": sdr_driver_key,
+        "sdr_hardware_key": sdr_hardware_key,
     }))
     .unwrap_or_else(|_| "{}".to_string());
 

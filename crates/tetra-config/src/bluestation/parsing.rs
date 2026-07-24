@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 use toml::Value;
@@ -276,11 +277,28 @@ pub fn from_reader<R: Read>(reader: R) -> Result<StackConfig, Box<dyn std::error
     from_toml_str(&contents)
 }
 
+/// Path the running stack loaded its TOML config from, captured by [`from_file`]. Runtime
+/// persistence (e.g. the ISSI whitelist pushed over Brew, FH-BUG-079) resolves its target here
+/// instead of a hardcoded deployment path, so it always rewrites the file this process loaded.
+/// `None` until a file load has happened (config built from a string in tests leaves it unset).
+static CONFIG_SOURCE_PATH: OnceLock<String> = OnceLock::new();
+
+/// The path [`from_file`] loaded the running config from, if a file load has occurred.
+pub fn config_source_path() -> Option<String> {
+    CONFIG_SOURCE_PATH.get().cloned()
+}
+
 /// Build `SharedConfig` from a file path.
 pub fn from_file<P: AsRef<Path>>(path: P) -> Result<StackConfig, Box<dyn std::error::Error>> {
+    let path = path.as_ref();
     let f = File::open(path)?;
     let r = BufReader::new(f);
     let cfg = from_reader(r)?;
+    // Remember where we loaded from so runtime persistence (FH-BUG-079) can rewrite this same
+    // file. First successful load wins — the stack loads its config once at startup.
+    if let Some(p) = path.to_str() {
+        let _ = CONFIG_SOURCE_PATH.set(p.to_string());
+    }
     Ok(cfg)
 }
 

@@ -350,6 +350,9 @@ impl BrewEntity {
                 BrewEvent::ServerError { error_type, data } => {
                     tracing::error!("BrewEntity: server error type={} data={} bytes", error_type, data.len());
                 }
+                BrewEvent::IssiWhitelistUpdate { issi_whitelist } => {
+                    self.apply_issi_whitelist(queue, issi_whitelist);
+                }
 
                 // ── Circuit / individual call events ──────────────────────
                 BrewEvent::CircuitSetupRequest { uuid, call } => {
@@ -572,6 +575,75 @@ impl BrewEntity {
             src: TetraEntity::Brew,
             dest: TetraEntity::Cmce,
             msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate { issi, groups, action }),
+        });
+    }
+
+    /// Apply an ISSI registration whitelist pushed by the core over Brew (FH-BUG-079).
+    ///
+    /// Mirrors the dashboard `/api/whitelist` apply path (net_dashboard::server::serve_whitelist_post):
+    /// store the runtime override, kick radios the new list bars, then persist to the TOML so the
+    /// change survives a restart.
+    ///
+    /// Empty-list reconciliation (v0.4.0 `WhitelistMode`): we store the pushed list VERBATIM as the
+    /// override — including an empty one — and let `CfgSecurity::allows` plus the configured
+    /// `whitelist_mode` decide what it means. Under `auto` an empty override is "open network";
+    /// under `enforce` it is "deny-all". We deliberately do NOT special-case empty to "open" the way
+    /// the original PoC did, so a push stays consistent with the operator's local mode rather than
+    /// silently disabling access control. As on the dashboard, an empty push kicks nobody: the
+    /// whitelist is only enforced at registration, and tearing every radio off the cell because the
+    /// core sent an empty list would be a remote DoS.
+    fn apply_issi_whitelist(&self, queue: &mut MessageQueue, issi_whitelist: Vec<u32>) {
+        tracing::info!("BrewEntity: ISSI whitelist update ({} entries) via Brew", issi_whitelist.len());
+
+        // 1) Runtime override — MM consults this on the next registration (mm_bs::issi_allowed).
+        {
+            let mut state = self.config.state_write();
+            state.issi_whitelist_override = Some(issi_whitelist.clone());
+        }
+
+        // 2) Kick currently-registered radios the (non-empty) list no longer allows, so a removal
+        //    takes effect now instead of at the next voluntary re-registration. Same enumeration
+        //    the dashboard uses (all_registered_issis); each kick is the MmSubscriberUpdate
+        //    Deregister that CMCE's kick_ms forwards to MM — MM answers with a
+        //    D-LOCATION-UPDATE-COMMAND, the radio re-registers and is then rejected by the whitelist.
+        if !issi_whitelist.is_empty() {
+            let to_kick: Vec<u32> = {
+                let state = self.config.state_read();
+                state.subscribers.all_registered_issis().filter(|issi| !issi_whitelist.contains(issi)).collect()
+            };
+            for issi in to_kick {
+                tracing::info!("BrewEntity: whitelist — kicking non-whitelisted ISSI {}", issi);
+                self.kick_registered_ms(queue, issi);
+            }
+        }
+
+        // 3) Persist to the config.toml this process actually loaded from (never a hardcoded path),
+        //    reusing the dashboard's surgical writer so the [security] issi_whitelist line matches
+        //    the dashboard save path.
+        match tetra_config::bluestation::config_source_path() {
+            Some(path) => match crate::net_dashboard::whitelist::write_whitelist_to_toml(&path, &issi_whitelist) {
+                Ok(()) => tracing::info!("BrewEntity: ISSI whitelist persisted to {}", path),
+                Err(e) => tracing::warn!("BrewEntity: whitelist applied at runtime but TOML write failed ({}): {}", path, e),
+            },
+            None => {
+                tracing::warn!("BrewEntity: whitelist applied at runtime but not persisted — config source path unknown")
+            }
+        }
+    }
+
+    /// Force a locally-registered MS to re-register by asking MM to deregister it — the same
+    /// `MmSubscriberUpdate{Deregister}` to MM that CMCE's `kick_ms` (the dashboard kick path) emits.
+    /// MM replies with a D-LOCATION-UPDATE-COMMAND and re-runs the whitelist gate on re-registration.
+    fn kick_registered_ms(&self, queue: &mut MessageQueue, issi: u32) {
+        queue.push_back(SapMsg {
+            sap: tetra_core::Sap::Control,
+            src: TetraEntity::Brew,
+            dest: TetraEntity::Mm,
+            msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
+                issi,
+                groups: Vec::new(),
+                action: BrewSubscriberAction::Deregister,
+            }),
         });
     }
 

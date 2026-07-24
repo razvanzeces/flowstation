@@ -33,6 +33,11 @@ const SECONDARY_CARRIER: u16 = 1522;
 
 /// Helper: register a subscriber on a GSSI so CMCE accepts calls for that group.
 fn register_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
+    // Mirror what MM does for a real local registration: it both notifies CMCE (below) AND records
+    // the affiliation in the shared local-subscriber registry. The network-call admission gate reads
+    // that registry (has_group_members) to tell a live local member from an external Brew subscriber.
+    test.config.state_write().subscribers.affiliate(issi, gssi);
+
     let register = SapMsg {
         sap: Sap::Control,
         src: TetraEntity::Mm,
@@ -1311,6 +1316,178 @@ fn test_network_group_call_released_when_backhaul_media_dies() {
     assert!(
         !shared.state_read().active_call_ts.contains_key(&gssi),
         "traffic timeslot must be reclaimed (active_call_ts cleared) after media-inactivity release"
+    );
+}
+
+/// Build a network-initiated (Brew) group-call start for `dest_gssi`.
+fn network_call_start(brew_uuid: uuid::Uuid, source_issi: u32, dest_gssi: u32) -> SapMsg {
+    SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
+            brew_uuid,
+            source_issi,
+            dest_gssi,
+            priority: 0,
+        }),
+    }
+}
+
+/// FH-BUG-069: a network-initiated group call for a GSSI with NO local attached member must not
+/// allocate a traffic channel. The admission gate used `has_listener`, which also counts external
+/// network-side subscribers (a busy BrandMeister TG has thousands) — so a call was set up and pinned
+/// a timeslot with zero local members. Nothing here registers a local MS for the TG.
+#[test]
+fn test_network_group_call_dropped_when_no_local_listener() {
+    debug::setup_logging_verbose();
+
+    let gssi = 91; // BrandMeister worldwide TG from the field report
+    let source_issi = 2260707;
+    let brew_uuid = uuid::Uuid::new_v4();
+
+    let mut config = default_test_config_bs();
+    config.brew = Some(test_brew_cfg());
+
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+
+    test.submit_message(network_call_start(brew_uuid, source_issi, gssi));
+    test.run_stack(Some(5));
+    let msgs = test.dump_sinks();
+
+    let shared = test.get_shared_config();
+    assert!(
+        !shared.state_read().active_call_ts.contains_key(&gssi),
+        "a network call for a GSSI with no local member must not occupy a traffic timeslot"
+    );
+    assert!(
+        !msgs
+            .iter()
+            .any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::NetworkCallReady { .. }))),
+        "no call may be set up (NetworkCallReady) without a local listener"
+    );
+    assert!(
+        msgs.iter().any(|m| matches!(
+            &m.msg,
+            SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid: u }) if *u == brew_uuid
+        )),
+        "the backhaul leg must be closed (NetworkCallEnd) so it does not dangle"
+    );
+}
+
+/// FH-BUG-069 counter-case: a GSSI with a live local attachment must still receive its network
+/// calls — the fix must not starve a genuinely-affiliated member.
+#[test]
+fn test_network_group_call_allocated_with_local_listener() {
+    debug::setup_logging_verbose();
+
+    let gssi = 91;
+    let local_issi = 2269002;
+    let source_issi = 2260707;
+    let brew_uuid = uuid::Uuid::new_v4();
+
+    let mut config = default_test_config_bs();
+    config.brew = Some(test_brew_cfg());
+
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+
+    register_subscriber(&mut test, local_issi, gssi);
+
+    test.submit_message(network_call_start(brew_uuid, source_issi, gssi));
+    test.run_stack(Some(5));
+    let msgs = test.dump_sinks();
+
+    let shared = test.get_shared_config();
+    assert!(
+        shared.state_read().active_call_ts.contains_key(&gssi),
+        "a network call for a GSSI with a live local member must occupy a traffic timeslot"
+    );
+    assert!(
+        msgs.iter().any(|m| matches!(
+            &m.msg,
+            SapMsgInner::CmceCallControl(CallControl::NetworkCallReady { brew_uuid: u, .. }) if *u == brew_uuid
+        )),
+        "a network call with a local listener must be set up (NetworkCallReady)"
+    );
+}
+
+/// FH-BUG-069: turning scan off detaches the scanned group; that detach must drop the local listener
+/// so (a) the in-flight call gives its timeslot back and (b) the next call for the still-busy backhaul
+/// TG is no longer set up. This is the operator-visible symptom — the timeslot staying occupied after
+/// scan-off.
+#[test]
+fn test_network_group_call_not_set_up_after_local_detach() {
+    debug::setup_logging_verbose();
+
+    let gssi = 91;
+    let local_issi = 2269002;
+    let source_issi = 2260707;
+
+    let mut config = default_test_config_bs();
+    config.brew = Some(test_brew_cfg());
+
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+
+    // Radio scans TG-91: the network call is admitted and takes a timeslot.
+    register_subscriber(&mut test, local_issi, gssi);
+    test.submit_message(network_call_start(uuid::Uuid::new_v4(), source_issi, gssi));
+    test.run_stack(Some(5));
+    let _ = test.dump_sinks();
+    assert!(
+        test.get_shared_config().state_read().active_call_ts.contains_key(&gssi),
+        "precondition: the call is up while the radio is scanning TG-91"
+    );
+
+    // Scan off: the radio detaches the group. Real MM clears the local-attachment registry AND
+    // notifies CMCE; the registry drop must be visible before CMCE processes the detach, so write it
+    // first (as MM does).
+    test.config.state_write().subscribers.deaffiliate(local_issi, gssi);
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Mm,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
+            issi: local_issi,
+            groups: vec![gssi],
+            action: BrewSubscriberAction::Deaffiliate,
+        }),
+    });
+    test.run_stack(Some(5));
+    let _ = test.dump_sinks();
+    assert!(
+        !test.get_shared_config().state_read().active_call_ts.contains_key(&gssi),
+        "the in-flight network call must give its timeslot back once the last local listener detaches"
+    );
+
+    // The next network call for the still-busy TG must not be set up.
+    let second_uuid = uuid::Uuid::new_v4();
+    test.submit_message(network_call_start(second_uuid, source_issi, gssi));
+    test.run_stack(Some(5));
+    let msgs = test.dump_sinks();
+
+    let shared = test.get_shared_config();
+    assert!(
+        !shared.state_read().active_call_ts.contains_key(&gssi),
+        "after scan-off detach, no network call may occupy a timeslot for the TG"
+    );
+    assert!(
+        !msgs.iter().any(|m| matches!(
+            &m.msg,
+            SapMsgInner::CmceCallControl(CallControl::NetworkCallReady { brew_uuid: u, .. }) if *u == second_uuid
+        )),
+        "a network call after local detach must not be set up (no NetworkCallReady)"
     );
 }
 

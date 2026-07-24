@@ -749,6 +749,12 @@ pub fn build_sds_report(session_uuid: &Uuid, status: u8) -> Vec<u8> {
 /// Service type for RSSI measurements
 pub const BREW_SERVICE_RSSI: u8 = 0x10;
 
+/// Service type carrying the ISSI registration whitelist pushed by the core (FH-BUG-079).
+/// JSON payload: `{"issi_whitelist":[889468, 980001, ...]}`. Lets a firewalled BS receive the
+/// whitelist over the outbound Brew link, where the dashboard `/api/whitelist` HTTP path cannot
+/// reach it. How an empty list is interpreted follows the local `[security] whitelist_mode`.
+pub const BREW_SERVICE_ISSI_WHITELIST: u8 = 0x30;
+
 /// Build a Service (0xf4) RSSI update message.
 ///
 /// Sends the current RSSI reading for an MS to the Brew server as JSON:
@@ -1017,6 +1023,23 @@ mod tests {
             assert_eq!(frame.data, vec![0]);
         } else {
             panic!("Expected Frame message");
+        }
+    }
+
+    #[test]
+    fn test_parse_issi_whitelist_service() {
+        // FH-BUG-079: a Service (0xf4) type 0x30 carries NULL-terminated whitelist JSON.
+        let json = r#"{"issi_whitelist":[889468,980001]}"#;
+        let mut data = vec![BREW_CLASS_SERVICE, BREW_SERVICE_ISSI_WHITELIST];
+        data.extend_from_slice(json.as_bytes());
+        data.push(0); // NULL terminator
+
+        let msg = parse_brew_message(&data).unwrap();
+        if let BrewMessage::Service(svc) = msg {
+            assert_eq!(svc.service_type, BREW_SERVICE_ISSI_WHITELIST);
+            assert_eq!(svc.json_data, json);
+        } else {
+            panic!("Expected Service message");
         }
     }
 }
