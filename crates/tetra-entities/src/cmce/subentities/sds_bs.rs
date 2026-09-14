@@ -1007,18 +1007,20 @@ impl SdsBsSubentity {
     /// "simple text" wrapper (PID 0x82/0x80/0x8A, msg-type byte, message-ref, encoding,
     /// then text) and a bare text-coding-scheme prefix (0x01..=0x03).
     ///
-    /// Any OTHER protocol identifier is treated as non-text and yields an empty string:
-    /// LIP/APRS position beacons (PID 0x0A), status/precoded messages, and unknown PIDs are
-    /// binary, and interpreting their bytes as ASCII produced garbage in the dashboard SDS Log
-    /// (FH-BUG-045 — e.g. a LIP payload `[10, 48, ..]` decoded to the stray text "0"). Returning
-    /// empty lets the dashboard fall back to the protocol-id label (e.g. "[LIP position]")
-    /// instead of showing mojibake. Returns an ASCII string (best-effort).
+    /// LIP short location reports (PID 0x0A, PDU type 0) are decoded to decimal WGS-84
+    /// coordinates. Other binary/unknown protocol identifiers yield an empty string instead of
+    /// being misinterpreted as ASCII.
     fn extract_sds_text(data: &SdsUserData) -> String {
         let bytes = data.to_arr();
         // SDS-TL text messaging PIDs: 0x82 (text), 0x80/0x8A (text w/ variants). When the
         // first byte is one of these and there is a 4-byte header, skip it. A bare text-coding-
         // scheme byte (0x01..=0x03) is followed directly by text. Everything else is binary.
         let payload: &[u8] = match bytes.first() {
+            Some(0x0A) => {
+                return decode_lip_short_location(&bytes)
+                    .map(|(lat, lon)| format!("LIP position: {lat:.6}, {lon:.6}"))
+                    .unwrap_or_default();
+            }
             Some(0x82) | Some(0x80) | Some(0x8A) if bytes.len() > 4 => &bytes[4..],
             Some(0x01..=0x03) if bytes.len() > 1 => &bytes[1..],
             _ => return String::new(),
@@ -1505,5 +1507,58 @@ impl SdsBsSubentity {
                 tracing::warn!("SDS-CMD: unknown action '{}' for status={}, ignoring", other, status_code);
             }
         }
+    }
+}
+
+/// Decode an ETSI TS 100 392-18-1 short location report.
+///
+/// Bit layout after the 8-bit LIP protocol identifier: PDU type (2), time elapsed (2),
+/// longitude (signed 25), latitude (signed 24). Coordinates use WGS-84 angular steps of
+/// 360/2^25 and 180/2^24 degrees respectively.
+fn decode_lip_short_location(data: &[u8]) -> Option<(f64, f64)> {
+    const REQUIRED_BITS: usize = 8 + 2 + 2 + 25 + 24;
+    if data.first() != Some(&0x0A) || data.len() * 8 < REQUIRED_BITS || read_bits_msb(data, 8, 2)? != 0 {
+        return None;
+    }
+
+    let longitude_raw = sign_extend(read_bits_msb(data, 12, 25)?, 25);
+    let latitude_raw = sign_extend(read_bits_msb(data, 37, 24)?, 24);
+    let longitude = longitude_raw as f64 * (360.0 / (1u64 << 25) as f64);
+    let latitude = latitude_raw as f64 * (180.0 / (1u64 << 24) as f64);
+    Some((latitude, longitude))
+}
+
+fn read_bits_msb(data: &[u8], offset: usize, width: usize) -> Option<u32> {
+    if width > 32 || offset.checked_add(width)? > data.len() * 8 {
+        return None;
+    }
+    let mut value = 0u32;
+    for bit_index in offset..offset + width {
+        value = (value << 1) | u32::from((data[bit_index / 8] >> (7 - bit_index % 8)) & 1);
+    }
+    Some(value)
+}
+
+fn sign_extend(value: u32, width: u32) -> i32 {
+    ((value << (32 - width)) as i32) >> (32 - width)
+}
+
+#[cfg(test)]
+mod lip_tests {
+    use super::decode_lip_short_location;
+
+    #[test]
+    fn decodes_etsi_short_location_example() {
+        // ETSI example: E25.739014, N62.232699. The final half-octet is zero padded.
+        let payload = [0x0A, 0x01, 0x24, 0xDA, 0x52, 0xC4, 0x11, 0xE2, 0x00, 0x02, 0x00];
+        let (latitude, longitude) = decode_lip_short_location(&payload).expect("valid short LIP report");
+        assert!((latitude - 62.232699).abs() < 0.000001);
+        assert!((longitude - 25.739014).abs() < 0.000001);
+    }
+
+    #[test]
+    fn rejects_non_short_and_truncated_lip() {
+        assert_eq!(decode_lip_short_location(&[0x0A, 0x40, 0, 0, 0, 0, 0, 0]), None);
+        assert_eq!(decode_lip_short_location(&[0x0A, 0x00]), None);
     }
 }
