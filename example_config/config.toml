@@ -16,6 +16,13 @@ stack_mode = "Bs"
 # Environment variable FLOWSTATION_SERVICE_UNIT also works.
 # service_name = "tetra"
 
+# Optional display name for Telegram alert footers, separate from the systemd unit.
+# Spaces, Unicode, and callsigns are supported. Leave service_name set to the real
+# service unit so restart/shutdown and OTA update continue to target that service.
+# If omitted or blank, Telegram keeps service_name (or "FlowStation" if unset).
+# These are top-level settings: place them before any [section]. Restart after editing.
+# station_name = "HamTetra-CT TMO"
+
 ###############################################################################
 # FALLBACK CONFIG
 #

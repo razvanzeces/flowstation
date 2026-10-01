@@ -225,6 +225,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         stack_mode: root.stack_mode,
         debug_log: root.debug_log,
         service_name: root.service_name,
+        station_name: root.station_name,
         phy_io: phy_dto_to_cfg(root.phy_io),
         net: net_dto_to_cfg(root.net_info),
         cell: cell_cfg,
@@ -299,6 +300,8 @@ struct TomlConfigRoot {
     debug_log: Option<String>,
     #[serde(default)]
     service_name: Option<String>,
+    #[serde(default)]
+    station_name: Option<String>,
 
     phy_io: PhyIoDto,
     net_info: NetInfoDto,
@@ -583,6 +586,20 @@ location_area = 1
         let toml = minimal_toml("");
         let cfg = from_toml_str(&toml).expect("parse failed");
         assert_eq!(cfg.cell.neighbor_cells_ca.len(), 0);
+    }
+
+    #[test]
+    fn station_and_service_names_parse_independently() {
+        let toml = format!(
+            "service_name = \"flowstation\"\nstation_name = \"HamTetra-CT TMO\"\n{}",
+            minimal_toml("")
+        );
+        let cfg = from_toml_str(&toml).expect("station name must be accepted at the root");
+        assert_eq!(cfg.service_name.as_deref(), Some("flowstation"));
+        assert_eq!(cfg.station_name.as_deref(), Some("HamTetra-CT TMO"));
+
+        let legacy = from_toml_str(&minimal_toml("")).unwrap();
+        assert!(legacy.station_name.is_none());
     }
 
     #[test]

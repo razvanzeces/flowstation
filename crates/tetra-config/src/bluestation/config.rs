@@ -68,6 +68,10 @@ pub struct StackConfig {
     /// then falls back to "tetra". Override via env var FLOWSTATION_SERVICE_UNIT also works.
     pub service_name: Option<String>,
 
+    /// Human-readable station name shown in Telegram alert footers. Independent of
+    /// the systemd service unit; when unset, Telegram keeps the legacy service_name label.
+    pub station_name: Option<String>,
+
     pub phy_io: CfgPhyIo,
     pub net: CfgNetInfo,
     pub cell: CfgCellInfo,

@@ -17,9 +17,15 @@ impl StationInfo {
     /// Build the label once from immutable config (network + cell identity + optional name).
     pub fn from_config(cfg: &SharedConfig) -> Self {
         let c = cfg.config();
-        let name = c.service_name.clone().unwrap_or_else(|| "FlowStation".to_string());
+        let name = c
+            .station_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .or(c.service_name.as_deref())
+            .unwrap_or("FlowStation");
         // Bound the (operator-controlled) name so the footer can't blow past Telegram's limit.
-        let name = truncate_chars(&name, STATION_LABEL_MAX_CHARS);
+        let name = truncate_chars(name, STATION_LABEL_MAX_CHARS);
         let label = format!(
             "{} · MCC {} / MNC {} · LA {} · CC {}",
             name, c.net.mcc, c.net.mnc, c.cell.location_area, c.cell.colour_code
@@ -45,7 +51,7 @@ pub fn truncate_chars(s: &str, max: usize) -> String {
 
 /// Telegram rejects messages longer than 4096 characters; stay safely under it.
 const TELEGRAM_MAX_CHARS: usize = 4000;
-/// Cap on the station label length (mostly bounds an over-long configured service_name).
+/// Cap on the configured station name length.
 const STATION_LABEL_MAX_CHARS: usize = 80;
 
 /// Assemble a framed alert: emoji + bold title, detail lines, then the station/time footer.
@@ -219,6 +225,51 @@ pub fn health(station: &StationInfo, snap: &crate::health::HealthSnapshot) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn configured_station(station_name: Option<&str>, service_name: Option<&str>) -> SharedConfig {
+        let mut cfg = tetra_config::bluestation::from_toml_str(include_str!("../../../../example_config/config.toml"))
+            .expect("example config must parse");
+        cfg.phy_io.backend = tetra_config::bluestation::PhyBackend::None;
+        cfg.station_name = station_name.map(str::to_string);
+        cfg.service_name = service_name.map(str::to_string);
+        SharedConfig::from_parts(cfg, None)
+    }
+
+    #[test]
+    fn station_name_is_independent_of_service_unit() {
+        let cfg = configured_station(Some("HamTetra-CT TMO"), Some("flowstation"));
+        let station = StationInfo::from_config(&cfg);
+        assert!(station.label.starts_with("HamTetra-CT TMO · MCC"));
+        assert_eq!(cfg.config().service_name.as_deref(), Some("flowstation"));
+        let other_service = configured_station(Some("HamTetra-CT TMO"), Some("tetra.service"));
+        assert_eq!(station.label, StationInfo::from_config(&other_service).label);
+        assert!(test_message(&station).contains("🛰 <i>HamTetra-CT TMO · MCC"));
+    }
+
+    #[test]
+    fn missing_or_blank_station_name_preserves_legacy_footer() {
+        for name in [None, Some(""), Some(" \t ")] {
+            let cfg = configured_station(name, Some("flowstation"));
+            assert!(StationInfo::from_config(&cfg).label.starts_with("flowstation · MCC"));
+            let cfg = configured_station(name, None);
+            assert!(StationInfo::from_config(&cfg).label.starts_with("FlowStation · MCC"));
+        }
+    }
+
+    #[test]
+    fn configured_station_name_is_trimmed_escaped_and_bounded() {
+        let cfg = configured_station(Some("  Lisboa <TMO> & rádio  "), Some("flowstation"));
+        let message = test_message(&StationInfo::from_config(&cfg));
+        assert!(message.contains("🛰 <i>Lisboa &lt;TMO&gt; &amp; rádio · MCC"));
+
+        let long_name = "🛰".repeat(100);
+        let cfg = configured_station(Some(&long_name), Some("flowstation"));
+        let station = StationInfo::from_config(&cfg);
+        assert_eq!(
+            station.label.split(" · MCC").next().unwrap().chars().count(),
+            STATION_LABEL_MAX_CHARS
+        );
+    }
 
     fn station() -> StationInfo {
         StationInfo {

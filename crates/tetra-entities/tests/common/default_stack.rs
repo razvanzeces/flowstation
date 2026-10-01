@@ -17,6 +17,7 @@ pub fn default_test_config_bs() -> StackConfig {
         stack_mode: StackMode::Bs,
         debug_log: None,
         service_name: None,
+        station_name: None,
         phy_io,
         net: net_info,
         cell: cell_info,

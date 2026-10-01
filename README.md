@@ -114,6 +114,25 @@ systemctl enable --now tetra
 
 The fully annotated reference config is at [`example_config/config.toml`](example_config/config.toml). Below are the essentials.
 
+### Station name and systemd service
+
+Use separate top-level settings for the station's Telegram display name and its
+systemd service unit:
+
+```toml
+service_name = "flowstation"
+station_name = "HamTetra-CT TMO"
+```
+
+Place these settings before the first `[section]` in `config.toml`. You can edit
+them in the dashboard's **Config** editor, then save and restart FlowStation.
+`station_name` appears in Telegram alert and test-message footers; changing it
+does not change the service targeted by restart, shutdown, or OTA update.
+`service_name` must remain the actual systemd unit name.
+
+When `station_name` is omitted or blank, existing Telegram labels are preserved:
+the footer uses `service_name`, or `FlowStation` when neither name is set.
+
 ### Mandatory
 
 ```toml
