@@ -497,11 +497,19 @@ voice_service = true
 #
 # chat_ids: positive = a private chat; negative = a group/channel. Each receives every
 # enabled alert. The per-category flags below default to true.
+# recipients: optional chat/topic pairs, sent in addition to chat_ids. Use message_thread_id
+# for an existing Telegram forum topic; omit it for normal delivery. Several topics in the
+# same group can be configured. Duplicate (chat, topic) pairs receive only one copy.
+# For channel discussion topics, use the linked forum group's chat_id, not the channel ID.
 #
 # [telegram_alerts]
 # enabled = true
 # bot_token = "123456789:AAExampleBotTokenStringFromBotFather"
 # chat_ids = [123456789]          # one or more; negative IDs are groups/channels
+# recipients = [
+#   { chat_id = -1001234567890, message_thread_id = 42 },
+#   { chat_id = -1001234567890, message_thread_id = 99 },
+# ]
 # alert_connect = true            # radio attached
 # alert_disconnect = true         # radio detached
 # alert_t351 = true               # radio dropped (no response to T351)

@@ -185,6 +185,35 @@ status_code = 32003
 action = "kick_all"
 ```
 
+### Telegram forum topics
+
+In **Telegram Alerts → Recipients**, enter the **Chat ID** and an optional **Topic ID**
+to send alerts and forwarded data directly to an existing Telegram forum topic.
+Add each topic as a separate recipient; several topics can share the same group Chat ID.
+Leave Topic ID blank for a private chat, ordinary group, or channel. For a topic in a
+channel's linked discussion group, use that group's Chat ID.
+
+Send a command such as `/start@YourBot` inside the desired topic, then click **Detect Chat ID**.
+Recent messages visible to the bot expose their topic IDs; select the entry labelled with
+the desired topic. You can also enter `message.chat.id` and `message.message_thread_id`
+from the Bot API's `getUpdates` response manually. The bot must have permission to send
+messages in that chat/topic. Use **Send test** to check the destination, then **Save**.
+
+```toml
+[telegram_alerts]
+enabled = true
+bot_token = "YOUR_BOT_TOKEN"
+chat_ids = [] # Existing chat_ids configurations remain supported.
+recipients = [
+    { chat_id = -1001234567890, message_thread_id = 42 },
+    { chat_id = -1001234567890, message_thread_id = 99 },
+]
+```
+
+Each configured destination receives every enabled alert and forwarded Telegram message.
+These IDs select existing topics; they do not create topics or filter data by category.
+Changes apply immediately and persist in `config.toml`.
+
 ### Fallback config
 
 If FlowStation fails to parse `config.toml` at startup (e.g. after a bad dashboard edit), it falls back to `config.toml.fallback` automatically. Create it once:

@@ -284,9 +284,17 @@ impl TelegramAlerter {
             sink.send_telegram_html(html.to_string());
         }
         let token = tg.bot_token.as_ref();
-        for &chat_id in &tg.chat_ids {
-            if let Err(e) = self.client.send_message_html(token, chat_id, html) {
-                tracing::debug!("Telegram: send to chat {} failed: {}", chat_id, e);
+        for recipient in tg.destinations() {
+            if let Err(e) = self
+                .client
+                .send_message_html(token, recipient.chat_id, recipient.message_thread_id, html)
+            {
+                tracing::debug!(
+                    "Telegram: send to chat {} topic {:?} failed: {}",
+                    recipient.chat_id,
+                    recipient.message_thread_id,
+                    e
+                );
             }
         }
     }

@@ -262,7 +262,11 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
     }
 
     if let Some(telegram) = root.telegram_alerts {
-        cfg.telegram = Some(apply_telegram_patch(telegram));
+        let telegram = apply_telegram_patch(telegram);
+        for recipient in telegram.destinations() {
+            recipient.validate()?;
+        }
+        cfg.telegram = Some(telegram);
     }
 
     Ok(cfg)
@@ -707,6 +711,50 @@ enabled = true
 bogus = 1
 "#;
         assert!(from_toml_str(&toml).is_err(), "should reject unknown telegram_alerts field");
+    }
+
+    #[test]
+    fn telegram_topic_recipients_parse_and_apply_live() {
+        let toml = minimal_toml("")
+            + r#"
+[telegram_alerts]
+enabled = true
+bot_token = "123456:ABC"
+recipients = [{ chat_id = -1001234567890, message_thread_id = 42 }, { chat_id = -1001234567890, message_thread_id = 99 }]
+"#;
+        let cfg = from_toml_str(&toml).unwrap();
+        let tg = cfg.telegram.as_ref().unwrap();
+        assert!(tg.is_deliverable());
+        assert_eq!(tg.destinations().len(), 2);
+        assert_eq!(tg.recipients[0].message_thread_id, Some(42));
+
+        let shared = super::super::SharedConfig::from_parts(cfg, None);
+        shared.state_write().telegram_override = Some(super::super::TelegramRuntimeOverride {
+            enabled: true,
+            bot_token: "123456:ABC".into(),
+            recipients: vec![super::super::TelegramRecipient {
+                chat_id: -1001234567890,
+                message_thread_id: Some(123),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(shared.effective_telegram().destinations()[0].message_thread_id, Some(123));
+    }
+
+    #[test]
+    fn telegram_invalid_recipients_rejected() {
+        for recipient in [
+            "{ chat_id = 0 }",
+            "{ chat_id = 4503599627370496 }",
+            "{ chat_id = -100123, message_thread_id = 0 }",
+            "{ chat_id = -100123, message_thread_id = -1 }",
+            "{ chat_id = -100123, message_thread_id = 2147483648 }",
+            "{ chat_id = -100123, message_thread_id = 1.5 }",
+            "{ chat_id = -100123, topic_id = 42 }",
+        ] {
+            let toml = minimal_toml("") + &format!("\n[telegram_alerts]\nrecipients = [{recipient}]\n");
+            assert!(from_toml_str(&toml).is_err(), "accepted {recipient}");
+        }
     }
 
     #[test]

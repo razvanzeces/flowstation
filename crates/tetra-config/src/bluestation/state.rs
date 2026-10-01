@@ -264,6 +264,7 @@ pub struct TelegramRuntimeOverride {
     pub enabled: bool,
     pub bot_token: String,
     pub chat_ids: Vec<i64>,
+    pub recipients: Vec<super::TelegramRecipient>,
     pub alert_connect: bool,
     pub alert_disconnect: bool,
     pub alert_t351: bool,

@@ -389,6 +389,7 @@ impl SharedConfig {
                 enabled: o.enabled,
                 bot_token: crate::bluestation::SecretField::from(o.bot_token.clone()),
                 chat_ids: o.chat_ids.clone(),
+                recipients: o.recipients.clone(),
                 alert_connect: o.alert_connect,
                 alert_disconnect: o.alert_disconnect,
                 alert_t351: o.alert_t351,

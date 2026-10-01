@@ -31,6 +31,8 @@ pub struct DetectedChat {
     pub name: String,
     /// Chat kind reported by Telegram: "private", "group", "supergroup", or "channel".
     pub kind: String,
+    /// Forum topic observed in a recent message, if any.
+    pub message_thread_id: Option<i32>,
 }
 
 pub struct TelegramClient {
@@ -68,7 +70,7 @@ impl TelegramClient {
         Ok(BotInfo { username })
     }
 
-    /// List the distinct chats that have recently messaged the bot. Telegram buffers updates
+    /// List distinct chat/topic destinations that have recently messaged the bot. Telegram buffers updates
     /// for ~24h when no webhook is set, so the owner messages the bot once, then clicks detect.
     pub fn get_updates(&self, token: &str) -> Result<Vec<DetectedChat>, String> {
         let url = format!("{}?timeout=0&limit=100", Self::method_url(token, "getUpdates"));
@@ -76,30 +78,13 @@ impl TelegramClient {
         let result = ok_result(&json)?;
         let updates = result.as_array().ok_or_else(|| "unexpected getUpdates response".to_string())?;
 
-        let mut seen: Vec<DetectedChat> = Vec::new();
-        for upd in updates {
-            // A chat can show up under several update kinds; check the common ones.
-            for key in ["message", "edited_message", "channel_post", "my_chat_member"] {
-                if let Some(chat) = upd.get(key).and_then(|m| m.get("chat"))
-                    && let Some(detected) = chat_to_detected(chat)
-                    && !seen.iter().any(|c| c.id == detected.id)
-                {
-                    seen.push(detected);
-                }
-            }
-        }
-        Ok(seen)
+        Ok(detect_destinations(updates))
     }
 
     /// Send an HTML-formatted message to `chat_id`. Used for both alerts and the test button.
-    pub fn send_message_html(&self, token: &str, chat_id: i64, html: &str) -> Result<(), String> {
+    pub fn send_message_html(&self, token: &str, chat_id: i64, message_thread_id: Option<i32>, html: &str) -> Result<(), String> {
         let url = Self::method_url(token, "sendMessage");
-        let body = serde_json::json!({
-            "chat_id": chat_id,
-            "text": html,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": true,
-        });
+        let body = message_body(chat_id, message_thread_id, html);
         let resp = self
             .http
             .post(&url)
@@ -118,6 +103,44 @@ impl TelegramClient {
             .json::<serde_json::Value>()
             .map_err(|e| format!("read failed: {e}"))
     }
+}
+
+fn message_body(chat_id: i64, message_thread_id: Option<i32>, html: &str) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "chat_id": chat_id,
+        "text": html,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": true,
+    });
+    if let Some(id) = message_thread_id {
+        body["message_thread_id"] = id.into();
+    }
+    body
+}
+
+fn detect_destinations(updates: &[serde_json::Value]) -> Vec<DetectedChat> {
+    let mut seen: Vec<DetectedChat> = Vec::new();
+    for upd in updates {
+        for key in ["message", "edited_message", "channel_post", "edited_channel_post", "my_chat_member"] {
+            if let Some(message) = upd.get(key)
+                && let Some(chat) = message.get("chat")
+                && let Some(mut detected) = chat_to_detected(chat)
+            {
+                detected.message_thread_id = message
+                    .get("message_thread_id")
+                    .and_then(|v| v.as_i64())
+                    .and_then(|id| i32::try_from(id).ok())
+                    .filter(|id| *id > 0);
+                if !seen
+                    .iter()
+                    .any(|c| c.id == detected.id && c.message_thread_id == detected.message_thread_id)
+                {
+                    seen.push(detected);
+                }
+            }
+        }
+    }
+    seen
 }
 
 /// Extract `result` from a `{ ok, result }` envelope, or turn `{ ok:false, description }` into an Err.
@@ -153,12 +176,45 @@ fn chat_to_detected(chat: &serde_json::Value) -> Option<DetectedChat> {
         format!("Chat {id}")
     };
 
-    Some(DetectedChat { id, name, kind })
+    Some(DetectedChat {
+        id,
+        name,
+        kind,
+        message_thread_id: None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn topic_message_payload_and_normal_chat_payload() {
+        let topic = message_body(-100123, Some(42), "<b>test</b>");
+        assert_eq!(topic["chat_id"], -100123);
+        assert_eq!(topic["message_thread_id"], 42);
+        assert_eq!(topic["parse_mode"], "HTML");
+        assert_eq!(topic["text"], "<b>test</b>");
+        let normal = message_body(-100123, None, "test");
+        assert!(normal.get("message_thread_id").is_none());
+    }
+
+    #[test]
+    fn detect_keeps_distinct_topics_and_deduplicates_repeated_messages() {
+        let updates = serde_json::json!([
+            {"message": {"chat": {"id": -100123, "type": "supergroup", "title": "Ops"}, "message_thread_id": 42}},
+            {"edited_message": {"chat": {"id": -100123, "type": "supergroup"}, "message_thread_id": 42}},
+            {"message": {"chat": {"id": -100123, "type": "supergroup"}, "message_thread_id": 99}},
+            {"my_chat_member": {"chat": {"id": -100123, "type": "supergroup"}}},
+            {"channel_post": {"chat": {"id": -100999, "type": "channel"}}}
+        ]);
+        let found = detect_destinations(updates.as_array().unwrap());
+        assert_eq!(found.len(), 4);
+        assert_eq!(found[0].message_thread_id, Some(42));
+        assert_eq!(found[1].message_thread_id, Some(99));
+        assert_eq!(found[2].message_thread_id, None);
+        assert_eq!(found[3].kind, "channel");
+    }
 
     #[test]
     fn method_url_builds() {
@@ -210,15 +266,7 @@ mod tests {
             ]
         });
         let result = ok_result(&json).unwrap();
-        let mut seen: Vec<DetectedChat> = Vec::new();
-        for upd in result.as_array().unwrap() {
-            if let Some(chat) = upd.get("message").and_then(|m| m.get("chat"))
-                && let Some(d) = chat_to_detected(chat)
-                && !seen.iter().any(|c| c.id == d.id)
-            {
-                seen.push(d);
-            }
-        }
+        let seen = detect_destinations(result.as_array().unwrap());
         assert_eq!(seen.len(), 2);
         assert_eq!(seen[0].id, 7);
         assert_eq!(seen[1].id, -9);

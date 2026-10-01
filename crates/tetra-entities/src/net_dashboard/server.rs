@@ -3494,20 +3494,20 @@ fn serve_telegram_get(stream: TcpStream, shared_config: &Option<tetra_config::bl
     };
     let masked = crate::net_dashboard::telegram::mask_token(tg.bot_token.as_ref());
     let token_set = !tg.bot_token.as_ref().trim().is_empty();
-    let chat_ids = tg.chat_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
-    let body = format!(
-        "{{\"enabled\":{},\"bot_token_masked\":\"{}\",\"token_set\":{},\"chat_ids\":[{}],\"alert_connect\":{},\"alert_disconnect\":{},\"alert_t351\":{},\"alert_lip\":{},\"alert_backhaul\":{},\"alert_critical_logs\":{}}}",
-        tg.enabled,
-        crate::net_dashboard::telegram::json_escape(&masked),
-        token_set,
-        chat_ids,
-        tg.alert_connect,
-        tg.alert_disconnect,
-        tg.alert_t351,
-        tg.alert_lip,
-        tg.alert_backhaul,
-        tg.alert_critical_logs,
-    );
+    let body = serde_json::json!({
+        "enabled": tg.enabled,
+        "bot_token_masked": masked,
+        "token_set": token_set,
+        "chat_ids": tg.chat_ids,
+        "recipients": tg.recipients,
+        "alert_connect": tg.alert_connect,
+        "alert_disconnect": tg.alert_disconnect,
+        "alert_t351": tg.alert_t351,
+        "alert_lip": tg.alert_lip,
+        "alert_backhaul": tg.alert_backhaul,
+        "alert_critical_logs": tg.alert_critical_logs,
+    })
+    .to_string();
     http_json_response(stream, 200, &body);
 }
 
@@ -3536,15 +3536,19 @@ fn serve_telegram_post(stream: TcpStream, shared_config: &Option<tetra_config::b
         http_response(stream, 400, "Invalid token: no spaces or control characters, and must contain ':'.");
         return;
     }
-    let chat_ids = match json.get("chat_ids").and_then(|v| v.as_array()) {
-        Some(arr) => arr.iter().filter_map(|v| v.as_i64()).collect::<Vec<i64>>(),
-        None => cur.chat_ids.clone(),
+    let (chat_ids, recipients) = match crate::net_dashboard::telegram::parse_destinations(&json, &cur) {
+        Ok(destinations) => destinations,
+        Err(e) => {
+            http_response(stream, 400, &e);
+            return;
+        }
     };
 
     let ov = TelegramRuntimeOverride {
         enabled: as_bool("enabled", cur.enabled),
         bot_token,
         chat_ids,
+        recipients,
         alert_connect: as_bool("alert_connect", cur.alert_connect),
         alert_disconnect: as_bool("alert_disconnect", cur.alert_disconnect),
         alert_t351: as_bool("alert_t351", cur.alert_t351),
@@ -3567,7 +3571,7 @@ fn serve_telegram_post(stream: TcpStream, shared_config: &Option<tetra_config::b
     tracing::info!(
         "Dashboard: Telegram alerts updated (enabled={} chats={})",
         ov.enabled,
-        ov.chat_ids.len()
+        cfg.effective_telegram().destinations().len()
     );
     http_response(stream, 200, "OK");
 }
@@ -3610,16 +3614,15 @@ fn serve_telegram_detect(stream: TcpStream, shared_config: &Option<tetra_config:
             let items = chats
                 .iter()
                 .map(|c| {
-                    format!(
-                        "{{\"id\":{},\"name\":\"{}\",\"kind\":\"{}\"}}",
-                        c.id,
-                        crate::net_dashboard::telegram::json_escape(&c.name),
-                        crate::net_dashboard::telegram::json_escape(&c.kind)
-                    )
+                    serde_json::json!({
+                        "id": c.id,
+                        "name": c.name,
+                        "kind": c.kind,
+                        "message_thread_id": c.message_thread_id,
+                    })
                 })
-                .collect::<Vec<_>>()
-                .join(",");
-            let body = format!("{{\"ok\":true,\"chats\":[{}]}}", items);
+                .collect::<Vec<_>>();
+            let body = serde_json::json!({"ok": true, "chats": items}).to_string();
             http_json_response(stream, 200, &body);
         }
         Err(e) => {
@@ -3637,16 +3640,22 @@ fn serve_telegram_test(stream: TcpStream, shared_config: &Option<tetra_config::b
         return;
     };
     let token = telegram_resolve_token(&json, shared_config);
-    let tg = cfg.effective_telegram();
-    let chat_ids: Vec<i64> = match json.get("chat_ids").and_then(|v| v.as_array()) {
-        Some(arr) => arr.iter().filter_map(|v| v.as_i64()).collect(),
-        None => tg.chat_ids.clone(),
+    let mut tg = cfg.effective_telegram();
+    let (chat_ids, recipients) = match crate::net_dashboard::telegram::parse_destinations(&json, &tg) {
+        Ok(destinations) => destinations,
+        Err(e) => {
+            http_json_response(stream, 400, &serde_json::json!({"ok": false, "error": e}).to_string());
+            return;
+        }
     };
+    tg.chat_ids = chat_ids;
+    tg.recipients = recipients;
+    let destinations = tg.destinations();
     if token.is_empty() {
         http_json_response(stream, 200, "{\"ok\":false,\"error\":\"Niciun token setat\"}");
         return;
     }
-    if chat_ids.is_empty() {
+    if destinations.is_empty() {
         http_json_response(stream, 200, "{\"ok\":false,\"error\":\"Niciun Chat ID setat\"}");
         return;
     }
@@ -3655,10 +3664,10 @@ fn serve_telegram_test(stream: TcpStream, shared_config: &Option<tetra_config::b
     let client = crate::net_telegram::TelegramClient::new();
     let mut sent = 0u32;
     let mut errors: Vec<String> = Vec::new();
-    for id in &chat_ids {
-        match client.send_message_html(&token, *id, &html) {
+    for recipient in &destinations {
+        match client.send_message_html(&token, recipient.chat_id, recipient.message_thread_id, &html) {
             Ok(_) => sent += 1,
-            Err(e) => errors.push(format!("{id}: {e}")),
+            Err(e) => errors.push(format!("{} (topic {:?}): {e}", recipient.chat_id, recipient.message_thread_id)),
         }
     }
     let ok = errors.is_empty();

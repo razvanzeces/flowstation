@@ -1,6 +1,27 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::bluestation::SecretField;
+
+/// A Telegram destination, optionally targeting a forum topic within the chat.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelegramRecipient {
+    pub chat_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_thread_id: Option<i32>,
+}
+
+impl TelegramRecipient {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.chat_id == 0 || self.chat_id.unsigned_abs() > (1u64 << 52) - 1 {
+            return Err("Chat ID must be a non-zero Telegram integer (at most 52 bits).".into());
+        }
+        if self.message_thread_id.is_some_and(|id| id <= 0) {
+            return Err("Topic ID must be a positive integer.".into());
+        }
+        Ok(())
+    }
+}
 
 /// Telegram alerts configuration.
 ///
@@ -21,6 +42,8 @@ pub struct CfgTelegram {
     /// Destination chat IDs. Each receives every enabled alert. A negative value is a group/
     /// channel chat; a positive value is a private chat with the bot.
     pub chat_ids: Vec<i64>,
+    /// Additional destinations with optional forum topic IDs. Legacy `chat_ids` still work.
+    pub recipients: Vec<TelegramRecipient>,
 
     /// Alert when a radio (MS) registers/attaches to the cell.
     pub alert_connect: bool,
@@ -44,6 +67,7 @@ impl Default for CfgTelegram {
             enabled: false,
             bot_token: SecretField::from(String::new()),
             chat_ids: Vec::new(),
+            recipients: Vec::new(),
             alert_connect: true,
             alert_disconnect: true,
             alert_t351: true,
@@ -59,7 +83,27 @@ impl CfgTelegram {
     /// True when alerts can actually be delivered: enabled, a token is set, and at least one
     /// recipient exists. The alerter short-circuits when this is false.
     pub fn is_deliverable(&self) -> bool {
-        self.enabled && !self.bot_token.as_ref().trim().is_empty() && !self.chat_ids.is_empty()
+        self.enabled && !self.bot_token.as_ref().trim().is_empty() && (!self.chat_ids.is_empty() || !self.recipients.is_empty())
+    }
+
+    /// Merge legacy chats and topic-aware recipients, avoiding duplicate deliveries to the
+    /// same (chat, topic) pair while allowing several topics in a single group.
+    pub fn destinations(&self) -> Vec<TelegramRecipient> {
+        let mut destinations = Vec::new();
+        for recipient in self
+            .chat_ids
+            .iter()
+            .map(|&chat_id| TelegramRecipient {
+                chat_id,
+                message_thread_id: None,
+            })
+            .chain(self.recipients.iter().cloned())
+        {
+            if !destinations.contains(&recipient) {
+                destinations.push(recipient);
+            }
+        }
+        destinations
     }
 }
 
@@ -71,6 +115,8 @@ pub struct CfgTelegramDto {
     pub bot_token: String,
     #[serde(default)]
     pub chat_ids: Vec<i64>,
+    #[serde(default)]
+    pub recipients: Vec<TelegramRecipient>,
 
     #[serde(default = "default_true")]
     pub alert_connect: bool,
@@ -100,6 +146,7 @@ pub fn apply_telegram_patch(dto: CfgTelegramDto) -> CfgTelegram {
         enabled: dto.enabled,
         bot_token: SecretField::from(dto.bot_token),
         chat_ids: dto.chat_ids,
+        recipients: dto.recipients,
         alert_connect: dto.alert_connect,
         alert_disconnect: dto.alert_disconnect,
         alert_t351: dto.alert_t351,
@@ -107,5 +154,32 @@ pub fn apply_telegram_patch(dto: CfgTelegramDto) -> CfgTelegram {
         alert_backhaul: dto.alert_backhaul,
         alert_critical_logs: dto.alert_critical_logs,
         alert_health: dto.alert_health,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destinations_deduplicate_pairs_without_merging_distinct_topics() {
+        let normal = TelegramRecipient {
+            chat_id: -100123,
+            message_thread_id: None,
+        };
+        let topic = TelegramRecipient {
+            chat_id: -100123,
+            message_thread_id: Some(42),
+        };
+        let other_topic = TelegramRecipient {
+            chat_id: -100123,
+            message_thread_id: Some(99),
+        };
+        let cfg = CfgTelegram {
+            chat_ids: vec![-100123, -100123],
+            recipients: vec![normal.clone(), topic.clone(), topic.clone(), other_topic.clone()],
+            ..Default::default()
+        };
+        assert_eq!(cfg.destinations(), vec![normal, topic, other_topic]);
     }
 }

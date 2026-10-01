@@ -4,7 +4,33 @@
 //! section (preserving the rest of the file and creating a backup), plus a helper to mask the
 //! bot token before it is returned to the browser.
 
-use tetra_config::bluestation::TelegramRuntimeOverride;
+use tetra_config::bluestation::{CfgTelegram, TelegramRecipient, TelegramRuntimeOverride};
+
+/// Parse and validate both destination formats before applying settings or sending tests.
+/// Omitted fields keep their saved values; an explicit empty array clears them.
+pub fn parse_destinations(json: &serde_json::Value, current: &CfgTelegram) -> Result<(Vec<i64>, Vec<TelegramRecipient>), String> {
+    let chat_ids = match json.get("chat_ids") {
+        Some(value) => {
+            serde_json::from_value::<Vec<i64>>(value.clone()).map_err(|_| "chat_ids must be an array of integers.".to_string())?
+        }
+        None => current.chat_ids.clone(),
+    };
+    let recipients = match json.get("recipients") {
+        Some(value) => serde_json::from_value::<Vec<TelegramRecipient>>(value.clone()).map_err(|e| format!("Invalid recipients: {e}"))?,
+        None => current.recipients.clone(),
+    };
+    for recipient in chat_ids
+        .iter()
+        .map(|&chat_id| TelegramRecipient {
+            chat_id,
+            message_thread_id: None,
+        })
+        .chain(recipients.iter().cloned())
+    {
+        recipient.validate()?;
+    }
+    Ok((chat_ids, recipients))
+}
 
 /// Mask a bot token for display: keep the numeric bot id and the last few chars, hide the rest.
 /// Returns an empty string for an empty token. e.g. "123456:ABCdef...WXYZ" → "123456:AB…WXYZ".
@@ -53,11 +79,22 @@ pub fn write_telegram_to_toml(config_path: &str, ov: &TelegramRuntimeOverride) -
 
     let token_escaped = ov.bot_token.replace('\\', "\\\\").replace('"', "\\\"");
     let chat_ids = ov.chat_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ");
+    // Inline tables keep destinations inside this section, so subsequent saves replace them.
+    let recipients = ov
+        .recipients
+        .iter()
+        .map(|r| match r.message_thread_id {
+            Some(id) => format!("{{ chat_id = {}, message_thread_id = {} }}", r.chat_id, id),
+            None => format!("{{ chat_id = {} }}", r.chat_id),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     let section = format!(
         "[telegram_alerts]\n\
          enabled = {}\n\
          bot_token = \"{}\"\n\
          chat_ids = [{}]\n\
+         recipients = [{}]\n\
          alert_connect = {}\n\
          alert_disconnect = {}\n\
          alert_t351 = {}\n\
@@ -67,6 +104,7 @@ pub fn write_telegram_to_toml(config_path: &str, ov: &TelegramRuntimeOverride) -
         ov.enabled,
         token_escaped,
         chat_ids,
+        recipients,
         ov.alert_connect,
         ov.alert_disconnect,
         ov.alert_t351,
@@ -90,7 +128,7 @@ pub fn write_telegram_to_toml(config_path: &str, ov: &TelegramRuntimeOverride) -
             i += 1;
             while i < lines.len() {
                 let t = lines[i].trim_start();
-                if t.starts_with('[') && t.contains(']') {
+                if t.starts_with('[') && t.contains(']') && !t.starts_with("[telegram_alerts.") && !t.starts_with("[[telegram_alerts.") {
                     break;
                 }
                 i += 1;
@@ -127,6 +165,10 @@ mod tests {
             enabled: true,
             bot_token: "123456:ABC-DEF".to_string(),
             chat_ids: vec![987654321, -1001234567890],
+            recipients: vec![TelegramRecipient {
+                chat_id: -1001234567890,
+                message_thread_id: Some(42),
+            }],
             alert_connect: true,
             alert_disconnect: false,
             alert_t351: true,
@@ -200,7 +242,50 @@ mod tests {
         let tg = parsed.telegram.expect("telegram present");
         assert!(tg.enabled);
         assert_eq!(tg.chat_ids, vec![987654321, -1001234567890]);
+        assert_eq!(tg.recipients, ov().recipients);
         assert!(!tg.alert_disconnect);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn destination_edits_preserve_omitted_fields_and_reject_invalid_values() {
+        let current = CfgTelegram {
+            chat_ids: ov().chat_ids,
+            recipients: ov().recipients,
+            ..Default::default()
+        };
+        let (chats, recipients) = parse_destinations(&serde_json::json!({}), &current).unwrap();
+        assert_eq!(chats, current.chat_ids);
+        assert_eq!(recipients, current.recipients);
+        let cleared = parse_destinations(&serde_json::json!({"chat_ids": [], "recipients": []}), &current).unwrap();
+        assert!(cleared.0.is_empty() && cleared.1.is_empty());
+        for invalid in [
+            serde_json::json!({"chat_ids": ["oops"]}),
+            serde_json::json!({"chat_ids": [0]}),
+            serde_json::json!({"recipients": [{"chat_id": -100123, "message_thread_id": 0}]}),
+            serde_json::json!({"recipients": [{"chat_id": -100123, "message_thread_id": 1.5}]}),
+            serde_json::json!({"recipients": [{"chat_id": -100123, "topic_id": 42}]}),
+        ] {
+            assert!(parse_destinations(&invalid, &current).is_err());
+        }
+    }
+
+    #[test]
+    fn saving_replaces_nested_recipient_tables_and_can_clear_topics() {
+        let path = std::env::temp_dir().join("fs_tg_test_nested_topics.toml");
+        let cfg = "[telegram_alerts]\nenabled = false\n[[telegram_alerts.recipients]]\nchat_id = -100123\nmessage_thread_id = 99\n[security]\nbar = 2\n";
+        std::fs::write(&path, cfg).unwrap();
+        write_telegram_to_toml(path.to_str().unwrap(), &ov()).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("message_thread_id = 42"));
+        assert!(!out.contains("message_thread_id = 99"));
+        assert!(out.contains("[security]\nbar = 2"));
+        let mut cleared = ov();
+        cleared.recipients.clear();
+        write_telegram_to_toml(path.to_str().unwrap(), &cleared).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("recipients = []"));
+        assert!(!out.contains("message_thread_id"));
         let _ = std::fs::remove_file(&path);
     }
 }

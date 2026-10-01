@@ -3684,15 +3684,21 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       </div>
 
       <div class="card">
-        <div class="card-head"><div class="card-title" data-i18n="tg_recipients_title">Recipients (Chat IDs)</div></div>
+        <div class="card-head"><div class="card-title" data-i18n="tg_recipients_title">Recipients (Chats / Topics)</div></div>
         <div class="card-body">
           <div style="color:var(--muted);font-size:13px;margin-bottom:12px" data-i18n="tg_recipients_help">
             Every alert is sent to each recipient.
           </div>
           <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
             <button class="btn" onclick="detectTelegramChats()"><span class="btn-icon" data-icon="detect"></span><span data-i18n="tg_detect">Detect Chat ID</span></button>
-            <input type="number" id="tg-chat-input" class="form-input" placeholder="-1001234567890"
-                   style="flex:1;min-width:180px" onkeydown="if(event.key==='Enter'){addRecipient();}">
+            <label style="flex:1;min-width:180px"><span style="font-size:12px;color:var(--muted)">Chat ID</span>
+              <input type="number" id="tg-chat-input" class="form-input" placeholder="-1001234567890" step="1"
+                     style="width:100%" onkeydown="if(event.key==='Enter'){addRecipient();}">
+            </label>
+            <label style="flex:0 1 220px"><span style="font-size:12px;color:var(--muted)" data-i18n="tg_topic_optional">Topic ID (optional)</span>
+              <input type="number" id="tg-topic-input" class="form-input" placeholder="123" min="1" max="2147483647" step="1"
+                     style="width:100%" onkeydown="if(event.key==='Enter'){addRecipient();}">
+            </label>
             <button class="btn" onclick="addRecipient()"><span class="btn-icon" data-icon="add"></span><span data-i18n="tg_add">Add</span></button>
           </div>
           <div id="tg-detected" style="margin-bottom:10px"></div>
@@ -4332,17 +4338,19 @@ const LANGS={
     telegram:'Telegram',tg_title:'Telegram Alerts',
     tg_help:'Get instant Telegram messages when something happens on the station — a radio attaches or drops, the backhaul goes up or down, a position beacon arrives, or the stack logs a warning/error.',
     tg_enabled:'Enable Telegram alerts',
-    tg_test:'Send test',tg_testing:'Sending test…',tg_test_ok:'✓ Test sent to {n} chat(s)',
+    tg_test:'Send test',tg_testing:'Sending test…',tg_test_ok:'✓ Test sent to {n} recipient(s)',
     tg_howto_title:'Setup — 4 steps',
     tg_step1:'In Telegram, open @BotFather, send /newbot and follow the prompts. Copy the bot token it gives you.',
     tg_step2:'Paste the token below and click Verify — you should see your bot\'s @username.',
-    tg_step3:'Open a chat with your new bot (or add it to a group) and send it any message, e.g. /start.',
-    tg_step4:'Click "Detect Chat ID", add your chat to the recipients, then Save. Use "Send test" to confirm.',
+    tg_step3:'Open a chat with your bot or add it to a group. For a forum topic, send /start@YourBot inside that topic.',
+    tg_step4:'Click "Detect Chat ID" and add the desired chat/topic. You can also enter Chat ID and optional Topic ID manually. Use "Send test" to confirm, then Save.',
     tg_bot_title:'Bot token',
     tg_bot_help:'The token from @BotFather looks like 123456789:AAExampleTokenString. It is stored masked and never shown in full again.',
     tg_verify:'Verify',tg_verifying:'Verifying…',
-    tg_recipients_title:'Recipients (Chat IDs)',
-    tg_recipients_help:'Every alert is sent to each recipient. A positive ID is a private chat; a negative ID is a group or channel.',
+    tg_recipients_title:'Recipients (Chats / Topics)',
+    tg_recipients_help:'Every alert is sent to each recipient. A positive Chat ID is a private chat; a negative ID is a group or channel. For a forum topic, add its Topic ID; leave it blank for normal delivery. In a channel, use the linked discussion group\'s Chat ID to target a forum topic.',
+    tg_saved:'✓ Saved — applies immediately.',
+    tg_topic_optional:'Topic ID (optional)',tg_topic:'Topic {id}',tg_invalid_topic:'Enter a positive Topic ID (1–2147483647) or leave it blank.',
     tg_detect:'Detect Chat ID',tg_detecting:'Reading recent messages…',
     tg_detect_none:'No recent messages found. Send your bot a message first, then try again.',
     tg_detect_found:'Chats that messaged your bot — click Add:',
@@ -4441,13 +4449,15 @@ const LANGS={
     tg_howto_title:'Configurare — 4 pași',
     tg_step1:'În Telegram, deschide @BotFather, trimite /newbot și urmează pașii. Copiază token-ul botului.',
     tg_step2:'Lipește token-ul mai jos și apasă Verifică — ar trebui să vezi @username-ul botului tău.',
-    tg_step3:'Deschide o conversație cu botul (sau adaugă-l într-un grup) și trimite-i orice mesaj, ex. /start.',
-    tg_step4:'Apasă „Detectează Chat ID", adaugă conversația la destinatari, apoi Salvează. Folosește „Trimite test" pentru confirmare.',
+    tg_step3:'Deschide o conversație cu botul sau adaugă-l într-un grup. Pentru un topic de forum, trimite /start@YourBot în acel topic.',
+    tg_step4:'Apasă „Detectează Chat ID" și adaugă conversația/topicul dorit. Poți introduce manual Chat ID și Topic ID opțional. Folosește „Trimite test" pentru confirmare, apoi Salvează.',
     tg_bot_title:'Token bot',
     tg_bot_help:'Token-ul de la @BotFather arată ca 123456789:AAExempluToken. Este stocat mascat și nu mai e afișat integral.',
     tg_verify:'Verifică',tg_verifying:'Se verifică…',
-    tg_recipients_title:'Destinatari (Chat ID-uri)',
-    tg_recipients_help:'Fiecare alertă e trimisă către toți destinatarii. Un ID pozitiv e o conversație privată; unul negativ e un grup sau canal.',
+    tg_recipients_title:'Destinatari (Conversații / Topicuri)',
+    tg_recipients_help:'Fiecare alertă e trimisă către toți destinatarii. Un Chat ID pozitiv e o conversație privată; unul negativ e un grup sau canal. Pentru un topic de forum, introdu Topic ID; lasă câmpul gol pentru trimiterea normală. Pentru topicuri de discuție ale unui canal, folosește Chat ID-ul grupului asociat.',
+    tg_saved:'✓ Salvat — se aplică imediat.',
+    tg_topic_optional:'Topic ID (opțional)',tg_topic:'Topic {id}',tg_invalid_topic:'Introdu un Topic ID pozitiv (1–2147483647) sau lasă câmpul gol.',
     tg_detect:'Detectează Chat ID',tg_detecting:'Se citesc mesajele recente…',
     tg_detect_none:'Niciun mesaj recent. Trimite întâi un mesaj botului, apoi încearcă din nou.',
     tg_detect_found:'Conversații care au scris botului — apasă Adaugă:',
@@ -6818,7 +6828,7 @@ async function saveWx(){
 function setWxMsg(txt,ok){const el=document.getElementById('wx-msg');el.textContent=txt;el.style.color=ok?'var(--accent)':'var(--danger)';setTimeout(()=>{if(el.textContent===txt)el.textContent='';},4000);}
 
 // ── Telegram alerts ─────────────────────────────────────────────────────────
-let tgChats=[];            // recipient chat IDs (numbers)
+let tgRecipients=[];       // {chat_id, message_thread_id?}; several topics may share a chat
 let tgChatNames={};        // id -> best-effort friendly name (display only)
 let tgDetected=[];         // last "detect" result, for the Add buttons
 let tgTokenDirty=false;    // true once the user edits the token field (so we send it)
@@ -6834,7 +6844,9 @@ async function loadTelegram(){
     const tok=document.getElementById('tg-token');
     tok.value=d.token_set?(d.bot_token_masked||''):'';
     tgTokenDirty=false;
-    tgChats=(d.chat_ids||[]).slice();
+    tgRecipients=[];
+    (d.chat_ids||[]).forEach(id=>pushTgRecipient(id,null));
+    (d.recipients||[]).forEach(r=>pushTgRecipient(r.chat_id,r.message_thread_id));
     renderTgChips();
     document.getElementById('tg-connect').checked=!!d.alert_connect;
     document.getElementById('tg-disconnect').checked=!!d.alert_disconnect;
@@ -6846,24 +6858,42 @@ async function loadTelegram(){
     document.getElementById('tg-detected').innerHTML='';
   }catch{setTgMsg(t('conn_error'),false);}
 }
+function pushTgRecipient(chatId,topicId){
+  const topic=topicId??null;
+  if(!tgRecipients.some(r=>r.chat_id===chatId&&(r.message_thread_id??null)===topic)){
+    const r={chat_id:chatId};if(topic!==null)r.message_thread_id=topic;
+    tgRecipients.push(r);
+  }
+}
 function renderTgChips(){
   const box=document.getElementById('tg-chips');
-  if(!tgChats.length){box.innerHTML='<span style="color:var(--muted);font-size:13px">'+t('tg_no_recipients')+'</span>';return;}
-  box.innerHTML=tgChats.map(id=>{
-    const nm=tgChatNames[id]?(' · '+tgEsc(tgChatNames[id])):'';
-    return '<span class="id-chip">'+id+nm+
-      '<span class="id-chip-x" onclick="removeRecipient('+id+')">×</span></span>';
+  if(!tgRecipients.length){box.innerHTML='<span style="color:var(--muted);font-size:13px">'+t('tg_no_recipients')+'</span>';return;}
+  box.innerHTML=tgRecipients.map((r,i)=>{
+    const nm=tgChatNames[r.chat_id]?(' · '+tgEsc(tgChatNames[r.chat_id])):'';
+    const topic=r.message_thread_id?(' · '+tgEsc(t('tg_topic',{id:r.message_thread_id}))):'';
+    return '<span class="id-chip">'+r.chat_id+topic+nm+
+      '<span class="id-chip-x" onclick="removeRecipient('+i+')">×</span></span>';
   }).join('');
 }
 function addRecipient(){
   const inp=document.getElementById('tg-chat-input');
-  const v=parseInt(inp.value,10);
-  if(!Number.isInteger(v)||v===0){setTgRecipMsg(t('tg_invalid_chat'),false);inp.focus();return;}
-  if(!tgChats.includes(v))tgChats.push(v);
-  renderTgChips();inp.value='';inp.focus();
+  const topicInp=document.getElementById('tg-topic-input');
+  const v=Number(inp.value);
+  if(!Number.isSafeInteger(v)||v===0||Math.abs(v)>2**52-1){setTgRecipMsg(t('tg_invalid_chat'),false);inp.focus();return;}
+  const rawTopic=topicInp.value.trim();
+  const topic=rawTopic===''?null:Number(rawTopic);
+  if(topic!==null&&(!Number.isInteger(topic)||topic<=0||topic>2147483647)){
+    setTgRecipMsg(t('tg_invalid_topic'),false);topicInp.focus();return;
+  }
+  pushTgRecipient(v,topic);
+  renderTgChips();inp.value='';topicInp.value='';inp.focus();
 }
-function removeRecipient(id){tgChats=tgChats.filter(x=>x!==id);renderTgChips();}
-function addDetected(i){const c=tgDetected[i];if(!c)return;if(!tgChats.includes(c.id)){tgChats.push(c.id);tgChatNames[c.id]=c.name;renderTgChips();}}
+function removeRecipient(i){tgRecipients.splice(i,1);renderTgChips();}
+function addDetected(i){
+  const c=tgDetected[i];if(!c)return;
+  pushTgRecipient(c.id,c.message_thread_id);
+  tgChatNames[c.id]=c.name;renderTgChips();
+}
 async function verifyTelegram(){
   const st=document.getElementById('tg-verify-status');
   st.textContent=t('tg_verifying');st.style.color='var(--muted)';
@@ -6886,7 +6916,7 @@ async function detectTelegramChats(){
     box.innerHTML='<div style="color:var(--muted);font-size:13px;margin-bottom:6px">'+t('tg_detect_found')+'</div>'+
       tgDetected.map((c,i)=>
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0">'+
-        '<span style="font-size:13px">'+tgEsc(c.name)+' <span style="color:var(--muted)">('+c.id+' · '+tgEsc(c.kind)+')</span></span>'+
+        '<span style="font-size:13px">'+tgEsc(c.name)+' <span style="color:var(--muted)">('+c.id+' · '+tgEsc(c.kind)+(c.message_thread_id?' · '+tgEsc(t('tg_topic',{id:c.message_thread_id})):'' )+')</span></span>'+
         '<button class="btn" onclick="addDetected('+i+')">+ '+t('tg_add')+'</button></div>'
       ).join('');
   }catch{box.innerHTML='<span style="color:var(--danger);font-size:13px">'+t('conn_error')+'</span>';}
@@ -6894,7 +6924,8 @@ async function detectTelegramChats(){
 async function saveTelegram(){
   const body={
     enabled:document.getElementById('tg-enabled').checked,
-    chat_ids:tgChats,
+    chat_ids:[],
+    recipients:tgRecipients,
     alert_connect:document.getElementById('tg-connect').checked,
     alert_disconnect:document.getElementById('tg-disconnect').checked,
     alert_t351:document.getElementById('tg-t351').checked,
@@ -6905,13 +6936,13 @@ async function saveTelegram(){
   const tok=tgTokenField();if(tok)body.bot_token=tok;
   try{
     const r=await fetch('/api/telegram',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(r.ok){setTgMsg(t('saved'),true);loadTelegram();}
+    if(r.ok){setTgMsg(t('tg_saved'),true);loadTelegram();}
     else setTgMsg(t('save_fail')+': '+await r.text(),false);
   }catch{setTgMsg(t('conn_error'),false);}
 }
 async function testTelegram(){
   setTgMsg(t('tg_testing'),true);
-  const body={chat_ids:tgChats};const tok=tgTokenField();if(tok)body.bot_token=tok;
+  const body={chat_ids:[],recipients:tgRecipients};const tok=tgTokenField();if(tok)body.bot_token=tok;
   try{
     const r=await fetch('/api/telegram/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();
