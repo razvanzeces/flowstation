@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tetra_config::bluestation::{CfgBrew, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, TxState, debug};
+use tetra_core::{BitBuffer, CarrierSlot, Direction, Sap, SsiType, TdmaTime, TetraAddress, TimeslotOwner, TxState, debug};
 use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_pdus::cmce::enums::{
     call_timeout::CallTimeout, cmce_pdu_type_dl::CmcePduTypeDl, party_type_identifier::PartyTypeIdentifier,
@@ -1534,6 +1534,126 @@ fn test_dual_carrier_supports_two_simultaneous_duplex_individual_calls() {
         test.config.state_read().timeslot_alloc.free_slot_count(),
         3,
         "two simultaneous duplex calls should consume four of the seven available traffic slots"
+    );
+}
+
+/// An individual call coming in from the network while the main carrier is full gets a slot of
+/// the secondary carrier: the D-CONNECT ACKNOWLEDGE, the circuit and the release all use it.
+#[test]
+fn test_network_individual_call_keeps_the_carrier_of_its_circuit() {
+    debug::setup_logging_verbose();
+
+    let remote_issi = 2200699;
+    let local_issi = 2200769;
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.secondary_carrier = Some(SECONDARY_CARRIER);
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+    test.config.state_write().subscribers.register(local_issi);
+    for ts in 2..=4 {
+        test.config.state_write().timeslot_alloc.reserve(TimeslotOwner::Cmce, ts).unwrap();
+    }
+    let secondary_ts1 = CarrierSlot {
+        carrier_num: SECONDARY_CARRIER,
+        ts: 1,
+    };
+
+    let brew_uuid = uuid::Uuid::parse_str("5b1f0a2e-7c3d-4e8f-9a6b-1c2d3e4f5a6b").unwrap();
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest {
+            brew_uuid,
+            call: NetworkCircuitCall {
+                source_issi: remote_issi,
+                destination: local_issi,
+                number: String::new(),
+                priority: 1,
+                service: 0,
+                mode: 0,
+                duplex: 0,
+                method: 0,
+                communication: 0,
+                grant: TransmissionGrant::NotGranted.into_raw() as u8,
+                permission: 0,
+                timeout: 0,
+                ownership: 0,
+                queued: 0,
+            },
+        }),
+    });
+    test.run_stack(Some(1));
+    let setup_msgs = test.dump_sinks();
+    let call_id = first_d_setup_call_id(&setup_msgs, local_issi);
+    assert_eq!(
+        test.config.state_read().timeslot_alloc.slot_owner(secondary_ts1),
+        Some(TimeslotOwner::Cmce),
+        "main ts2-4 are taken: the call gets secondary ts1"
+    );
+
+    test.submit_message(build_u_connect_msg(local_issi, call_id, false));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectConfirm {
+            brew_uuid,
+            grant: TransmissionGrant::Granted.into_raw() as u8,
+            permission: 0,
+        }),
+    });
+    test.run_stack(Some(1));
+    let confirm_msgs = test.dump_sinks();
+
+    let ack_allocs: Vec<(Option<u16>, [bool; 4])> = confirm_msgs
+        .iter()
+        .filter_map(|msg| match &msg.msg {
+            SapMsgInner::LcmcMleUnitdataReq(prim)
+                if prim.main_address.ssi == local_issi && dl_pdu_type(&prim.sdu) == Some(CmcePduTypeDl::DConnectAcknowledge) =>
+            {
+                prim.chan_alloc.as_ref().map(|chan_alloc| (chan_alloc.carrier, chan_alloc.timeslots))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(!ack_allocs.is_empty(), "Expected D-CONNECT ACKNOWLEDGE with a channel allocation");
+    assert!(
+        ack_allocs
+            .iter()
+            .all(|alloc| *alloc == (Some(SECONDARY_CARRIER), [true, false, false, false])),
+        "the D-CONNECT ACKNOWLEDGE must send the radio to secondary ts1: {ack_allocs:?}"
+    );
+    let opened: Vec<(u16, u8)> = confirm_msgs
+        .iter()
+        .filter_map(|msg| match &msg.msg {
+            SapMsgInner::CmceCallControl(CallControl::Open(circuit)) => Some((circuit.carrier_num, circuit.ts)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(opened, vec![(SECONDARY_CARRIER, 1)]);
+
+    test.submit_message(build_u_disconnect_msg(local_issi, call_id));
+    test.run_stack(Some(1));
+    let release_msgs = test.dump_sinks();
+    let closed: Vec<(u16, u8)> = release_msgs
+        .iter()
+        .filter_map(|msg| match &msg.msg {
+            SapMsgInner::CmceCallControl(CallControl::CloseSlot { carrier_num, ts, .. }) => Some((*carrier_num, *ts)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(closed, vec![(SECONDARY_CARRIER, 1)]);
+    assert!(
+        test.config.state_read().timeslot_alloc.slot_is_free(secondary_ts1),
+        "the release frees the slot the call really used"
     );
 }
 
