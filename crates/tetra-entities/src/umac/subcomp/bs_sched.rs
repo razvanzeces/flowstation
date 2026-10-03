@@ -1924,6 +1924,16 @@ impl BsChannelScheduler {
                 && (!whole_only || Self::goes_whole(e, room))
                 && (!multislot || Self::goes_whole(e, room) || Self::may_open_fragmentation(e, room))
         }) {
+            // A channel allocation does not open a fragmentation it would not need in an empty
+            // block: in a fragmented message it goes in the MAC-END, not in the MAC-RESOURCE (EN
+            // 300 392-2 23.4.2.1.1), and a radio that obeys it at the end of the slot leaves before
+            // the rest. It waits for the next slot, first in line (two D-SETUPs do not fit in one).
+            if matches!(&q[i], DlSchedElem::Resource(pdu, ..) if pdu.chan_alloc_element.is_some())
+                && !Self::goes_whole(&q[i], room)
+                && Self::goes_whole(&q[i], SCH_F_CAP)
+            {
+                return None;
+            }
             return Some(q.remove(i));
         }
 
@@ -3486,6 +3496,82 @@ mod tests {
             assert_eq!(on, vec![(4, 1)], "call on ts3: {call_takes_ts3}");
             assert!(sched.dltx_queues[2].is_empty(), "call on ts3: {call_takes_ts3}");
         }
+    }
+
+    /// A channel allocation that goes whole in an empty block does not open a fragmentation where
+    /// it does not fit (the allocation would go in the MAC-RESOURCE, EN 300 392-2 23.4.2.1.1 puts it
+    /// in the MAC-END); it waits for the next slot, first in line. Cases: one held back for the
+    /// next frame meets the first of that frame (two D-SETUPs of LI=19 do not fit in one SCH/F);
+    /// frame 18, which carries none, between two windows; signalling queued ahead of a D-SETUP
+    /// (field, 2026-10-03 17:04:42.780: a D-SETUP fragmented behind BL-ACKs).
+    #[test]
+    fn test_a_channel_allocation_does_not_open_a_fragmentation() {
+        use tetra_pdus::umac::fields::channel_allocation::ChanAllocElement;
+        use tetra_saps::lcmc::enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment};
+        let setup = |sched: &mut BsChannelScheduler, gssi: u32| {
+            let (mut pdu, sdu) = tagged_resource(&TetraAddress::new(gssi, SsiType::Gssi), 0x08, 78);
+            pdu.chan_alloc_element = Some(ChanAllocElement {
+                alloc_type: ChanAllocType::Replace,
+                ts_assigned: [false, true, false, false],
+                ul_dl_assigned: UlDlAssignment::Both,
+                clch_permission: false,
+                cell_change_flag: false,
+                carrier_num: sched.carrier_num,
+                ext: None,
+                mon_pattern: 1,
+                frame18_mon_pattern: None,
+            });
+            sched.dl_enqueue_tma(pdu, sdu, None);
+        };
+        let setups = [214_900, 214_901, 1_010_269];
+        // Where each D-SETUP went whole; fails on one that opened a fragmentation.
+        let sent = |slots: &[TmvUnitdataReqSlot]| -> Vec<(u32, u8, u8)> {
+            let mut on = Vec::new();
+            for s in slots {
+                for (kind, ssi, li) in dl_pdus(s) {
+                    let Some(ssi) = ssi.filter(|ssi| kind == 0 && setups.contains(ssi)) else {
+                        continue;
+                    };
+                    assert_ne!(li, 0b111111, "{ssi} opened a fragmentation on ({},{})", s.ts.f, s.ts.t);
+                    on.push((ssi, s.ts.f, s.ts.t));
+                }
+            }
+            on
+        };
+
+        // Held back, then the first of the next frame.
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+        setup(&mut sched, 214_900);
+        setup(&mut sched, 214_901);
+        let mut slots = finalize_slots(&mut sched, 3);
+        assert_eq!((slots[2].ts.f, slots[2].ts.t), (3, 1));
+        setup(&mut sched, 1_010_269);
+        slots.extend(finalize_slots(&mut sched, 12));
+        assert_eq!(sent(&slots), vec![(214_900, 3, 1), (214_901, 4, 1), (1_010_269, 5, 1)]);
+
+        // Frame 18: one waiting from frame 17, two more after the build of (18,1).
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 4, f: 16, m: 1, h: 0 });
+        setup(&mut sched, 214_900);
+        let mut slots = finalize_slots(&mut sched, 4);
+        assert_eq!((slots[3].ts.f, slots[3].ts.t), (18, 1));
+        setup(&mut sched, 214_901);
+        setup(&mut sched, 1_010_269);
+        slots.extend(finalize_slots(&mut sched, 16));
+        let mut on: Vec<(u8, u8)> = sent(&slots).iter().map(|s| (s.1, s.2)).collect();
+        on.sort();
+        assert_eq!(on, vec![(1, 1), (2, 1), (3, 1)], "one a frame from frame 1");
+
+        // Signalling queued ahead leaves 108 bits, room to open a fragmentation but not for the
+        // D-SETUP (152 bits).
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+        let (pdu, sdu) = tagged_resource(&TetraAddress::issi(2_145_007), 0x09, 117);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        setup(&mut sched, 214_900);
+        let slots = finalize_slots(&mut sched, 8);
+        assert_eq!(sent(&slots), vec![(214_900, 4, 1)]);
     }
 
     /// Frame 18 already leaves a channel of three slots three slots without a fragment, and N.203
