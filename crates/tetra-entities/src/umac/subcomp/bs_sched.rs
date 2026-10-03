@@ -1547,10 +1547,12 @@ impl BsChannelScheduler {
                         // Fragger self-marks any unsent fragments as discarded when dropped, so we don't need to do anything here.
                     }
 
-                    DlSchedElem::RandomAccessAck(addr) => {
-                        // Save the SSI so the next STCH for this address can carry
-                        // random_access_flag=true (ETSI 21.4.3.1)
-                        self.pending_ra_acks[timeslot as usize - 1].push(addr.ssi);
+                    DlSchedElem::RandomAccessAck(_) => {
+                        // Dropped: the acknowledgement of a random access in hangtime not sent
+                        // before traffic resumed. Its radio got its answer (a PTT its D-TX
+                        // GRANTED, unflagged as it always was) or tries again where it may; kept
+                        // for the next STCH to it, it would flag one that answers nothing, in a
+                        // later call even (which some radios reject).
                     }
 
                     DlSchedElem::Grant(..) | DlSchedElem::Broadcast(_) => {

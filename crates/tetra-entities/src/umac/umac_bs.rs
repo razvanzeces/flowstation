@@ -1316,7 +1316,11 @@ impl UmacBs {
                 carrier_num
             );
         }
-        if !self.scheduler_for(carrier_num).circuit_is_active(Direction::Dl, msg_dltime.t) {
+        // In hangtime the slot is assigned control and its AACH invites random access (Header 2):
+        // that is a random access, answered on the slot (23.5.1.4.8), or the radio repeats it up
+        // to Nu times and the LLC gets every copy.
+        let sched = self.scheduler_for(carrier_num);
+        if !sched.circuit_is_active(Direction::Dl, msg_dltime.t) || sched.is_hangtime(msg_dltime.t) {
             self.scheduler_for_mut(carrier_num).dl_enqueue_random_access_ack(msg_dltime.t, addr);
         } else {
             tracing::trace!(

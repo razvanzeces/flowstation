@@ -911,6 +911,149 @@ fn test_traffic_mac_access_does_not_mark_next_facch_as_random_access() {
     assert!(found, "expected an STCH downlink block on ts {}", ts);
 }
 
+/// A MAC-ACCESS from `addr` on SCH/HU of `carrier_num` (a BL-ACK sized PDU), on the slot two
+/// slots before the tick that takes it.
+fn sch_hu_mac_access(carrier_num: u16, addr: TetraAddress) -> SapMsg {
+    let mut uplink = BitBuffer::new_autoexpand(64);
+    MacAccess {
+        fill_bits: true,
+        encrypted: false,
+        addr: Some(addr),
+        event_label: None,
+        length_ind: Some(6),
+        frag_flag: None,
+        reservation_req: None,
+    }
+    .to_bitbuf(&mut uplink);
+    uplink.write_bits(0, 12);
+    uplink.seek(0);
+    SapMsg {
+        sap: Sap::TmvSap,
+        src: TetraEntity::Lmac,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmvUnitdataInd(TmvUnitdataInd {
+            carrier_num,
+            pdu: uplink,
+            block_num: PhyBlockNum::Block1,
+            logical_channel: LogicalChannel::SchHu,
+            crc_pass: true,
+            scrambling_code: 864282631,
+            rssi_dbfs: f32::NEG_INFINITY,
+        }),
+    }
+}
+
+/// A test with a call in hangtime on `ts` of `carrier_num`, the next tick taking what was sent on
+/// the uplink of `ts`.
+fn call_in_hangtime(carrier_num: u16, ts: u8) -> ComponentTest {
+    let mut test = new_secondary_umac_test(TdmaTime { h: 0, m: 1, f: 1, t: 1 });
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Lmac, TetraEntity::Llc]);
+    let mut open = open_shared_voice_circuit(ts);
+    if let SapMsgInner::CmceCallControl(CallControl::Open(circuit)) = &mut open.msg {
+        circuit.carrier_num = carrier_num;
+    }
+    test.submit_message(open);
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Cmce,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id: 1, carrier_num, ts }),
+    });
+    test.run_stack(Some(ts as usize + 1));
+    test.dump_sinks();
+    test
+}
+
+/// The MAC-RESOURCEs for `addr` that `msgs` put on `ts` of `carrier_num`.
+fn mac_resources_on(msgs: Vec<SapMsg>, carrier_num: u16, ts: u8, addr: TetraAddress) -> Vec<MacResource> {
+    msgs.into_iter()
+        .flat_map(|msg| match msg.msg {
+            SapMsgInner::TmvUnitdataReq(slot) => vec![slot],
+            SapMsgInner::TmvUnitdataReqSlots(slots) => slots.slots,
+            _ => Vec::new(),
+        })
+        .filter(|slot| slot.carrier_num == carrier_num && slot.ts.t == ts)
+        .filter_map(|slot| block_mac_resource_for(&slot.blk1, addr))
+        .collect()
+}
+
+/// A radio in a call that random-accesses on the call's slot in hangtime, where the AACH invites
+/// it (Header 2, EN 300 392-2 23.5.1.4.8), gets its random-access acknowledgement on that slot.
+/// Without it the radio repeats the MAC-ACCESS up to Nu times and the LLC takes every copy (field,
+/// 2026-10-03: a BL-ACK six times on ts1 of a carrier without MCCH, the last copy acknowledging a
+/// PDU the radio never got; a BL-DATA six times on ts2 of the main carrier).
+#[test]
+fn test_random_access_in_hangtime_is_acknowledged() {
+    debug::setup_logging_verbose();
+    let radio = TetraAddress::issi(2145007);
+    for (carrier_num, ts) in [(MAIN_CARRIER, 2u8), (SECONDARY_CARRIER, 1)] {
+        let mut test = call_in_hangtime(carrier_num, ts);
+        test.submit_message(sch_hu_mac_access(carrier_num, radio));
+        test.run_stack(Some(8));
+        let acks: Vec<bool> = mac_resources_on(test.dump_sinks(), carrier_num, ts, radio)
+            .iter()
+            .map(|pdu| pdu.random_access_flag)
+            .collect();
+        assert_eq!(acks, vec![true], "carrier {carrier_num} ts {ts}");
+    }
+}
+
+/// A PTT in hangtime granted in the tick its random access arrives: the D-TX GRANTED to the radio,
+/// stolen once the slot is back to traffic, is not flagged as the answer to a random access (as
+/// before random accesses in hangtime were acknowledged).
+#[test]
+fn test_floor_granted_in_hangtime_drops_the_random_access_ack() {
+    debug::setup_logging_verbose();
+    let radio = TetraAddress::issi(2145007);
+    let ts = 2u8;
+    let mut test = call_in_hangtime(MAIN_CARRIER, ts);
+    test.submit_message(sch_hu_mac_access(MAIN_CARRIER, radio));
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Cmce,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+            call_id: 1,
+            source_issi: radio.ssi,
+            dest_gssi: 1000002,
+            carrier_num: MAIN_CARRIER,
+            ts,
+        }),
+    });
+    test.submit_message(SapMsg {
+        sap: Sap::TmaSap,
+        src: TetraEntity::Llc,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
+            req_handle: 0,
+            pdu: BitBuffer::from_bitstr("1010101010101010"),
+            main_address: radio,
+            link_id: ts as u32,
+            endpoint_id: 0,
+            stealing_permission: true,
+            subscriber_class: 0,
+            air_interface_encryption: None,
+            stealing_repeats_flag: None,
+            data_category: None,
+            carrier_num: Some(MAIN_CARRIER),
+            chan_alloc: Some(CmceChanAllocReq {
+                usage: Some(4),
+                carrier: Some(MAIN_CARRIER),
+                timeslots: [false, true, false, false],
+                alloc_type: ChanAllocType::Replace,
+                ul_dl_assigned: UlDlAssignment::Both,
+            }),
+            tx_reporter: None,
+        }),
+    });
+    test.run_stack(Some(8));
+    let flags: Vec<bool> = mac_resources_on(test.dump_sinks(), MAIN_CARRIER, ts, radio)
+        .iter()
+        .map(|pdu| pdu.random_access_flag)
+        .collect();
+    assert_eq!(flags, vec![false], "one stolen MAC-RESOURCE, not flagged");
+}
+
 /// FH-BUG-034 follow-up regression: a stealing TmaUnitdataReq whose MAC-RESOURCE + SDU does
 /// not fit in one 124-bit STCH half-slot must be fragmented across consecutive stolen
 /// half-slots — NOT written into a fixed 124-bit buffer, which panicked the whole stack
