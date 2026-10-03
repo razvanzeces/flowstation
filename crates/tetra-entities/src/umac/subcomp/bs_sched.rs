@@ -1909,7 +1909,8 @@ impl BsChannelScheduler {
             // block: in a fragmented message it goes in the MAC-END, not in the MAC-RESOURCE (EN
             // 300 392-2 23.4.2.1.1), and a radio that obeys it at the end of the slot leaves before
             // the rest. It waits for the next slot (two D-SETUPs do not fit in one); what goes
-            // whole behind it goes now, but not for its address, which keeps its order.
+            // whole behind it goes now, but not for its address or that of a PDU it would pass,
+            // which keep their order.
             if let DlSchedElem::Resource(pdu, ..) = &q[i]
                 && pdu.chan_alloc_element.is_some()
                 && !Self::goes_whole(&q[i], room)
@@ -1918,25 +1919,31 @@ impl BsChannelScheduler {
                 let ssi = pdu.addr.map(|a| a.ssi);
                 // A grant merged into it is for this block (`ul_find_grant_opportunity`), or the
                 // radio would transmit a frame after its slot: it goes now on its own, with the
-                // address and random-access acknowledgement it had there.
+                // address and random-access acknowledgement it had there. Without the allocation
+                // it has no usage marker (the allocation's is the call's; 23.5.5).
                 if let DlSchedElem::Resource(pdu, ..) = &mut q[i]
                     && let (Some(addr), Some(grant)) = (pdu.addr, pdu.slot_granting_element.clone())
                 {
-                    let mut own = Self::dl_make_minimal_resource(&addr, Some(grant), pdu.random_access_flag);
-                    own.usage_marker = pdu.usage_marker;
+                    let own = Self::dl_make_minimal_resource(&addr, Some(grant), pdu.random_access_flag);
                     let own = DlSchedElem::Resource(own, BitBuffer::new(0), None, false);
                     if Self::goes_whole(&own, room) {
                         pdu.slot_granting_element = None;
                         return Some(own);
                     }
                 }
+                // Nothing overtakes a PDU for its address that stays: the addresses passed are held.
+                let mut held = vec![ssi];
                 let j = q.iter().skip(i + 1).position(|e| {
-                    let for_ssi = match e {
-                        DlSchedElem::Resource(pdu, ..) => pdu.addr.map(|a| a.ssi) == ssi,
-                        DlSchedElem::FragBuf(f) => f.ssi() == ssi,
-                        _ => false,
+                    let e_ssi = match e {
+                        DlSchedElem::Resource(pdu, ..) => pdu.addr.map(|a| a.ssi),
+                        DlSchedElem::FragBuf(f) => f.ssi(),
+                        _ => return false,
                     };
-                    Self::goes_whole(e, room) && !for_ssi
+                    let pass = Self::goes_whole(e, room) && !held.contains(&e_ssi);
+                    if !pass {
+                        held.push(e_ssi);
+                    }
+                    pass
                 })?;
                 return Some(q.remove(i + 1 + j));
             }
@@ -3728,6 +3735,60 @@ mod tests {
         slots.extend(finalize_slots(&mut sched, 24));
         let sent: Vec<(u32, u8)> = dl_resources(&slots).iter().filter(|r| r.5).map(|r| (r.1 - 214_900, r.2)).collect();
         assert_eq!(sent, (0..6).map(|n| (n, 19)).collect::<Vec<_>>(), "in order and whole");
+    }
+
+    /// What goes past a waiting channel allocation keeps the order of every address it passes, not
+    /// only the allocation's: behind a waiting D-SETUP to G1 the D-SETUP to G2 does not fit either,
+    /// and G2's D-RELEASE queued after it, which would, does not overtake it.
+    #[test]
+    fn test_nothing_overtakes_a_pdu_for_its_address_behind_a_waiting_channel_allocation() {
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+        // A long PDU ahead opens a fragmentation on (3,1); its MAC-END leaves 100 bits on (4,1).
+        let (pdu, sdu) = tagged_resource(&TetraAddress::issi(2_145_007), 0x09, 375);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        let g1 = TetraAddress::new(214_900, SsiType::Gssi);
+        let g2 = TetraAddress::new(214_901, SsiType::Gssi);
+        for g in [g1, g2] {
+            let (pdu, sdu) = chan_alloc_resource(&sched, g, 78);
+            sched.dl_enqueue_tma(pdu, sdu, None);
+        }
+        assert_eq!(sched.dltx_next_slot_queue.len(), 1, "G2's D-SETUP held back for the next frame");
+        let mut slots = finalize_slots(&mut sched, 3);
+        assert_eq!((slots[2].ts.f, slots[2].ts.t), (3, 1));
+        let (pdu, sdu) = tagged_resource(&g2, 0x0a, 8);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        slots.extend(finalize_slots(&mut sched, 16));
+        // (frame, chan_alloc)
+        let g2_sent: Vec<(u8, bool)> = dl_resources(&slots).iter().filter(|r| r.1 == g2.ssi).map(|r| (r.0, r.5)).collect();
+        assert_eq!(g2_sent.len(), 2, "{g2_sent:?}");
+        assert!(g2_sent[0].1 && !g2_sent[1].1, "G2's D-SETUP before its D-RELEASE: {g2_sent:?}");
+    }
+
+    /// The grant split off a waiting channel allocation carries no usage marker: the one on the
+    /// allocation is the call's traffic usage marker, and without the allocation the radio ignores
+    /// it (EN 300 392-2 23.5.5). With 52 bits left the grant (51 bits) goes on time; with the
+    /// marker (57) it would wait with the allocation, a frame after the slot it grants.
+    #[test]
+    fn test_a_grant_split_off_a_channel_allocation_has_no_usage_marker() {
+        for ahead in [173, 109] {
+            let mut sched = get_testing_slotter();
+            sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+            let (pdu, sdu) = tagged_resource(&TetraAddress::issi(2_145_007), 0x09, ahead);
+            sched.dl_enqueue_tma(pdu, sdu, None);
+            let x = TetraAddress::issi(1_030_036);
+            let (mut pdu, sdu) = chan_alloc_resource(&sched, x, 44);
+            pdu.usage_marker = Some(10);
+            sched.dl_enqueue_tma(pdu, sdu, None);
+            sched.dl_enqueue_random_access_ack(1, x);
+            let (grant, marker) = sched.ul_process_cap_req(1, x, &ReservationRequirement::Req1Slot).expect("grant");
+            sched.dl_enqueue_grant(1, x, grant, marker);
+            let slots = finalize_slots(&mut sched, 12);
+            assert_eq!((slots[2].ts.f, slots[2].ts.t), (3, 1));
+            let x_at: Vec<_> = dl_resources(&slots).into_iter().filter(|r| r.1 == x.ssi && r.3).collect();
+            // (frame, ssi, li, grant, random access, chan_alloc): 7 octets, no usage marker.
+            assert_eq!(x_at, vec![(3, x.ssi, 7, true, true, false)], "{ahead} bits ahead");
+        }
     }
 
     /// Frame 18 already leaves a channel of three slots three slots without a fragment, and N.203
