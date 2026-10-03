@@ -59,14 +59,26 @@ pub fn read_dual_carrier(config_path: &str) -> DualCarrierState {
     }
 }
 
-/// The configured `extra_carriers` of `[cell_info]` (a one-line `[a, b]`), empty when absent or
-/// unreadable. Same line scan as `read_dual_carrier`.
+/// The configured `extra_carriers` of `[cell_info]` (`[a, b]`, on one line or spread over several),
+/// empty when absent or unreadable. Same line scan as `read_dual_carrier`.
 pub fn read_extra_carriers(config_path: &str) -> Vec<u16> {
     let txt = std::fs::read_to_string(config_path).unwrap_or_default();
+    let parse = |v: &str| -> Vec<u16> { v.split([',', '[', ']']).filter_map(|c| c.trim().parse::<u16>().ok()).collect() };
     let mut in_cell = false;
     let mut extra = Vec::new();
+    // The list so far while a multi-line `extra_carriers = [` is still open.
+    let mut open: Option<String> = None;
     for line in txt.lines() {
         let trimmed = line.trim_start();
+        if let Some(acc) = open.as_mut() {
+            acc.push(',');
+            acc.push_str(value_token(trimmed));
+            if acc.contains(']') {
+                extra = parse(acc);
+                open = None;
+            }
+            continue;
+        }
         if trimmed.starts_with('[') && trimmed.contains(']') {
             in_cell = trimmed.starts_with("[cell_info]");
             continue;
@@ -75,12 +87,12 @@ pub fn read_extra_carriers(config_path: &str) -> Vec<u16> {
             continue;
         }
         if let Some(v) = active_value(trimmed, "extra_carriers") {
-            extra = value_token(v)
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .split(',')
-                .filter_map(|c| c.trim().parse::<u16>().ok())
-                .collect();
+            let v = value_token(v);
+            if v.starts_with('[') && !v.contains(']') {
+                open = Some(v.to_string());
+            } else {
+                extra = parse(v);
+            }
         }
     }
     extra
@@ -283,6 +295,12 @@ issi_whitelist = []
         let path = dir.join("dc_test_extra.toml");
         std::fs::write(&path, &with_extra).unwrap();
         assert_eq!(read_extra_carriers(path.to_str().unwrap()), vec![1533, 1535]);
+        let multi_line = SAMPLE.replace(
+            "duplex_spacing = 4",
+            "extra_carriers = [ # c\n  1533, # d\n  # e\n  1535,\n]\nduplex_spacing = 4",
+        );
+        std::fs::write(&path, &multi_line).unwrap();
+        assert_eq!(read_extra_carriers(path.to_str().unwrap()), vec![1533, 1535], "multi-line");
         std::fs::write(&path, SAMPLE).unwrap();
         assert!(read_extra_carriers(path.to_str().unwrap()).is_empty(), "absent");
         let _ = std::fs::remove_file(&path);
