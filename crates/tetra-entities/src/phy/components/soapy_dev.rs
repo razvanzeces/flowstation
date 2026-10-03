@@ -429,6 +429,13 @@ impl RxDsp {
     }
 }
 
+/// Digital gain of each carrier in the TX sum: none up to two carriers (today's levels), 2/N from
+/// three on, so the worst-case coherent peak of the sum (N x g x A) stays that of two carriers
+/// (2 x A) and the composite does not clip.
+fn tx_carrier_gain(carriers: usize) -> Option<RealSample> {
+    (carriers >= 3).then(|| 2.0 / carriers as RealSample)
+}
+
 struct TxDsp {
     fcfb: fcfb::SynthesisOutputProcessor,
     block_count: fcfb::BlockCount,
@@ -460,6 +467,16 @@ impl TxDsp {
         let mut modulators = Vec::<(u16, ModulatorChannel)>::new();
         for (carrier_num, dl_freq) in phy_config.bs_carrier_numbers.iter().copied().zip(phy_config.bs_dl_frequencies.iter().copied()) {
             modulators.push((carrier_num, ModulatorChannel::new(fft_planner, fcfb_params, dl_freq, modulator::Mode::Dl)));
+        }
+        if let Some(gain) = tx_carrier_gain(modulators.len()) {
+            for (_, modulator) in modulators.iter_mut() {
+                modulator.upconverter.set_gain(gain);
+            }
+            tracing::info!(
+                "TX: {} carriers, digital back-off {:.1} dB per carrier",
+                modulators.len(),
+                20.0 * gain.log10()
+            );
         }
 
         let carriers = phy_config
@@ -1340,5 +1357,13 @@ mod tests {
         assert_eq!(slot_for_carrier(&batch, 1600, None).unwrap().slot, Some(&a[..]));
         assert_eq!(slot_for_carrier(&batch, 1598, None).unwrap().slot, Some(&b[..]));
         assert!(slot_for_carrier(&[], 1600, None).is_none(), "an empty batch has no slot time to synthesise");
+    }
+
+    #[test]
+    fn tx_back_off_only_from_three_carriers() {
+        assert_eq!(tx_carrier_gain(1), None);
+        assert_eq!(tx_carrier_gain(2), None, "dual carrier keeps today's levels");
+        assert_eq!(tx_carrier_gain(3), Some(2.0 / 3.0));
+        assert_eq!(tx_carrier_gain(4), Some(0.5));
     }
 }

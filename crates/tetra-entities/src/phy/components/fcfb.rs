@@ -558,6 +558,12 @@ impl SynthesisInputProcessor {
         InputBuffer::new(self.input_block_size())
     }
 
+    /// Gain of this input in the synthesis sum (1 = unity passband gain, the default). Applied in
+    /// the weighting multiplication `process` does anyway.
+    pub fn set_gain(&mut self, gain: RealSample) {
+        self.scaling = gain / self.weights.len() as RealSample;
+    }
+
     pub fn new_with_frequency(
         fft_planner: &mut rustfft::FftPlanner<RealSample>,
         output_parameters: SynthesisOutputParameters,
@@ -650,4 +656,53 @@ pub fn raised_cosine_weights_default(
     };
 
     raised_cosine_weights(ifft_size, p, t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The synthesis output of one 72 kHz input 50 kHz off centre, with `gain` set or not, over a
+    /// few blocks (block counts 0..4 cover every phase rotation).
+    fn synthesis_output(gain: Option<RealSample>) -> Vec<ComplexSample> {
+        let mut planner = rustfft::FftPlanner::new();
+        let out_params = SynthesisOutputParameters {
+            ifft_size: 1200,
+            sample_rate: 600_000.0,
+            center_frequency: 0.0,
+            overlap: Overlap::O1_4,
+        };
+        let mut output = SynthesisOutputProcessor::new(&mut planner, out_params);
+        let mut input = SynthesisInputProcessor::new_with_frequency(&mut planner, out_params, 72_000.0, 50_000.0, None);
+        if let Some(gain) = gain {
+            input.set_gain(gain);
+        }
+        let n = input.input_block_size().new + input.input_block_size().overlap;
+        let mut out = Vec::new();
+        for block in 0..4 {
+            let samples: Vec<ComplexSample> = (0..n)
+                .map(|i| {
+                    let x = (block * n + i) as RealSample;
+                    ComplexSample::new((0.37 * x).sin(), (0.11 * x).cos())
+                })
+                .collect();
+            output.add(input.process(&samples, block as BlockCount));
+            out.extend_from_slice(output.process());
+        }
+        out
+    }
+
+    #[test]
+    fn set_gain_scales_the_synthesis_output() {
+        let plain = synthesis_output(None);
+        assert!(plain.iter().any(|s| s.norm() > 0.1), "a signal");
+        assert_eq!(synthesis_output(Some(1.0)), plain, "unity gain is the default");
+        let g = 2.0 / 3.0;
+        let scaled = synthesis_output(Some(g));
+        let peak = plain.iter().map(|s| s.norm()).fold(0.0, RealSample::max);
+        // f32 rounding of the two FFT paths only.
+        for (a, b) in scaled.iter().zip(&plain) {
+            assert!((a - b * g).norm() <= 1e-5 * peak, "{a} vs {g} x {b}");
+        }
+    }
 }
