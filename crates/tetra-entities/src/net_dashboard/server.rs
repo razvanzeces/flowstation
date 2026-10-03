@@ -3306,14 +3306,22 @@ fn serve_dual_carrier_get(mut stream: TcpStream, shared_config: &Option<tetra_co
         .map(|c| c.config().cell.secondary_carrier.is_some())
         .unwrap_or(false);
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "enabled": st.enabled,
         "secondary_carrier": st.secondary_carrier,
         "active": st.active(),
         "running_active": running_active,
         "main_carrier": main_carrier,
-    })
-    .to_string();
+    });
+    // A third and fourth carrier, only when there are any: without them the body is unchanged.
+    let extra_carriers = crate::net_dashboard::dual_carrier::read_extra_carriers(config_path);
+    if !extra_carriers.is_empty() {
+        body["extra_carriers"] = serde_json::json!(extra_carriers);
+    }
+    if let Some(c) = shared_config.as_ref().map(|c| c.config().cell.carriers()).filter(|c| c.len() >= 3) {
+        body["running_carriers"] = serde_json::json!(c);
+    }
+    let body = body.to_string();
 
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

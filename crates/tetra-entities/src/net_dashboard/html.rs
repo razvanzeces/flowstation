@@ -7432,7 +7432,7 @@ async function loadDualCarrier(){
     const tg=document.getElementById('dc-toggle');
     // Don't fight the user mid-toggle (while focused or a request is in flight).
     if(tg&&!tg.disabled&&document.activeElement!==tg){tg.checked=!!d.active;}
-    setDcSub(d.active?t('dc_on_sub',{c:d.secondary_carrier}):t('dc_off_sub'));
+    setDcSub(d.active?t('dc_on_sub',{c:[d.secondary_carrier,...(d.extra_carriers||[])].join(' + #')}):t('dc_off_sub'));
   }catch{}
 }
 async function onDualCarrierToggle(el){

@@ -9,6 +9,9 @@
 //! is remembered), and `dual_carrier_enabled = true|false` is the operational switch. The config
 //! loader (`cell_dto_to_cfg`) collapses these into the effective `CfgCellInfo::secondary_carrier`
 //! (`None` when disabled), so the rest of the stack is unchanged.
+//!
+//! `extra_carriers = [..]` (a third and fourth carrier) is written by hand only: it is shown here,
+//! never written or removed, and OFF/ON switches every extra carrier too.
 
 /// Current dual-carrier configuration as read straight from the TOML file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +57,33 @@ pub fn read_dual_carrier(config_path: &str) -> DualCarrierState {
         enabled,
         secondary_carrier,
     }
+}
+
+/// The configured `extra_carriers` of `[cell_info]` (a one-line `[a, b]`), empty when absent or
+/// unreadable. Same line scan as `read_dual_carrier`.
+pub fn read_extra_carriers(config_path: &str) -> Vec<u16> {
+    let txt = std::fs::read_to_string(config_path).unwrap_or_default();
+    let mut in_cell = false;
+    let mut extra = Vec::new();
+    for line in txt.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') && trimmed.contains(']') {
+            in_cell = trimmed.starts_with("[cell_info]");
+            continue;
+        }
+        if !in_cell || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(v) = active_value(trimmed, "extra_carriers") {
+            extra = value_token(v)
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .split(',')
+                .filter_map(|c| c.trim().parse::<u16>().ok())
+                .collect();
+        }
+    }
+    extra
 }
 
 /// For an active (uncommented) `key = <value>` line, return the trimmed value part; else None.
@@ -243,6 +273,25 @@ issi_whitelist = []
         );
         assert!(st.active());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// `extra_carriers` is read, and the toggle keeps its line as it is, ON and OFF, never adding one.
+    #[test]
+    fn extra_carriers_are_read_and_never_written() {
+        let with_extra = SAMPLE.replace("duplex_spacing = 4", "extra_carriers = [1533, 1535] # c\nduplex_spacing = 4");
+        let dir = std::env::temp_dir();
+        let path = dir.join("dc_test_extra.toml");
+        std::fs::write(&path, &with_extra).unwrap();
+        assert_eq!(read_extra_carriers(path.to_str().unwrap()), vec![1533, 1535]);
+        std::fs::write(&path, SAMPLE).unwrap();
+        assert!(read_extra_carriers(path.to_str().unwrap()).is_empty(), "absent");
+        let _ = std::fs::remove_file(&path);
+        for (enabled, secondary) in [(true, Some(1522)), (false, None)] {
+            let out = compute_toml(&with_extra, enabled, secondary);
+            assert_eq!(out.matches("extra_carriers = [1533, 1535] # c").count(), 1);
+            assert_eq!(out.matches("extra_carriers").count(), 1);
+        }
+        assert!(!compute_toml(SAMPLE, true, Some(1522)).contains("extra_carriers"), "never added");
     }
 
     #[test]
