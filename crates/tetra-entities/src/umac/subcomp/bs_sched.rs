@@ -1917,17 +1917,26 @@ impl BsChannelScheduler {
                 && Self::goes_whole(&q[i], SCH_F_CAP)
             {
                 let ssi = pdu.addr.map(|a| a.ssi);
+                tracing::debug!(
+                    "dl_take_next_sched_item: channel allocation for {:?} waits for the next block ({} bits left)",
+                    ssi,
+                    room
+                );
                 // A grant merged into it is for this block (`ul_find_grant_opportunity`), or the
                 // radio would transmit a frame after its slot: it goes now on its own, with the
-                // address and random-access acknowledgement it had there. Without the allocation
-                // it has no usage marker (the allocation's is the call's; 23.5.5).
+                // address and random-access acknowledgement it had there, which leave it. So does a
+                // random-access acknowledgement without a grant (WT, 23.5.1.4.8). Without
+                // the allocation it has no usage marker (the allocation's is the call's; 23.5.5).
                 if let DlSchedElem::Resource(pdu, ..) = &mut q[i]
-                    && let (Some(addr), Some(grant)) = (pdu.addr, pdu.slot_granting_element.clone())
+                    && let Some(addr) = pdu.addr
+                    && (pdu.slot_granting_element.is_some() || pdu.random_access_flag)
                 {
-                    let own = Self::dl_make_minimal_resource(&addr, Some(grant), pdu.random_access_flag);
+                    let grant = pdu.slot_granting_element.clone();
+                    let own = Self::dl_make_minimal_resource(&addr, grant.clone(), pdu.random_access_flag);
                     let own = DlSchedElem::Resource(own, BitBuffer::new(0), None, false);
                     if Self::goes_whole(&own, room) {
                         pdu.slot_granting_element = None;
+                        pdu.random_access_flag = false;
                         return Some(own);
                     }
                 }
@@ -3706,7 +3715,31 @@ mod tests {
         assert_eq!((slots[2].ts.f, slots[2].ts.t), (3, 1));
         let x_at: Vec<_> = dl_resources(&slots).into_iter().filter(|r| r.1 == x.ssi).collect();
         // (frame, ssi, li, grant, random access, chan_alloc)
-        assert_eq!(x_at, vec![(3, x.ssi, 7, true, true, false), (4, x.ssi, 14, false, true, true)]);
+        assert_eq!(x_at, vec![(3, x.ssi, 7, true, true, false), (4, x.ssi, 14, false, false, true)]);
+    }
+
+    /// A random-access acknowledgement merged into a waiting channel allocation without a grant
+    /// goes now on its own, and the allocation follows without it (WT, 23.5.1.4.8).
+    #[test]
+    fn test_a_random_access_ack_does_not_wait_with_a_channel_allocation() {
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+        let (pdu, sdu) = tagged_resource(&TetraAddress::issi(2_145_007), 0x09, 117);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        let x = TetraAddress::issi(1_030_036);
+        let (pdu, sdu) = chan_alloc_resource(&sched, x, 44);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        sched.dl_enqueue_random_access_ack(1, x);
+
+        let slots = finalize_slots(&mut sched, 12);
+        assert_eq!((slots[2].ts.f, slots[2].ts.t), (3, 1));
+        let x_at: Vec<_> = dl_resources(&slots)
+            .into_iter()
+            .filter(|r| r.1 == x.ssi)
+            .map(|r| (r.0, r.3, r.4, r.5))
+            .collect();
+        // (frame, grant, random access, chan_alloc)
+        assert_eq!(x_at, vec![(3, false, true, false), (4, false, false, true)]);
     }
 
     /// Channel allocations go in the order they came, also when one waits for room while those
