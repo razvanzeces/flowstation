@@ -2011,16 +2011,13 @@ impl UmacBs {
                     // Build MAC-RESOURCE PDU for the STCH half-slot (124 type1 bits).
                     const STCH_CAP: usize = 124;
 
-                    let has_pending_ra = self.channel_scheduler.take_pending_ra_ack(ts, prim.main_address.ssi);
                     // FACCH/STCH on an already allocated traffic slot is not a random-access
-                    // response by default. Only propagate the flag when we are actually
-                    // carrying a pending RA acknowledgement on this same timeslot.
-                    let is_random_access_response = has_pending_ra;
+                    // response.
                     let mac_pdu = MacResource {
                         fill_bits: false,
                         pos_of_grant: 0,
                         encryption_mode: 0,
-                        random_access_flag: is_random_access_response,
+                        random_access_flag: false,
                         length_ind: 0,
                         addr: Some(prim.main_address),
                         event_label: None,
@@ -2178,9 +2175,6 @@ impl UmacBs {
             if let Some(ts) = traffic_ts {
                 if self.scheduler_for(requested_carrier).circuit_is_active(Direction::Dl, ts) {
                     const STCH_CAP: usize = 124;
-                    let has_pending_ra = self
-                        .scheduler_for_mut(requested_carrier)
-                        .take_pending_ra_ack(ts, prim.main_address.ssi);
                     // The MS transmitting on this slot listens only in its monitoring-pattern frames.
                     // Just granted and not yet on air, it still hears every frame: its D-TX GRANTED
                     // must not wait, or the group's "granted to another user" reaches it first.
@@ -2190,7 +2184,7 @@ impl UmacBs {
                         fill_bits: false,
                         pos_of_grant: 0,
                         encryption_mode: 0,
-                        random_access_flag: has_pending_ra,
+                        random_access_flag: false,
                         length_ind: 0,
                         addr: Some(prim.main_address),
                         event_label: None,

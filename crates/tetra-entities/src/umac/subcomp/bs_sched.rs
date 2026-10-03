@@ -139,11 +139,6 @@ pub struct BsChannelScheduler {
     /// and signal UL usage as AssignedOnly so MS can request the floor.
     hangtime: [bool; 4],
 
-    /// Per-timeslot set of SSIs whose RandomAccessAck was dropped by dl_drop_all_except_stolen.
-    /// The next STCH built for a matching SSI should carry random_access_flag=true to properly
-    /// acknowledge the random access per ETSI 21.4.3.1.
-    pending_ra_acks: [Vec<u32>; 4],
-
     /// True if a MAC-RESOURCE PDU with a chan_alloc element has already been enqueued for ts1
     /// in the current frame. The second such PDU (e.g. DConnectAck MCCH) must be deferred to
     /// the next frame to avoid exceeding the 216-bit slot capacity (DConnect+DConnectAck=223 bits).
@@ -271,7 +266,6 @@ impl BsChannelScheduler {
             ulsched: EMPTY_SCHED,
             circuits: CircuitMgr::new(),
             hangtime: [false, false, false, false],
-            pending_ra_acks: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             mcch_chan_alloc_sent_this_frame: false,
             // Start each timeslot's marker cursor at 4 (first valid value).
             next_usage_marker: [4, 4, 4, 4],
@@ -1308,19 +1302,6 @@ impl BsChannelScheduler {
         }
         let q = self.queue_index(ts);
         self.dltx_queues[q].push(DlSchedElem::FragBuf(fragger));
-    }
-
-    /// Consumes and returns true if a pending random access ack exists for the given SSI on
-    /// this timeslot. Used when building STCH blocks so the MAC-RESOURCE can carry
-    /// random_access_flag=true per ETSI 21.4.3.1.
-    pub fn take_pending_ra_ack(&mut self, ts: u8, ssi: u32) -> bool {
-        let pending = &mut self.pending_ra_acks[ts as usize - 1];
-        if let Some(pos) = pending.iter().position(|&s| s == ssi) {
-            pending.remove(pos);
-            true
-        } else {
-            false
-        }
     }
 
     /// Enqueue a pre-built STCH block for FACCH/stealing on a traffic timeslot.
