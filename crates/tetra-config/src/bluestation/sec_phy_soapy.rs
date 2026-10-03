@@ -2,6 +2,9 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use toml::Value;
 
+/// The BS RX LO sits this far below `rx_center_freq`.
+pub const RX_LO_OFFSET_HZ: f64 = 20_000.0;
+
 /// SoapySDR configuration
 #[derive(Debug, Clone)]
 pub struct CfgSoapySdr {

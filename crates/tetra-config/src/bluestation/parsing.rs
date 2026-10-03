@@ -978,6 +978,171 @@ ready_timer_code = 9
         );
     }
 
+    /// Without `extra_carriers` the carriers, the packet-data carrier and the copy rules are what
+    /// they were: one carrier, two, two with a packet-data carrier.
+    #[test]
+    fn extra_carriers_absent_keeps_today_s_carriers() {
+        let pd = "enabled = true\nbearer = \"pdch\"\npdch_carrier = 1585";
+        for (toml, carriers, pdch) in [
+            (minimal_toml(""), vec![1584], None),
+            (minimal_toml("secondary_carrier = 1585"), vec![1584, 1585], None),
+            (pdch_carrier_toml("secondary_carrier = 1585", pd), vec![1584, 1585], Some(1585)),
+        ] {
+            let cfg = from_toml_str(&toml).expect("parse");
+            assert!(cfg.validate().is_ok());
+            assert!(cfg.cell.extra_carriers.is_empty());
+            assert_eq!(cfg.cell.carriers(), carriers);
+            let phase_mod: Vec<u16> = cfg.bs_phase_mod_carriers().unwrap().iter().map(|c| c.0).collect();
+            assert_eq!(phase_mod, carriers);
+            assert_eq!(cfg.pdch_carrier().map(|p| p.carrier), pdch);
+            assert_eq!(cfg.uplink_copy_rules(), pdch.is_some());
+            assert!(cfg.carrier_plan_warnings().is_empty());
+        }
+    }
+
+    #[test]
+    fn extra_carriers_come_after_the_secondary() {
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1586\nextra_carriers = [1589]")).expect("parse");
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.cell.carriers(), vec![1584, 1586, 1589]);
+        assert_eq!(cfg.cell.other_carriers().collect::<Vec<_>>(), vec![1586, 1589]);
+        let phase_mod: Vec<u16> = cfg.bs_phase_mod_carriers().unwrap().iter().map(|c| c.0).collect();
+        assert_eq!(phase_mod, vec![1584, 1586, 1589]);
+        assert!(cfg.uplink_copy_rules(), "always with three carriers");
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1586\nextra_carriers = [1589, 1581]")).expect("parse");
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.cell.carriers(), vec![1584, 1586, 1589, 1581], "config order");
+    }
+
+    #[test]
+    fn dual_carrier_off_hides_the_extra_carriers() {
+        let cell = "secondary_carrier = 1586\nextra_carriers = [1589]\ndual_carrier_enabled = false";
+        let cfg = from_toml_str(&minimal_toml(cell)).expect("parse");
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.cell.carriers(), vec![1584]);
+        assert!(cfg.cell.extra_carriers.is_empty());
+        let pd = "enabled = true\nbearer = \"pdch\"\npdch_carrier = 1589";
+        assert_eq!(from_toml_str(&pdch_carrier_toml(cell, pd)).expect("parse").pdch_carrier(), None);
+    }
+
+    #[test]
+    fn extra_carriers_are_validated() {
+        let err = |cell: &str| from_toml_str(&minimal_toml(cell)).expect("parse").validate().err().map(str::to_string);
+        let differ = Some("cell.extra_carriers must differ from each other, from main_carrier and from secondary_carrier".to_string());
+        assert_eq!(
+            err("extra_carriers = [1589]"),
+            Some("cell.extra_carriers needs cell.secondary_carrier".to_string())
+        );
+        assert_eq!(err("secondary_carrier = 1586\nextra_carriers = [1584]"), differ, "the main carrier");
+        assert_eq!(err("secondary_carrier = 1586\nextra_carriers = [1586]"), differ, "the secondary");
+        assert_eq!(err("secondary_carrier = 1586\nextra_carriers = [1589, 1589]"), differ, "twice");
+        assert_eq!(
+            err("secondary_carrier = 1586\nextra_carriers = [1588, 1589, 1590]"),
+            Some("cell.extra_carriers: at most 4 carriers in the cell (main, secondary and two extra)".to_string())
+        );
+        assert_eq!(
+            err("secondary_carrier = 1584\nextra_carriers = [1589]"),
+            Some("cell.secondary_carrier must differ from cell.main_carrier".to_string()),
+            "today's error first"
+        );
+        assert_eq!(err("secondary_carrier = 1586\nextra_carriers = [1589, 1581]"), None);
+    }
+
+    /// `cell` on the SoapySDR backend at 600 kHz, the TX centre `tx_off` Hz from the main downlink
+    /// and the RX centre `rx_off` Hz from the main uplink.
+    fn soapy_cell(cell: &str, tx_off: f64, rx_off: f64) -> StackConfig {
+        let mut cfg = from_toml_str(&minimal_toml(cell)).expect("parse");
+        let (_, dl, ul) = cfg.bs_phase_mod_carriers().unwrap()[0];
+        cfg.phy_io.backend = crate::bluestation::PhyBackend::SoapySdr;
+        cfg.phy_io.soapysdr = Some(crate::bluestation::CfgSoapySdr {
+            ul_freq: f64::from(ul),
+            dl_freq: f64::from(dl),
+            rx_center_freq: Some(f64::from(ul) + rx_off),
+            tx_center_freq: Some(f64::from(dl) + tx_off),
+            ppm_err: 0.0,
+            device: None,
+            rx_ant: None,
+            tx_ant: None,
+            rx_gains: HashMap::new(),
+            tx_gains: HashMap::new(),
+            fs: Some(600_000.0),
+            rx_ch: None,
+            tx_ch: None,
+        });
+        cfg
+    }
+
+    /// From three carriers on every channel (+/-36 kHz) must fit the passband, the uplink measured
+    /// from the RX LO 20 kHz below `rx_center_freq`; up to two carriers today's check, no margin.
+    #[test]
+    fn three_carriers_must_fit_the_passband_with_their_channel() {
+        let three = "secondary_carrier = 1586\nextra_carriers = [1588]"; // main, +50 kHz, +100 kHz
+        let downlink = "with three or more carriers every downlink channel (+/-36 kHz) must fit the TX passband: move tx_center_freq or raise sample_rate";
+        let uplink = "with three or more carriers every uplink channel (+/-36 kHz) must fit the RX passband, centred 20 kHz below rx_center_freq";
+        assert_eq!(soapy_cell(three, -180_000.0, 50_000.0).validate(), Err(downlink), "the third 280 kHz off");
+        assert_eq!(soapy_cell(three, -150_000.0, 50_000.0).validate(), Ok(()), "250 kHz off");
+        assert_eq!(
+            soapy_cell("secondary_carrier = 1586", -230_000.0, 25_000.0).validate(),
+            Ok(()),
+            "two carriers: the secondary 280 kHz off still passes"
+        );
+        assert_eq!(
+            soapy_cell(three, 50_000.0, -150_000.0).validate(),
+            Err(uplink),
+            "250 kHz from rx_center_freq, 270 kHz from the LO"
+        );
+        assert_eq!(soapy_cell(three, 50_000.0, -120_000.0).validate(), Ok(()));
+    }
+
+    #[test]
+    fn pdch_carrier_may_be_an_extra_carrier() {
+        let cell = "secondary_carrier = 1586\nextra_carriers = [1589]";
+        let carrier = |pd: &str| from_toml_str(&pdch_carrier_toml(cell, pd)).expect("parse").pdch_carrier();
+        assert_eq!(
+            carrier("enabled = true\nbearer = \"pdch\"\npdch_carrier = 1589").map(|p| p.carrier),
+            Some(1589)
+        );
+        assert_eq!(
+            carrier("enabled = true\nbearer = \"pdch\"\npdch_carrier = 1586").map(|p| p.carrier),
+            Some(1586)
+        );
+        assert_eq!(
+            carrier("enabled = true\nbearer = \"pdch\"\npdch_carrier = 1590"),
+            None,
+            "not a carrier of the cell"
+        );
+    }
+
+    #[test]
+    fn carrier_plan_warnings_from_three_carriers() {
+        let warnings = |cell: &str| from_toml_str(&minimal_toml(cell)).expect("parse").carrier_plan_warnings();
+        let im3 = warnings("secondary_carrier = 1586\nextra_carriers = [1588]");
+        assert!(
+            im3.iter().any(|w| w.contains("2 x 1586 - 1584") && w.contains("carrier 1588")),
+            "{im3:?}"
+        );
+        let four = warnings("secondary_carrier = 1586\nextra_carriers = [1589, 1591]");
+        assert!(
+            four.iter().any(|w| w.contains("1584 + 1591 - 1586") && w.contains("carrier 1589")),
+            "{four:?}"
+        );
+        let close = warnings("secondary_carrier = 1585\nextra_carriers = [1589]");
+        assert_eq!(close.len(), 1, "{close:?}");
+        assert!(close[0].contains("1584 and 1585 are 25 kHz apart"));
+        assert!(warnings("secondary_carrier = 1586\nextra_carriers = [1590]").is_empty());
+
+        // The RX LO: 30 kHz above the main uplink, clear of every channel; 5 kHz above it, inside.
+        let plan = "secondary_carrier = 1586\nextra_carriers = [1590]";
+        assert!(soapy_cell(plan, 75_000.0, 50_000.0).carrier_plan_warnings().is_empty());
+        let lo = soapy_cell(plan, 75_000.0, 25_000.0).carrier_plan_warnings();
+        assert_eq!(lo.len(), 1, "{lo:?}");
+        assert!(lo[0].contains("5.0 kHz from the uplink of carrier 1584"), "{lo:?}");
+        assert!(
+            soapy_cell("secondary_carrier = 1586", 25_000.0, 5_000.0).carrier_plan_warnings().is_empty(),
+            "nothing with two carriers"
+        );
+    }
+
     #[test]
     fn wap_section_parses_with_subsections() {
         let toml = minimal_toml("")

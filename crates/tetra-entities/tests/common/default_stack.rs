@@ -62,6 +62,7 @@ pub fn default_cell_info(freq_info: FreqInfo) -> CfgCellInfo {
         dgna_attachment_mode: 0,
         main_carrier: freq_info.carrier,
         secondary_carrier: None,
+        extra_carriers: Vec::new(),
         freq_band: freq_info.band,
         freq_offset_hz: freq_info.freq_offset_hz,
         duplex_spacing_id: freq_info.duplex_spacing_id,

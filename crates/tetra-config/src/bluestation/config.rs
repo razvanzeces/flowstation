@@ -4,7 +4,7 @@ use tetra_core::freqs::FreqInfo;
 
 use crate::bluestation::{
     CfgAsterisk, CfgCellInfo, CfgControl, CfgDapnet, CfgEmergency, CfgGeoalarm, CfgHealth, CfgNetInfo, CfgPhyIo, CfgRecovery, CfgSecurity,
-    CfgSnomNotify, CfgTpg2200Action, CfgWap, CfgWxService, PhyBackend, StackState,
+    CfgSnomNotify, CfgTpg2200Action, CfgWap, CfgWxService, PhyBackend, RX_LO_OFFSET_HZ, StackState,
 };
 
 use super::sec_brew::CfgBrew;
@@ -128,7 +128,8 @@ pub struct StackConfig {
 }
 
 /// The packet-data carrier in use (`[packet_data] pdch_carrier`): packet-data channels of up to
-/// four slots on the secondary carrier, sent there from the MCCH with a channel allocation.
+/// four slots on a carrier of the cell other than the main one, sent there from the MCCH with a
+/// channel allocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdchCarrierCfg {
     pub carrier: u16,
@@ -138,18 +139,26 @@ pub struct PdchCarrierCfg {
     pub exclusive: bool,
 }
 
+/// Carriers one cell may have: the main one, the secondary and two extra.
+pub const MAX_CELL_CARRIERS: usize = 4;
+
+/// Half the band of one channel in the SDR passband: the modulator and the demodulator work at
+/// 72 kHz, and the filter bank weights reach +/-35.5 kHz.
+pub const CHANNEL_HALF_SPAN_HZ: f64 = 36_000.0;
+
 impl StackConfig {
     /// The packet-data carrier in use: `[packet_data] pdch_carrier` when packet data is on with
-    /// bearer "pdch" and it is the secondary carrier in use (`cell_info.secondary_carrier`, after
-    /// `dual_carrier_enabled`). Anything else is ignored (logged by the SNDCP at start), never an
-    /// error: the dashboard turns the secondary carrier off without touching `[packet_data]`.
+    /// bearer "pdch" and it is a carrier of the cell in use other than the main one (the secondary
+    /// or one of the extra ones, after `dual_carrier_enabled`). Anything else is ignored (logged by
+    /// the SNDCP at start), never an error: the dashboard turns the secondary carrier off without
+    /// touching `[packet_data]`.
     pub fn pdch_carrier(&self) -> Option<PdchCarrierCfg> {
         let pd = &self.packet_data;
         let carrier = pd.pdch_carrier?;
         (pd.enabled
             && pd.bearer == PacketDataBearer::Pdch
             && carrier != self.cell.main_carrier
-            && self.cell.secondary_carrier == Some(carrier))
+            && self.cell.other_carriers().any(|c| c == carrier))
         .then(|| PdchCarrierCfg {
             carrier,
             timeslots: pd.pdch_carrier_timeslots.clone(),
@@ -171,10 +180,18 @@ impl StackConfig {
         }
     }
 
+    /// Whether the UMAC runs its uplink adjacent-channel copy rules and the PHY hands the carriers
+    /// of a slot over strongest burst first: with a packet-data carrier in use, or always with
+    /// three or more carriers. Up to two carriers exactly `pdch_carrier().is_some()`.
+    pub fn uplink_copy_rules(&self) -> bool {
+        self.pdch_carrier().is_some() || self.cell.carriers().len() >= 3
+    }
+
     /// Return BS phase-modulated carrier numbers and their DL/UL frequencies.
     pub fn bs_phase_mod_carriers(&self) -> Result<Vec<(u16, u32, u32)>, String> {
-        let mut carriers = Vec::with_capacity(if self.cell.secondary_carrier.is_some() { 2 } else { 1 });
-        for carrier in [Some(self.cell.main_carrier), self.cell.secondary_carrier].into_iter().flatten() {
+        let cell_carriers = self.cell.carriers();
+        let mut carriers = Vec::with_capacity(cell_carriers.len());
+        for carrier in cell_carriers {
             let freq_info = FreqInfo::from_components(
                 self.cell.freq_band,
                 carrier,
@@ -189,9 +206,81 @@ impl StackConfig {
         Ok(carriers)
     }
 
-    fn frequencies_fit_center(center_hz: f64, sample_rate_hz: f64, freqs_hz: &[u32]) -> bool {
+    /// Whether every frequency, with `margin_hz` on either side, is within the passband of
+    /// `sample_rate_hz` centred on `center_hz`.
+    fn frequencies_fit_center(center_hz: f64, sample_rate_hz: f64, freqs_hz: &[u32], margin_hz: f64) -> bool {
         let half_bw = sample_rate_hz / 2.0;
-        freqs_hz.iter().all(|freq| ((*freq as f64) - center_hz).abs() <= half_bw)
+        freqs_hz.iter().all(|freq| ((*freq as f64) - center_hz).abs() + margin_hz <= half_bw)
+    }
+
+    /// A third-order intermodulation product of the carriers `n` (2a - b, or a + b - c of three
+    /// others) that equals carrier `t`, written out.
+    fn im3_product_on(n: &[i32], t: i32) -> Option<String> {
+        for &a in n {
+            for &b in n {
+                if a != b && 2 * a - b == t {
+                    return Some(format!("2 x {a} - {b}"));
+                }
+            }
+        }
+        for &a in n {
+            for &b in n {
+                for &c in n {
+                    if a < b && ![a, b, t].contains(&c) && t != a && t != b && a + b - c == t {
+                        return Some(format!("{a} + {b} - {c}"));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// With three or more carriers, what in the carrier plan is legal but worth a look, logged once
+    /// at start: two carriers 25 kHz apart (the receive filter takes about 7 dB off the
+    /// neighbour), a third-order intermodulation product (2a - b, a + b - c) on a carrier of the
+    /// cell, and with the SoapySDR backend the RX LO within 12.5 kHz of an uplink channel. Empty
+    /// below three carriers.
+    pub fn carrier_plan_warnings(&self) -> Vec<String> {
+        let carriers = self.cell.carriers();
+        if carriers.len() < 3 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (i, a) in carriers.iter().enumerate() {
+            for b in &carriers[i + 1..] {
+                if a.abs_diff(*b) == 1 {
+                    out.push(format!(
+                        "carriers {a} and {b} are 25 kHz apart: the receive filter takes only about 7 dB off the neighbour, expect adjacent-channel copies"
+                    ));
+                }
+            }
+        }
+        // In carrier numbers: band, offset and duplex spacing are common to the cell. One line per
+        // carrier hit, the first product found.
+        let n: Vec<i32> = carriers.iter().map(|c| i32::from(*c)).collect();
+        for &t in &n {
+            if let Some(product) = Self::im3_product_on(&n, t) {
+                out.push(format!(
+                    "the third-order intermodulation product {product} falls on carrier {t}: avoid equal spacings"
+                ));
+            }
+        }
+        if self.phy_io.backend == PhyBackend::SoapySdr
+            && let Some(soapy_cfg) = self.phy_io.soapysdr.as_ref()
+            && let Ok(phase_mod) = self.bs_phase_mod_carriers()
+        {
+            let lo = soapy_cfg.effective_rx_center_freq_corrected().0 - RX_LO_OFFSET_HZ;
+            for (carrier, _, ul) in phase_mod {
+                let off = (f64::from(ul) - lo).abs();
+                if off < 12_500.0 {
+                    out.push(format!(
+                        "the RX LO ({lo:.0} Hz, rx_center_freq - 20 kHz) is {:.1} kHz from the uplink of carrier {carrier}: it lies inside that channel",
+                        off / 1000.0
+                    ));
+                }
+            }
+        }
+        out
     }
 
     /// Validate that all required configuration fields are properly set.
@@ -213,6 +302,19 @@ impl StackConfig {
             && secondary_carrier == self.cell.main_carrier
         {
             return Err("cell.secondary_carrier must differ from cell.main_carrier");
+        }
+
+        if !self.cell.extra_carriers.is_empty() {
+            if self.cell.secondary_carrier.is_none() {
+                return Err("cell.extra_carriers needs cell.secondary_carrier");
+            }
+            let all = self.cell.carriers();
+            if all.len() > MAX_CELL_CARRIERS {
+                return Err("cell.extra_carriers: at most 4 carriers in the cell (main, secondary and two extra)");
+            }
+            if (1..all.len()).any(|i| all[..i].contains(&all[i])) {
+                return Err("cell.extra_carriers must differ from each other, from main_carrier and from secondary_carrier");
+            }
         }
 
         // Sanity check on computed BS carrier frequencies and SDR settings.
@@ -254,11 +356,25 @@ impl StackConfig {
                 let (tx_center_hz, _) = soapy_cfg.effective_tx_center_freq_corrected();
                 let (rx_center_hz, _) = soapy_cfg.effective_rx_center_freq_corrected();
 
-                if !Self::frequencies_fit_center(tx_center_hz, sample_rate_hz, &dl_freqs) {
+                if !Self::frequencies_fit_center(tx_center_hz, sample_rate_hz, &dl_freqs, 0.0) {
                     return Err("configured TX center/sample-rate do not cover all BS downlink carriers");
                 }
-                if !Self::frequencies_fit_center(rx_center_hz, sample_rate_hz, &ul_freqs) {
+                if !Self::frequencies_fit_center(rx_center_hz, sample_rate_hz, &ul_freqs, 0.0) {
                     return Err("configured RX center/sample-rate do not cover all BS uplink carriers");
+                }
+                // From three carriers on the whole channel must fit, the uplink around the LO the
+                // receive filter bank is centred on (up to two carriers, today's check above).
+                if carriers.len() >= 3 {
+                    if !Self::frequencies_fit_center(tx_center_hz, sample_rate_hz, &dl_freqs, CHANNEL_HALF_SPAN_HZ) {
+                        return Err(
+                            "with three or more carriers every downlink channel (+/-36 kHz) must fit the TX passband: move tx_center_freq or raise sample_rate",
+                        );
+                    }
+                    if !Self::frequencies_fit_center(rx_center_hz - RX_LO_OFFSET_HZ, sample_rate_hz, &ul_freqs, CHANNEL_HALF_SPAN_HZ) {
+                        return Err(
+                            "with three or more carriers every uplink channel (+/-36 kHz) must fit the RX passband, centred 20 kHz below rx_center_freq",
+                        );
+                    }
                 }
             };
         }

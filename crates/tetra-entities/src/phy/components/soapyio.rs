@@ -9,7 +9,7 @@ use super::soapy_settings::{SdrSettings, SupportedDevice};
 use super::soapy_time::{ticks_to_time_ns, time_ns_to_ticks};
 
 type StreamType = ComplexSample;
-const SOAPY_FREQ_OFFSET: f64 = 20000.0;
+const SOAPY_FREQ_OFFSET: f64 = tetra_config::bluestation::RX_LO_OFFSET_HZ;
 
 pub struct RxResult {
     /// Number of samples read

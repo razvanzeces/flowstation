@@ -114,6 +114,9 @@ pub struct CfgCellInfo {
     pub main_carrier: u16,
     /// Optional adjacent carrier for dual-carrier BS operation.
     pub secondary_carrier: Option<u16>,
+    /// Carriers after the secondary (`extra_carriers`), voice + BCCH without MCCH like the
+    /// secondary; empty while `dual_carrier_enabled = false`.
+    pub extra_carriers: Vec<u16>,
     /// 4 bits, from MAC SYSINFO
     pub freq_band: u8,
     /// Offset in Hz from 25kHz aligned carrier. Options: 0, 6250, -6250, 12500 Hz
@@ -234,6 +237,18 @@ pub struct CfgCellInfo {
     pub parrot_max_secs: u32,
 }
 
+impl CfgCellInfo {
+    /// Every carrier of the cell but the main one, in config order: the secondary, then the extra ones.
+    pub fn other_carriers(&self) -> impl Iterator<Item = u16> + '_ {
+        self.secondary_carrier.into_iter().chain(self.extra_carriers.iter().copied())
+    }
+
+    /// The carriers of the cell in use: main first.
+    pub fn carriers(&self) -> Vec<u16> {
+        std::iter::once(self.main_carrier).chain(self.other_carriers()).collect()
+    }
+}
+
 #[derive(Default, Deserialize)]
 pub struct CellInfoDto {
     pub main_carrier: u16,
@@ -242,6 +257,9 @@ pub struct CellInfoDto {
     /// configured `secondary_carrier` number is kept but NOT used, so the stack runs single-carrier.
     /// Absent = true for backward compatibility (a configured secondary_carrier is on by default).
     pub dual_carrier_enabled: Option<bool>,
+    /// A third and further carriers of the cell, after `secondary_carrier` (needs it). Switched
+    /// off with it by `dual_carrier_enabled = false`.
+    pub extra_carriers: Option<Vec<u16>>,
     pub freq_band: u8,
     pub freq_offset: i16,
     pub duplex_spacing: u8,
@@ -328,16 +346,15 @@ pub struct CellInfoDto {
 }
 
 pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
+    let on = ci.dual_carrier_enabled.unwrap_or(true);
     CfgCellInfo {
         main_carrier: ci.main_carrier,
         // Effective secondary carrier: gated by the operational dual-carrier switch so the rest of
         // the stack (allocator, UMAC schedulers, PHY) sees None when dual carrier is turned off,
         // while the configured number is preserved in the TOML for when it is turned back on.
-        secondary_carrier: if ci.dual_carrier_enabled.unwrap_or(true) {
-            ci.secondary_carrier
-        } else {
-            None
-        },
+        secondary_carrier: if on { ci.secondary_carrier } else { None },
+        // The extra carriers go with it: OFF is a single-carrier cell.
+        extra_carriers: if on { ci.extra_carriers.unwrap_or_default() } else { Vec::new() },
         freq_band: ci.freq_band,
         freq_offset_hz: ci.freq_offset,
         duplex_spacing_id: ci.duplex_spacing,
