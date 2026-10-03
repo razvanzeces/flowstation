@@ -38,9 +38,10 @@ pub struct PhyBs<D: RxTxDev> {
     /// timeslot (~70/s), so an unfiltered warning would bury the journal.
     err_log_next: std::time::Instant,
 
-    /// With a packet-data carrier in use (`[packet_data] pdch_carrier`) the carriers of a slot
-    /// are handed over strongest burst first: the burst a radio really sent comes before its
-    /// adjacent-channel copy on the other carrier, which the UMAC then drops as the weaker one.
+    /// With a packet-data carrier in use (`[packet_data] pdch_carrier`), or with three or more
+    /// carriers (`StackConfig::uplink_copy_rules`), the carriers of a slot are handed over
+    /// strongest burst first: the burst a radio really sent comes before its adjacent-channel copy
+    /// on another carrier, which the UMAC then drops as the weaker one.
     order_by_rssi: bool,
 }
 
@@ -77,7 +78,7 @@ fn may_warn(next: &mut std::time::Instant) -> bool {
 
 impl<D: RxTxDev> PhyBs<D> {
     pub fn new(config: SharedConfig, rxtxdev: D) -> Self {
-        let order_by_rssi = config.config().pdch_carrier().is_some();
+        let order_by_rssi = config.config().uplink_copy_rules();
         let c = &config.config().phy_io;
 
         let dl_tx_logger = c
@@ -450,5 +451,15 @@ mod tests {
         let mut rx = vec![found(1600, -60.0), found(1598, -60.0)];
         strongest_first(&mut rx);
         assert_eq!(carriers(&rx), vec![Some(1600), Some(1598)], "a tie keeps the main carrier first");
+    }
+
+    #[test]
+    fn three_carriers_are_delivered_strongest_first() {
+        let mut rx = vec![found(1600, -75.0), found(1598, -60.0), found(1603, -40.0)];
+        strongest_first(&mut rx);
+        assert_eq!(carriers(&rx), vec![Some(1603), Some(1598), Some(1600)]);
+        let mut rx = vec![None, found(1598, -90.0), found(1603, f32::NEG_INFINITY)];
+        strongest_first(&mut rx);
+        assert_eq!(carriers(&rx), vec![Some(1598), None, Some(1603)], "the rest in the PHY's order");
     }
 }

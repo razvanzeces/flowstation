@@ -5820,6 +5820,146 @@ fn a_copy_is_dropped_for_a_multiframe_after_the_last_carrier_channel_went() {
     );
 }
 
+// Three carriers (`extra_carriers`): the copy rules always run, against any other carrier --------
+
+const THIRD_CARRIER: u16 = 1524;
+
+/// Packet data off, the secondary carrier and the extra carriers `extra`.
+fn cell_of(extra: &[u16]) -> StackConfig {
+    let mut cfg = voice_config(None, true);
+    cfg.cell.extra_carriers = extra.to_vec();
+    cfg
+}
+
+/// The next uplink ts2 slot at least a frame ahead.
+fn next_ts2(air: &UmacAir) -> TdmaTime {
+    air.next_time().add_timeslots(4).forward_to_timeslot(2)
+}
+
+/// Dual carrier without a packet-data carrier runs no copy rule, as on 8092d84: a lone MAC-DATA on
+/// secondary ts2 or main ts2, where no call is, reaches the LLC.
+#[test]
+fn dual_carrier_without_a_packet_data_carrier_drops_nothing() {
+    debug::setup_logging_verbose();
+    let cfg = cell_of(&[]);
+    assert!(!cfg.uplink_copy_rules(), "nor does the PHY order the carriers by RSSI");
+    let mut air = UmacAir::new(cfg);
+    air.tick();
+    for carrier in [SECONDARY_CARRIER, MAIN_CARRIER] {
+        let u = next_ts2(&air);
+        assert_eq!(
+            heard_at(&mut air, u, vec![from_lmac_on(mac_data_of(ISSI), carrier, -40.0)]),
+            vec![carrier]
+        );
+    }
+}
+
+/// Rule 1 on a third carrier without a packet-data carrier: a lone MAC-DATA on third ts2 is a copy
+/// without a call there, taken with one (in hangtime).
+#[test]
+fn three_carriers_rule_one_on_the_third() {
+    debug::setup_logging_verbose();
+    let lone = |call: bool| {
+        let mut air = UmacAir::new(cell_of(&[THIRD_CARRIER]));
+        if call {
+            call_on(&mut air, THIRD_CARRIER, 2, None);
+        }
+        air.tick();
+        let u = next_ts2(&air);
+        heard_at(&mut air, u, vec![from_lmac_on(mac_data_of(ISSI), THIRD_CARRIER, -40.0)])
+    };
+    assert_eq!(lone(false), Vec::<u16>::new());
+    assert_eq!(lone(true), vec![THIRD_CARRIER]);
+}
+
+/// Rule 2 against any other carrier: the radio in hangtime of a call on secondary ts3 is granted
+/// uplink slots there; in one of them a lone burst of it on third ts3 (a call there too) is the
+/// copy of what it sends on the secondary, dropped. On the secondary it is taken, and on third ts3
+/// in a slot it does not hold, too.
+#[test]
+fn three_carriers_rule_two_against_any_other_carrier() {
+    use tetra_core::PhyBlockNum;
+    use tetra_pdus::umac::enums::reservation_requirement::ReservationRequirement;
+    use tetra_saps::tmv::enums::logical_chans::LogicalChannel;
+    debug::setup_logging_verbose();
+    let granted = || {
+        let mut air = UmacAir::new(cell_of(&[THIRD_CARRIER]));
+        call_on(&mut air, SECONDARY_CARRIER, 3, None);
+        call_on(&mut air, THIRD_CARRIER, 3, None);
+        let access = mac_access_of(ISSI, Some(ReservationRequirement::Req4Slots));
+        air.uplink_at(
+            TdmaTime { t: 3, f: 3, m: 1, h: 0 },
+            from_lmac_as(access, SECONDARY_CARRIER, -40.0, LogicalChannel::SchHu, PhyBlockNum::Block1),
+        );
+        let from = air.slots.len();
+        let (at, slots, delay) = air.next_grant(ISSI, 16);
+        assert!(
+            air.slots[from..]
+                .iter()
+                .any(|s| s.ts == at && s.carrier_num == SECONDARY_CARRIER && grant_for(s, ISSI).is_some()),
+            "granted on the secondary"
+        );
+        (air, ms_granted_labels(at, delay, slots, &[3]))
+    };
+    let data = |carrier| from_lmac_on(mac_data_of(ISSI), carrier, -40.0);
+    let (mut air, held) = granted();
+    assert_eq!(heard_at(&mut air, held[0], vec![data(THIRD_CARRIER)]), Vec::<u16>::new());
+    let (mut air, held) = granted();
+    assert_eq!(heard_at(&mut air, held[0], vec![data(SECONDARY_CARRIER)]), vec![SECONDARY_CARRIER]);
+    let (mut air, held) = granted();
+    let mut later = held.last().unwrap().add_timeslots(4 * 8);
+    if later.f == 18 {
+        later = later.add_timeslots(4);
+    }
+    assert_eq!(heard_at(&mut air, later, vec![data(THIRD_CARRIER)]), vec![THIRD_CARRIER]);
+}
+
+/// Rule 3 without a packet-data carrier: a lone MAC-DATA on main ts2 without a call there is a
+/// copy, dropped; the first stolen block of the radio a call there was just opened for is taken.
+#[test]
+fn three_carriers_rule_three_on_main() {
+    use tetra_core::PhyBlockNum;
+    use tetra_saps::tmv::enums::logical_chans::LogicalChannel;
+    debug::setup_logging_verbose();
+    let mut air = UmacAir::new(cell_of(&[THIRD_CARRIER]));
+    air.tick();
+    let u = next_ts2(&air);
+    assert_eq!(
+        heard_at(&mut air, u, vec![from_lmac_on(mac_data_of(ISSI), MAIN_CARRIER, -40.0)]),
+        Vec::<u16>::new()
+    );
+    call_on(&mut air, MAIN_CARRIER, 2, Some(ISSI));
+    air.tick();
+    let u = air.next_time().forward_to_timeslot(2);
+    let stolen = from_lmac_as(stch_mac_data_of(ISSI), MAIN_CARRIER, -40.0, LogicalChannel::Stch, PhyBlockNum::Block1);
+    assert_eq!(heard_at(&mut air, u, vec![stolen]), vec![MAIN_CARRIER]);
+}
+
+/// The same block received on two or three carriers, each with a call in that slot, is taken
+/// once, from the carrier handed over first.
+#[test]
+fn three_carriers_take_a_block_once() {
+    debug::setup_logging_verbose();
+    let heard = |order: &[u16]| {
+        let mut air = UmacAir::new(cell_of(&[THIRD_CARRIER]));
+        for carrier in [MAIN_CARRIER, SECONDARY_CARRIER, THIRD_CARRIER] {
+            call_on(&mut air, carrier, 2, None);
+        }
+        air.tick();
+        let u = next_ts2(&air);
+        heard_at(
+            &mut air,
+            u,
+            order.iter().map(|c| from_lmac_on(mac_data_of(ISSI), *c, -40.0)).collect(),
+        )
+    };
+    assert_eq!(heard(&[SECONDARY_CARRIER, THIRD_CARRIER]), vec![SECONDARY_CARRIER]);
+    assert_eq!(
+        heard(&[THIRD_CARRIER, MAIN_CARRIER, SECONDARY_CARRIER]),
+        vec![THIRD_CARRIER]
+    );
+}
+
 /// ISSI2 on its main-carrier channel (ts3) has an uplink fragmentation open and one slot granted
 /// for its MAC-END; in that same uplink slot the radio of a carrier channel sends a MAC-END on the
 /// carrier, received first, and the main carrier gets either that block's adjacent-channel copy

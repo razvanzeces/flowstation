@@ -86,9 +86,12 @@ pub struct UmacBs {
     pdch_carrier: Option<u16>,
     /// The same as `pdch_conflict` on the packet-data carrier.
     pdch_carrier_conflict: Option<(u8, u32, u32)>,
-    /// While a channel of the packet-data carrier exists: the uplink MAC blocks taken in the
-    /// current uplink label (carrier, label, PHY block, bits). A bit-exact copy of one on the other
-    /// carrier is the adjacent-channel copy of the same burst (see `rx_tmv_unitdata_ind`).
+    /// Three or more carriers: the uplink copy rules always run (`StackConfig::uplink_copy_rules`).
+    copy_rules_always: bool,
+    /// While a channel of the packet-data carrier exists, or always with three or more carriers:
+    /// the uplink MAC blocks taken in the current uplink label (carrier, label, PHY block, bits). A
+    /// bit-exact copy of one on another carrier is the adjacent-channel copy of the same burst (see
+    /// `rx_tmv_unitdata_ind`).
     ul_label_blocks: Vec<(u16, TdmaTime, PhyBlockNum, String)>,
     /// The uplink MAC block being read was dropped as an adjacent-channel copy: it is not kept in
     /// `ul_label_blocks`, so the real burst on the other carrier, equal to it, is still taken.
@@ -133,7 +136,7 @@ impl UmacBs {
         let carriers = c.cell.carriers();
         if carriers.len() >= 3 {
             tracing::info!(
-                "UmacBs: {} carriers {:?}, MCCH on {}",
+                "UmacBs: {} carriers {:?}, MCCH on {}, uplink copy rules always on",
                 carriers.len(),
                 carriers,
                 c.cell.main_carrier
@@ -191,6 +194,7 @@ impl UmacBs {
             pdch_conflict: None,
             pdch_carrier: pdch_carrier.map(|p| p.carrier),
             pdch_carrier_conflict: None,
+            copy_rules_always: carriers.len() >= 3,
             ul_label_blocks: Vec::new(),
             ul_block_copy: false,
             ul_block_release: None,
@@ -327,16 +331,25 @@ impl UmacBs {
         })
     }
 
+    /// Whether the uplink copy rules 2 and 3 and the bit-exact copy check run: always with three or
+    /// more carriers, else while a channel of the packet-data carrier exists (or went less than a
+    /// multiframe ago).
+    fn copy_rules_active(&self) -> bool {
+        self.copy_rules_always || self.pdch_carrier_active()
+    }
+
     /// Whether an uplink MAC PDU from `issi`, received on `carrier_num` in uplink slot
-    /// `msg_dltime`, is the adjacent-channel copy of a burst the radio sent on the other carrier
-    /// (the receiver of each carrier also demodulates a nearby radio on the other one), to be
-    /// dropped before anything acts on it. Only with a packet-data carrier in use:
-    ///   1. on the packet-data carrier only a circuit, its hangtime or the radio of a channel there
-    ///      transmits (never on ts1), and for a multiframe after the release its previous owner (its
-    ///      last bursts, 23.5.2.2.4 NOTE 2): the carrier has no MCCH;
+    /// `msg_dltime`, is the adjacent-channel copy of a burst the radio sent on another carrier
+    /// (the receiver of each carrier also demodulates a nearby radio on the others), to be
+    /// dropped before anything acts on it. With a packet-data carrier in use, or always with three
+    /// or more carriers:
+    ///   1. on a carrier other than the main one only a circuit, its hangtime or the radio of a
+    ///      packet-data channel there transmits (never on ts1), and for a multiframe after the
+    ///      release its previous owner (its last bursts, 23.5.2.2.4 NOTE 2): it has no MCCH;
     ///
-    /// and while a channel of the packet-data carrier exists, or for a multiframe after the last:
-    ///   2. a radio holding this uplink slot on the other carrier in the form of this burst, unless
+    /// and while a channel of the packet-data carrier exists, or for a multiframe after the last,
+    /// or always with three or more carriers:
+    ///   2. a radio holding this uplink slot on another carrier in the form of this burst, unless
     ///      it holds it here too, cannot be transmitting here too;
     ///   3. on main ts2-4 only a circuit, its hangtime or a packet-data channel's radio transmits
     ///      (the mirror of 1).
@@ -344,9 +357,9 @@ impl UmacBs {
     /// A copy whose original passed its CRC too is the same block bit for bit, already dropped
     /// in `rx_tmv_unitdata_ind`.
     fn is_adjacent_channel_copy(&self, carrier_num: u16, msg_dltime: TdmaTime, issi: u32, lchan: LogicalChannel) -> bool {
-        let Some(pdch_carrier) = self.pdch_carrier else {
+        if self.pdch_carrier.is_none() && !self.copy_rules_always {
             return false;
-        };
+        }
         let main = self.main_carrier();
         let t = msg_dltime.t;
         if carrier_num != main {
@@ -363,56 +376,59 @@ impl UmacBs {
                 return true;
             }
         }
-        if !self.pdch_carrier_active() {
+        if !self.copy_rules_active() {
             return false;
         }
-        let other = if carrier_num == main { pdch_carrier } else { main };
-        let there = self.scheduler_for(other);
-        // On a slot of its packet-data channel there (or of the one it gave back less than a
-        // multiframe ago) that carries no call, a reserved uplink slot is closed to random access
-        // by its AACH (23.5.1.4.2 b), or shown unallocated, and so it is while another radio talks
-        // in a call that took the slot (its traffic usage marker, 23.5.5): the radio sends there
-        // only what it was granted, a slot as SCH/F and a subslot as SCH/HU (23.5.2.3.1), and so
-        // does its copy here. A random access or a stolen block here is its own, sent after it left
-        // that channel (the slots it holds there are void, 23.5.4.3.1). On the MCCH, or in a call
-        // no other radio talks in, a reserved slot stays open to random access and to its own
-        // stolen blocks: any burst.
-        let call_there = there.circuit_is_active(Direction::Dl, t) || there.circuit_is_active(Direction::Ul, t) || there.is_hangtime(t);
-        let other_talks_there = self.ul_signal_owner.get(&(other, t)).is_some_and(|&s| s != issi);
-        let pdch_slot = (there.is_pdch_of(t, issi) || there.pdch_released_owner(t) == Some(issi)) && (!call_there || other_talks_there);
-        let reserved_there = there.ul_reserved_to(msg_dltime, issi);
-        let held_there = if pdch_slot {
-            there.ul_reserved_as(msg_dltime, issi, lchan)
-        } else {
-            reserved_there
-        };
         // Reserved to it on both carriers, one reservation is stale (it left that carrier): the
         // burst handed over first is taken, the copy after it is a bit copy.
         let held_here = self.scheduler_for(carrier_num).ul_reserved_to(msg_dltime, issi);
-        if held_there && !held_here {
-            tracing::debug!(
-                "UmacBs: dropping uplink from ISSI {} on carrier {} ts {}: that slot is reserved to it on carrier {}, adjacent-channel copy",
-                issi,
-                carrier_num,
-                t,
-                other
-            );
-            return true;
-        }
-        if reserved_there {
-            tracing::debug!(
-                "UmacBs: uplink from ISSI {} on carrier {} ts {} ({:?}) passes the reservation test although that slot is reserved to it on carrier {}: {}",
-                issi,
-                carrier_num,
-                t,
-                lchan,
-                other,
-                if held_here {
-                    "reserved to it here too"
-                } else {
-                    "not what it was granted there"
-                }
-            );
+        // Every other carrier (up to two carriers the one other: the packet-data carrier's
+        // counterpart).
+        for other in self.configured_carriers().into_iter().filter(|c| *c != carrier_num) {
+            let there = self.scheduler_for(other);
+            // On a slot of its packet-data channel there (or of the one it gave back less than a
+            // multiframe ago) that carries no call, a reserved uplink slot is closed to random
+            // access by its AACH (23.5.1.4.2 b), or shown unallocated, and so it is while another
+            // radio talks in a call that took the slot (its traffic usage marker, 23.5.5): the radio
+            // sends there only what it was granted, a slot as SCH/F and a subslot as SCH/HU
+            // (23.5.2.3.1), and so does its copy here. A random access or a stolen block here is its
+            // own, sent after it left that channel (the slots it holds there are void, 23.5.4.3.1).
+            // On the MCCH, or in a call no other radio talks in, a reserved slot stays open to
+            // random access and to its own stolen blocks: any burst.
+            let call_there = there.circuit_is_active(Direction::Dl, t) || there.circuit_is_active(Direction::Ul, t) || there.is_hangtime(t);
+            let other_talks_there = self.ul_signal_owner.get(&(other, t)).is_some_and(|&s| s != issi);
+            let pdch_slot = (there.is_pdch_of(t, issi) || there.pdch_released_owner(t) == Some(issi)) && (!call_there || other_talks_there);
+            let reserved_there = there.ul_reserved_to(msg_dltime, issi);
+            let held_there = if pdch_slot {
+                there.ul_reserved_as(msg_dltime, issi, lchan)
+            } else {
+                reserved_there
+            };
+            if held_there && !held_here {
+                tracing::debug!(
+                    "UmacBs: dropping uplink from ISSI {} on carrier {} ts {}: that slot is reserved to it on carrier {}, adjacent-channel copy",
+                    issi,
+                    carrier_num,
+                    t,
+                    other
+                );
+                return true;
+            }
+            if reserved_there {
+                tracing::debug!(
+                    "UmacBs: uplink from ISSI {} on carrier {} ts {} ({:?}) passes the reservation test although that slot is reserved to it on carrier {}: {}",
+                    issi,
+                    carrier_num,
+                    t,
+                    lchan,
+                    other,
+                    if held_here {
+                        "reserved to it here too"
+                    } else {
+                        "not what it was granted there"
+                    }
+                );
+            }
         }
         let sched = &self.channel_scheduler;
         if carrier_num == main
@@ -787,16 +803,16 @@ impl UmacBs {
         self.ul_block_requirement = false;
         self.ul_block_copy = false;
 
-        // While a channel of the packet-data carrier exists, one burst is often received on both
-        // carriers (adjacent channels, the PHY hands the stronger over first): demodulated from the
-        // same burst, with the cell's scrambling, a copy that passes its CRC is bit for bit the
-        // same, in the clear or encrypted. Dropped before anything attributes, decrypts or
-        // reassembles it; a different radio's block in the same slot is never equal. Only blocks
-        // taken are kept: a copy handed over first and dropped by the other rules (the PHY orders
-        // the carriers by their strongest burst in the slot, not by this one) must not drop the
-        // real burst after it.
+        // While a channel of the packet-data carrier exists, or always with three or more carriers,
+        // one burst is often received on several carriers (adjacent channels, the PHY hands the
+        // stronger over first): demodulated from the same burst, with the cell's scrambling, a copy
+        // that passes its CRC is bit for bit the same, in the clear or encrypted. Dropped before
+        // anything attributes, decrypts or reassembles it; a different radio's block in the same
+        // slot is never equal. Only blocks taken are kept: a copy handed over first and dropped by
+        // the other rules (the PHY orders the carriers by their strongest burst in the slot, not by
+        // this one) must not drop the real burst after it.
         let mut label_block = None;
-        if self.pdch_carrier_active() {
+        if self.copy_rules_active() {
             let label = self.dltime.add_timeslots(-2);
             let bits = prim.pdu.to_bitstr();
             self.ul_label_blocks.retain(|b| b.1 == label);
