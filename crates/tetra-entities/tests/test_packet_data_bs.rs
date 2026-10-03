@@ -5960,6 +5960,47 @@ fn three_carriers_take_a_block_once() {
     );
 }
 
+/// The packet-data carrier on the third carrier: a radio that can take 4 slots is sent there, and
+/// voice fills the main carrier and the secondary first; then, shared, it takes a data slot, data
+/// only never.
+#[test]
+fn a_packet_data_carrier_on_the_third_carrier() {
+    debug::setup_logging_verbose();
+    for exclusive in [false, true] {
+        let mut cfg = carrier_config(false, 4, exclusive);
+        cfg.cell.extra_carriers = vec![THIRD_CARRIER];
+        cfg.packet_data.pdch_carrier = Some(THIRD_CARRIER);
+        let mut air = Air::new(cfg);
+        assert_eq!(
+            onto_carrier(&mut air, ISSI),
+            Some((Some(THIRD_CARRIER), vec![1, 2, 3, 4])),
+            "exclusive {exclusive}"
+        );
+        let mut state = air.test.config.state_write();
+        let mut voice = || state.timeslot_alloc.allocate_any_slot(TimeslotOwner::Cmce).map(|s| s.carrier_num);
+        let first: Vec<Option<u16>> = (0..7).map(|_| voice()).collect();
+        assert_eq!(first, [[Some(MAIN_CARRIER); 3].as_slice(), &[Some(SECONDARY_CARRIER); 4]].concat());
+        assert_eq!(voice(), (!exclusive).then_some(THIRD_CARRIER), "exclusive {exclusive}");
+    }
+}
+
+/// With the packet-data carrier on the secondary and a third carrier, voice fills the third one
+/// before the packet-data carrier.
+#[test]
+fn with_three_carriers_voice_fills_the_packet_data_carrier_last() {
+    let mut cfg = carrier_config(false, 4, false);
+    cfg.cell.extra_carriers = vec![THIRD_CARRIER];
+    let shared = SharedConfig::from_parts(cfg, None);
+    let mut state = shared.state_write();
+    let voice: Vec<u16> = (0..11)
+        .map(|_| state.timeslot_alloc.allocate_any_slot(TimeslotOwner::Cmce).expect("voice").carrier_num)
+        .collect();
+    assert_eq!(
+        voice,
+        [[MAIN_CARRIER; 3].as_slice(), &[THIRD_CARRIER; 4], &[SECONDARY_CARRIER; 4]].concat()
+    );
+}
+
 /// ISSI2 on its main-carrier channel (ts3) has an uplink fragmentation open and one slot granted
 /// for its MAC-END; in that same uplink slot the radio of a carrier channel sends a MAC-END on the
 /// carrier, received first, and the main carrier gets either that block's adjacent-channel copy

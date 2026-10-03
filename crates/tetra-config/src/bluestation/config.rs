@@ -495,12 +495,20 @@ impl SharedConfig {
         }
 
         let mut state = state.unwrap_or_default();
-        let carriers = cfg
+        let mut carriers = cfg
             .bs_phase_mod_carriers()
             .expect("validated carrier configuration should compute")
             .into_iter()
             .map(|(carrier_num, _, _)| carrier_num)
             .collect::<Vec<_>>();
+        // With three or more carriers voice fills the packet-data carrier last (the main carrier
+        // stays first): calls go to the other extra carriers before taking slots data may want.
+        if carriers.len() >= 3
+            && let Some(p) = cfg.pdch_carrier()
+        {
+            carriers.retain(|c| *c != p.carrier);
+            carriers.push(p.carrier);
+        }
         state.timeslot_alloc.configure_carriers(&carriers);
         state
             .timeslot_alloc

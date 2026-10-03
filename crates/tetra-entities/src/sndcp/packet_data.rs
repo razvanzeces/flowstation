@@ -390,13 +390,19 @@ impl PacketDataRuntime {
                     );
                 } else if pd.bearer == PacketDataBearer::Mcch {
                     tracing::warn!("SNDCP: pdch_carrier = {} has no effect with bearer = \"mcch\"", c);
-                } else {
+                } else if cfg.cell.extra_carriers.is_empty() {
                     tracing::warn!(
                         "SNDCP: pdch_carrier = {} is not the secondary carrier in use ({}): packet data stays on the main carrier's pdch_timeslots",
                         c,
                         cfg.cell
                             .secondary_carrier
                             .map_or("none, dual carrier off".to_string(), |s| s.to_string())
+                    );
+                } else {
+                    tracing::warn!(
+                        "SNDCP: pdch_carrier = {} is not a carrier of the cell in use other than the main one ({:?}): packet data stays on the main carrier's pdch_timeslots",
+                        c,
+                        cfg.cell.other_carriers().collect::<Vec<_>>()
                     );
                 }
             }

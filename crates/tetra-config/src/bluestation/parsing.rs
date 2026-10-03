@@ -1113,6 +1113,29 @@ ready_timer_code = 9
         );
     }
 
+    /// With three or more carriers voice fills the packet-data carrier last: the allocator's
+    /// carrier order. Up to two carriers, and with the packet-data carrier already last, config
+    /// order.
+    #[test]
+    fn voice_fills_the_packet_data_carrier_last_from_three_carriers() {
+        let order = |cell: &str, pdch: u16| {
+            let pd = format!("enabled = true\nbearer = \"pdch\"\npdch_carrier = {pdch}");
+            let cfg = from_toml_str(&pdch_carrier_toml(cell, &pd)).expect("parse");
+            let shared = crate::bluestation::SharedConfig::from_parts(cfg, None);
+            let carriers = shared.state_read().timeslot_alloc.carriers().to_vec();
+            carriers
+        };
+        let three = "secondary_carrier = 1586\nextra_carriers = [1589]";
+        assert_eq!(order(three, 1586), vec![1584, 1589, 1586]);
+        assert_eq!(order(three, 1589), vec![1584, 1586, 1589]);
+        assert_eq!(order(three, 1590), vec![1584, 1586, 1589], "not a carrier of the cell");
+        assert_eq!(
+            order("secondary_carrier = 1586\nextra_carriers = [1589, 1581]", 1586),
+            vec![1584, 1589, 1581, 1586]
+        );
+        assert_eq!(order("secondary_carrier = 1586", 1586), vec![1584, 1586], "two carriers");
+    }
+
     #[test]
     fn carrier_plan_warnings_from_three_carriers() {
         let warnings = |cell: &str| from_toml_str(&minimal_toml(cell)).expect("parse").carrier_plan_warnings();

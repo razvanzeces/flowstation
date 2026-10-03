@@ -42,7 +42,8 @@ pub struct CfgPacketData {
     /// on the MCCH. See `StackConfig::pdch_slots_per_radio`.
     pub pdch_max_slots: u8,
     /// The packet-data carrier: packet-data channels on this carrier too (all four slots), which
-    /// must be the secondary carrier in use (`cell_info.secondary_carrier`); otherwise ignored.
+    /// must be a carrier of the cell in use other than the main one (`cell_info.secondary_carrier`
+    /// or one of `cell_info.extra_carriers`); otherwise ignored.
     pub pdch_carrier: Option<u16>,
     /// Timeslots of the packet-data carrier a PDCH may take, in order of preference (1..=4, one of
     /// 2..=4 at least: a PDCH never transmits uplink on ts1 of that carrier).
