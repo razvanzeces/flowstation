@@ -548,6 +548,35 @@ mod tests {
         assert_eq!(alloc.free_slot_count(), 0, "kept across a carrier reconfiguration");
     }
 
+    /// Three carriers: 11 voice slots, main ts2-4 first, then every slot of the others in order; a
+    /// data-only extra carrier is skipped.
+    #[test]
+    fn three_carriers_give_eleven_voice_slots_in_carrier_order() {
+        let mut alloc = TimeslotAllocator::default();
+        alloc.configure_carriers(&[1584, 1585, 1587]);
+        assert_eq!(alloc.free_slot_count(), 11);
+        assert_eq!(alloc.free_traffic_slots(), (3, 8));
+        let voice: Vec<(u16, u8)> = (0..11)
+            .map(|_| alloc.allocate_any_slot(TimeslotOwner::Cmce).expect("voice slot"))
+            .map(|s| (s.carrier_num, s.ts))
+            .collect();
+        let expected: Vec<(u16, u8)> = (2..=4)
+            .map(|ts| (1584, ts))
+            .chain((1..=4).map(|ts| (1585, ts)))
+            .chain((1..=4).map(|ts| (1587, ts)))
+            .collect();
+        assert_eq!(voice, expected);
+        assert_eq!(alloc.allocate_any_slot(TimeslotOwner::Cmce), None);
+
+        let mut alloc = TimeslotAllocator::default();
+        alloc.configure_carriers(&[1584, 1585, 1587]);
+        alloc.set_data_only_carrier(Some(1587));
+        assert_eq!(alloc.free_slot_count(), 7);
+        let voice: Vec<_> = (0..7).map(|_| alloc.allocate_any_slot(TimeslotOwner::Cmce).unwrap()).collect();
+        assert!(voice.iter().all(|s| s.carrier_num != 1587), "{voice:?}");
+        assert_eq!(alloc.allocate_any_slot(TimeslotOwner::Cmce), None);
+    }
+
     #[test]
     fn configure_carriers_preserves_existing_owner_state() {
         let mut alloc = TimeslotAllocator::default();

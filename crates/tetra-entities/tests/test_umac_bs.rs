@@ -1492,6 +1492,104 @@ fn secondary_identity_with_a_packet_data_carrier_and_no_session() {
     );
 }
 
+// ---------------------------------------------------------------------------------------------
+// A third carrier (`extra_carriers`): the main and secondary carriers are what they were, and the
+// third one is what the secondary is.
+// ---------------------------------------------------------------------------------------------
+
+const THIRD_CARRIER: u16 = 1524;
+
+fn third_carrier(cfg: &mut tetra_config::bluestation::StackConfig) {
+    cfg.cell.extra_carriers = vec![THIRD_CARRIER];
+}
+
+fn packet_data_carrier_and_a_third(cfg: &mut tetra_config::bluestation::StackConfig) {
+    packet_data_carrier_without_a_session(cfg);
+    third_carrier(cfg);
+}
+
+/// The scenarios' carrier 1522 becomes the third carrier, behind another secondary.
+fn scenarios_carrier_is_the_third(cfg: &mut tetra_config::bluestation::StackConfig) {
+    cfg.cell.secondary_carrier = Some(THIRD_CARRIER);
+    cfg.cell.extra_carriers = vec![SECONDARY_CARRIER];
+}
+
+/// With a third carrier, its slots left out, the secondary-carrier scenarios go on the air as
+/// before: with and without a packet-data carrier.
+#[test]
+fn third_carrier_identity() {
+    let skip = |tweak| crate::common::component_test::with_trace_skip_carrier(THIRD_CARRIER, || secondary_scenarios_with(tweak));
+    assert_eq!(
+        skip(third_carrier),
+        [
+            SECONDARY_IDENTITY_MCCH_FALLBACK,
+            SECONDARY_IDENTITY_TS1_CHAN_ALLOC,
+            SECONDARY_IDENTITY_TS1_CLOSE
+        ]
+    );
+    assert_eq!(
+        skip(packet_data_carrier_and_a_third),
+        [
+            SECONDARY_IDENTITY_PDCH_MCCH_FALLBACK,
+            SECONDARY_IDENTITY_PDCH_TS1_CHAN_ALLOC,
+            SECONDARY_IDENTITY_PDCH_TS1_CLOSE
+        ]
+    );
+}
+
+/// The secondary-carrier scenarios run on a third carrier (the MCCH fallback, a ts1 channel
+/// allocation on the MCCH without CSS, the ts1 close deferred until the FACCH D-RELEASE went out
+/// there): their checks pass, and with the secondary's slots left out the air is what it was
+/// with that carrier as the secondary.
+#[test]
+fn a_third_carrier_is_what_the_secondary_was() {
+    assert_eq!(
+        crate::common::component_test::with_trace_skip_carrier(THIRD_CARRIER, || secondary_scenarios_with(
+            scenarios_carrier_is_the_third
+        )),
+        [
+            SECONDARY_IDENTITY_MCCH_FALLBACK,
+            SECONDARY_IDENTITY_TS1_CHAN_ALLOC,
+            SECONDARY_IDENTITY_TS1_CLOSE
+        ]
+    );
+}
+
+/// An idle cell of three carriers: a slot of each per tick, the third one the same as the
+/// secondary's (BCCH without MCCH, frame 18 included) over two multiframes.
+#[test]
+fn third_carrier_sends_what_the_secondary_sends() {
+    debug::setup_logging_verbose();
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.secondary_carrier = Some(SECONDARY_CARRIER);
+    config.cell.extra_carriers = vec![THIRD_CARRIER];
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(vec![TetraEntity::Umac], vec![TetraEntity::Lmac]);
+    test.run_stack(Some(2 * 18 * 4 + 8));
+
+    let ticks: Vec<Vec<tetra_saps::tmv::TmvUnitdataReqSlot>> = test
+        .dump_sinks()
+        .into_iter()
+        .filter_map(|msg| match msg.msg {
+            SapMsgInner::TmvUnitdataReqSlots(slots) => Some(slots.slots),
+            _ => None,
+        })
+        .collect();
+    assert!(ticks.len() >= 2 * 18 * 4, "{} ticks", ticks.len());
+    let mut frame18 = 0;
+    for slots in &ticks {
+        let carriers: Vec<u16> = slots.iter().map(|s| s.carrier_num).collect();
+        assert_eq!(carriers, vec![MAIN_CARRIER, SECONDARY_CARRIER, THIRD_CARRIER]);
+        let mut third = slots[2].clone();
+        third.carrier_num = SECONDARY_CARRIER;
+        assert_eq!(format!("{third:?}"), format!("{:?}", slots[1]), "at {}", slots[0].ts);
+        if slots[0].ts.f == 18 {
+            frame18 += 1;
+        }
+    }
+    assert!(frame18 >= 4, "frame 18 seen");
+}
+
 #[test]
 fn test_local_loopback_ul_still_loops_back_and_reaches_brew() {
     // Only a LocalParrot circuit hands its uplink to CMCE: an ordinary simplex circuit keeps

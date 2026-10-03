@@ -62,6 +62,7 @@ pub struct UmacBs {
     /// Contains UL/DL scheduling logic
     /// Access to this field is used only by testing code
     pub channel_scheduler: BsChannelScheduler,
+    /// Every carrier but the main one, in config order (the secondary, then the extra ones).
     secondary_channel_schedulers: Vec<BsChannelScheduler>,
     /// Timestamp of last received UL voice frame per carrier/timeslot.
     /// Used to detect UL inactivity when a radio disappears mid-transmission.
@@ -122,18 +123,40 @@ impl UmacBs {
         let precomps = Self::generate_precomps(&config);
         let pdch_mode = c.packet_data.enabled && c.packet_data.bearer == PacketDataBearer::Pdch;
         let mut secondary_channel_schedulers = Vec::new();
-        if let Some(secondary_carrier) = c.cell.secondary_carrier {
+        // The secondary carrier first, then the extra ones: BCCH and traffic, no MCCH.
+        for carrier in c.cell.other_carriers() {
             let mut sched = BsChannelScheduler::new(scrambling_code, precomps.clone());
-            sched.set_carrier_num(secondary_carrier);
+            sched.set_carrier_num(carrier);
             sched.set_downlink_mode(CarrierDownlinkMode::SecondaryBcchNoMcch);
             secondary_channel_schedulers.push(sched);
+        }
+        let carriers = c.cell.carriers();
+        if carriers.len() >= 3 {
+            tracing::info!(
+                "UmacBs: {} carriers {:?}, MCCH on {}",
+                carriers.len(),
+                carriers,
+                c.cell.main_carrier
+            );
+            for w in c.carrier_plan_warnings() {
+                tracing::warn!("UmacBs: carrier plan: {w}");
+            }
         }
         let mut channel_scheduler = BsChannelScheduler::new(scrambling_code, precomps);
         // A packet-data carrier: its channels are assigned on the MCCH and live in its scheduler.
         let pdch_carrier = c.pdch_carrier();
         if let Some(p) = &pdch_carrier {
             channel_scheduler.set_pdch_handoff_carrier(Some(p.carrier));
-            if p.exclusive {
+            if p.exclusive && carriers.len() >= 3 {
+                let voice: Vec<u16> = carriers.iter().copied().filter(|c| *c != p.carrier).collect();
+                tracing::info!(
+                    "UmacBs: carrier {} carries packet-data channels (ts {:?}, data only: calls use carriers {:?}, {} traffic slots)",
+                    p.carrier,
+                    p.timeslots,
+                    voice,
+                    3 + 4 * (carriers.len() - 2)
+                );
+            } else if p.exclusive {
                 tracing::info!(
                     "UmacBs: carrier {} carries packet-data channels (ts {:?}, data only: calls use carrier {} only, 3 traffic slots)",
                     p.carrier,
@@ -463,11 +486,7 @@ impl UmacBs {
     }
 
     fn configured_carriers(&self) -> Vec<u16> {
-        let cfg = self.config.config();
-        [Some(cfg.cell.main_carrier), cfg.cell.secondary_carrier]
-            .into_iter()
-            .flatten()
-            .collect()
+        self.config.config().cell.carriers()
     }
 
     fn scheduler_for_mut(&mut self, carrier_num: u16) -> &mut BsChannelScheduler {

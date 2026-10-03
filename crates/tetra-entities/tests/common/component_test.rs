@@ -31,6 +31,17 @@ thread_local! {
     static TRACE: RefCell<Option<DefaultHasher>> = const { RefCell::new(None) };
     /// Applied, on this thread, to every configuration a `ComponentTest` is built from.
     static CONFIG_TWEAK: Cell<Option<fn(&mut StackConfig)>> = const { Cell::new(None) };
+    /// The slots of this carrier are left out of the fingerprint on this thread.
+    static TRACE_SKIP_CARRIER: Cell<Option<u16>> = const { Cell::new(None) };
+}
+
+/// Run `f` with the downlink slots of `carrier` left out of the fingerprint on this thread (a
+/// scenario run again with one more carrier, for the identity tests).
+pub fn with_trace_skip_carrier<R>(carrier: u16, f: impl FnOnce() -> R) -> R {
+    TRACE_SKIP_CARRIER.with(|c| c.set(Some(carrier)));
+    let out = f();
+    TRACE_SKIP_CARRIER.with(|c| c.set(None));
+    out
 }
 
 /// Run `f` with `tweak` applied to every configuration a `ComponentTest` is built from on this
@@ -56,8 +67,10 @@ pub fn trace_hash() -> u64 {
 /// Feed the fingerprint, when armed, with the Debug form of `msgs` (sorted: entities keep some
 /// state in hash maps, so the order within one tick changes from run to run). The TMA data
 /// category of a packet-data channel assignment (`DATA_CATEGORY_PDCH_ASSIGNMENT`), which came
-/// after the fingerprints were recorded and never goes on the air, is left out.
+/// after the fingerprints were recorded and never goes on the air, is left out, and so are the
+/// slots of the carrier `with_trace_skip_carrier` names.
 fn trace(msgs: &[SapMsg]) {
+    let skip = TRACE_SKIP_CARRIER.with(Cell::get);
     TRACE.with(|t| {
         if let Some(h) = t.borrow_mut().as_mut() {
             let mut lines: Vec<String> = msgs
@@ -68,7 +81,15 @@ fn trace(msgs: &[SapMsg]) {
                         SapMsgInner::TmvUnitdataReqSlots(_) | SapMsgInner::TmaUnitdataInd(_) | SapMsgInner::TmaUnitdataReq(_)
                     )
                 })
-                .map(|m| format!("{:?}", m.msg).replace("data_category: Some(2)", "data_category: None"))
+                .map(|m| match (&m.msg, skip) {
+                    (SapMsgInner::TmvUnitdataReqSlots(slots), Some(carrier)) => {
+                        let mut kept = slots.clone();
+                        kept.slots.retain(|s| s.carrier_num != carrier);
+                        format!("{:?}", SapMsgInner::TmvUnitdataReqSlots(kept))
+                    }
+                    _ => format!("{:?}", m.msg),
+                })
+                .map(|line| line.replace("data_category: Some(2)", "data_category: None"))
                 .collect();
             lines.sort();
             lines.hash(h);
