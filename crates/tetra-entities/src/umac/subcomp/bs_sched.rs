@@ -1741,10 +1741,18 @@ impl BsChannelScheduler {
         // sent before any newly-arriving ones in the next frame.  Using extend instead of swap
         // avoids a panic when the current queue already contains items (e.g. two back-to-back
         // P2P calls each deferring a chan_alloc PDU within the same tick).
+        // Fragments go on in this slot. PDUs held back outside a build for the next frame (the
+        // MCCH chan_alloc deferral, `dl_enqueue_tma_next_frame`) are for the MCCH: on a carrier
+        // with one only ts1 takes them, or they would go on (or get stuck behind a call on) a slot
+        // no idle radio listens to.
         if !self.dltx_next_slot_queue.is_empty() {
-            let current = &mut self.dltx_queues[q];
+            let mcch_wait = self.allow_mcch() && ts.t != 1;
             // Prepend: move deferred items to front, then re-append any items already queued.
-            let mut merged = std::mem::take(&mut self.dltx_next_slot_queue);
+            let (mut merged, held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.dltx_next_slot_queue)
+                .into_iter()
+                .partition(|e| !(mcch_wait && matches!(e, DlSchedElem::Resource(..))));
+            self.dltx_next_slot_queue = held;
+            let current = &mut self.dltx_queues[q];
             merged.extend(current.drain(..));
             *current = merged;
         }
@@ -3427,6 +3435,55 @@ mod tests {
             .map(|s| s.ts.t)
             .collect();
         assert_eq!(on, vec![1]);
+    }
+
+    /// A second channel allocation for the MCCH in one frame, held back for the next frame, goes
+    /// on ts1 of the next frame, not on the slot built next (ts3 here), where no idle radio
+    /// listens; and it does not get stuck there when a call takes that slot (field, 2026-10-03:
+    /// a D-SETUP stuck on ts3 for 2.9 s, "queued signaling on ts 3 but no stealing item").
+    #[test]
+    fn test_a_held_back_chan_alloc_goes_on_the_next_mcch() {
+        use tetra_pdus::umac::fields::channel_allocation::ChanAllocElement;
+        use tetra_saps::lcmc::enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment};
+        for call_takes_ts3 in [false, true] {
+            let mut sched = get_testing_slotter();
+            // The slot built next is (2,3).
+            sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+            let carrier_num = sched.carrier_num;
+            let setup = |gssi: u32| {
+                let (mut pdu, sdu) = tagged_resource(&TetraAddress::new(gssi, SsiType::Gssi), 0x08, 78);
+                pdu.chan_alloc_element = Some(ChanAllocElement {
+                    alloc_type: ChanAllocType::Replace,
+                    ts_assigned: [false, true, false, false],
+                    ul_dl_assigned: UlDlAssignment::Both,
+                    clch_permission: false,
+                    cell_change_flag: false,
+                    carrier_num,
+                    ext: None,
+                    mon_pattern: 1,
+                    frame18_mon_pattern: None,
+                });
+                (pdu, sdu)
+            };
+            let (pdu, sdu) = setup(214_900);
+            sched.dl_enqueue_tma(pdu, sdu, None);
+            let (pdu, sdu) = setup(214_901);
+            sched.dl_enqueue_tma(pdu, sdu, None);
+            assert_eq!(sched.dltx_next_slot_queue.len(), 1, "the second is held back");
+            let mut slots = finalize_slots(&mut sched, 1);
+            assert_eq!((slots[0].ts.f, slots[0].ts.t), (2, 3));
+            if call_takes_ts3 {
+                sched.create_circuit(Direction::Dl, test_circuit(Direction::Dl, 3));
+            }
+            slots.extend(finalize_slots(&mut sched, 12));
+            let on: Vec<(u8, u8)> = slots
+                .iter()
+                .filter(|s| dl_pdus(s).iter().any(|p| p.1 == Some(214_901)))
+                .map(|s| (s.ts.f, s.ts.t))
+                .collect();
+            assert_eq!(on, vec![(4, 1)], "call on ts3: {call_takes_ts3}");
+            assert!(sched.dltx_queues[2].is_empty(), "call on ts3: {call_takes_ts3}");
+        }
     }
 
     /// Frame 18 already leaves a channel of three slots three slots without a fragment, and N.203
