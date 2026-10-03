@@ -127,9 +127,12 @@ mnc = 1337
 # See ETSI TS 100 392-15 V1.5.1 Clause 6: Duplex spacing
 freq_band = 4                       # 400MHz band
 main_carrier = 1521                 # + 1521 * 25kHz = 38250kHz
-# secondary_carrier = 1522          # Optional second carrier, typically adjacent (+/- 25 kHz)
+# secondary_carrier = 1522          # Optional second carrier, typically adjacent (+/- 25 kHz) (with extra_carriers, never 25 kHz apart)
 # dual_carrier_enabled = true        # Dashboard "Dual-Carrier ON/OFF" switch for the carrier above.
                                      # Absent = on. Set false to keep the number but run single-carrier.
+# extra_carriers = [1525]           # Optional 3rd/4th carrier: voice + BCCH like the secondary (needs secondary_carrier; off with dual_carrier_enabled = false)
+#                                   # Omit it, never write it empty: an older binary refuses to start with it. No 25 kHz neighbours, no equal spacing (IM3).
+#                                   # From 3 carriers on each one is sent 20*log10(2/N) dB lower (-3.5 dB with 3) so the sum cannot clip.
 duplex_spacing = 4                  # Use 5MHz spacing between ul and dl (for 400 MHz band)
 # custom_duplex_spacing = 7600000   # Do not uncomment unless you have programmed a custom duplex spacing entry in your radios
 freq_offset = 0                     # Carrier offset. Usually 0. Options: 0, 6250, -6250, 12500 Hz.
@@ -546,9 +549,9 @@ voice_service = true
 # pdch_timeslots = [4, 3, 2]                     # main-carrier timeslots a PDCH may take, in order of preference (2..=4)
 # pdch_idle_release_secs = 10                    # a PDCH without data for this long goes back to the pool (1..=300)
 # pdch_max_slots = 1                             # slots per radio on its PDCH (1..=4, at most the number of pdch_timeslots, or of pdch_carrier_timeslots); >1 needs a multislot radio
-# pdch_carrier = 1522                            # packet-data carrier: PDCHs of up to 4 slots on the secondary carrier (must be cell_info secondary_carrier, with dual carrier on)
+# pdch_carrier = 1522                            # packet-data carrier: PDCHs of up to 4 slots on a carrier of the cell other than the main one (cell_info secondary_carrier or one of extra_carriers, with dual carrier on)
 # pdch_carrier_timeslots = [4, 3, 2, 1]          # its slots a PDCH may take, in order of preference (1..=4, one of 2..=4 at least: never uplink on its ts1)
-# pdch_carrier_exclusive = false                 # true: voice never goes to pdch_carrier (a carrier for data only; calls get the main carrier's 3 slots)
+# pdch_carrier_exclusive = false                 # true: voice never goes to pdch_carrier (a carrier for data only; calls get the other carriers: the main carrier's 3 slots with dual carrier)
 #                                                # (an older flowstation binary refuses to start with pdch_max_slots or pdch_carrier*: remove them before rolling back)
 
 ###############################################################################
