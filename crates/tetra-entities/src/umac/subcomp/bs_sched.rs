@@ -209,6 +209,11 @@ pub struct BsChannelScheduler {
     /// ask for an acknowledgement, by the radio and the segment's report: each gets a slot for the
     /// answer granted with it (see `multislot`).
     pdch_reply_wanted: Vec<(u32, TxReporter)>,
+
+    /// `secondary_carrier_on_demand`: carriers not on the air long enough yet (off or warming up).
+    /// A channel allocation sending a radio to one of them waits (see `dl_take_next_sched_item`).
+    /// The UMAC sets it every tick; always empty without the feature.
+    cold_carriers: Vec<u16>,
 }
 
 #[derive(Debug)]
@@ -282,6 +287,7 @@ impl BsChannelScheduler {
             pdch_lazy: None,
             pdch_grants_out: Vec::new(),
             pdch_reply_wanted: Vec::new(),
+            cold_carriers: Vec::new(),
         }
     }
 
@@ -295,6 +301,31 @@ impl BsChannelScheduler {
 
     pub fn carrier_num(&self) -> u16 {
         self.carrier_num
+    }
+
+    /// The carriers a channel allocation must not send a radio to yet (`secondary_carrier_on_demand`).
+    pub fn set_cold_carriers(&mut self, carriers: &[u16]) {
+        self.cold_carriers.clear();
+        self.cold_carriers.extend_from_slice(carriers);
+    }
+
+    /// The carrier a channel allocation queued as `e` sends its radio to (a quit sends it nowhere).
+    fn allocation_carrier(e: &DlSchedElem) -> Option<u16> {
+        let a = match e {
+            DlSchedElem::Resource(pdu, ..) => pdu.chan_alloc_element.as_ref(),
+            DlSchedElem::FragBuf(f) if !f.is_started() => f.chan_alloc(),
+            _ => None,
+        }?;
+        a.ts_assigned.iter().any(|s| *s).then_some(a.carrier_num)
+    }
+
+    /// Carriers the channel allocations queued here send radios to.
+    pub fn allocation_carriers(&self) -> impl Iterator<Item = u16> + '_ {
+        self.dltx_queues
+            .iter()
+            .flatten()
+            .chain(&self.dltx_next_slot_queue)
+            .filter_map(Self::allocation_carrier)
     }
 
     pub fn allow_mcch(&self) -> bool {
@@ -1870,6 +1901,7 @@ impl BsChannelScheduler {
         // frames 17 and 1, a started fragment opens the block and signalling waits behind it.
         let multislot = self.multislot_owner(ts.t).is_some();
         let let_in = !multislot || !matches!(ts.f, 1 | 17);
+        let cold = &self.cold_carriers;
         let Some(q) = self.dltx_queues.get_mut(slot) else {
             return None;
         };
@@ -1910,18 +1942,27 @@ impl BsChannelScheduler {
             // 300 392-2 23.4.2.1.1), and a radio that obeys it at the end of the slot leaves before
             // the rest. It waits for the next slot (two D-SETUPs do not fit in one); what goes
             // whole behind it goes now, but not for its address or that of a PDU it would pass,
-            // which keep their order.
+            // which keep their order. So does one to a carrier not on the air long enough yet
+            // (`secondary_carrier_on_demand`): the radio would find nothing there to lock on to.
+            let cold_carrier = Self::allocation_carrier(&q[i]).filter(|c| cold.contains(c));
             if let DlSchedElem::Resource(pdu, ..) = &q[i]
                 && pdu.chan_alloc_element.is_some()
-                && !Self::goes_whole(&q[i], room)
-                && Self::goes_whole(&q[i], SCH_F_CAP)
+                && (cold_carrier.is_some() || (!Self::goes_whole(&q[i], room) && Self::goes_whole(&q[i], SCH_F_CAP)))
             {
                 let ssi = pdu.addr.map(|a| a.ssi);
-                tracing::debug!(
-                    "dl_take_next_sched_item: channel allocation for {:?} waits for the next block ({} bits left)",
-                    ssi,
-                    room
-                );
+                if let Some(carrier) = cold_carrier {
+                    tracing::debug!(
+                        "dl_take_next_sched_item: channel allocation for {:?} waits for carrier {} to warm up",
+                        ssi,
+                        carrier
+                    );
+                } else {
+                    tracing::debug!(
+                        "dl_take_next_sched_item: channel allocation for {:?} waits for the next block ({} bits left)",
+                        ssi,
+                        room
+                    );
+                }
                 // A grant merged into it is for this block (`ul_find_grant_opportunity`), or the
                 // radio would transmit a frame after its slot: it goes now on its own, with the
                 // address and random-access acknowledgement it had there, which leave it. So does a
@@ -1941,6 +1982,7 @@ impl BsChannelScheduler {
                     }
                 }
                 // Nothing overtakes a PDU for its address that stays: the addresses passed are held.
+                // Nor does another channel allocation to a carrier warming up.
                 let mut held = vec![ssi];
                 let j = q.iter().skip(i + 1).position(|e| {
                     let e_ssi = match e {
@@ -1948,7 +1990,9 @@ impl BsChannelScheduler {
                         DlSchedElem::FragBuf(f) => f.ssi(),
                         _ => return false,
                     };
-                    let pass = Self::goes_whole(e, room) && !held.contains(&e_ssi);
+                    let pass = Self::goes_whole(e, room)
+                        && !held.contains(&e_ssi)
+                        && !Self::allocation_carrier(e).is_some_and(|c| cold.contains(&c));
                     if !pass {
                         held.push(e_ssi);
                     }
@@ -3822,6 +3866,147 @@ mod tests {
             // (frame, ssi, li, grant, random access, chan_alloc): 7 octets, no usage marker.
             assert_eq!(x_at, vec![(3, x.ssi, 7, true, true, false)], "{ahead} bits ahead");
         }
+    }
+
+    /// `chan_alloc_resource` sending the radio to `carrier`.
+    fn chan_alloc_to(sched: &BsChannelScheduler, addr: TetraAddress, bits: usize, carrier: u16) -> (MacResource, BitBuffer) {
+        let (mut pdu, sdu) = chan_alloc_resource(sched, addr, bits);
+        if let Some(a) = pdu.chan_alloc_element.as_mut() {
+            a.carrier_num = carrier;
+        }
+        (pdu, sdu)
+    }
+
+    /// The MAC-RESOURCEs of `slots`, in order: (slot time, SSI, channel allocation).
+    fn dl_resources_at(slots: &[TmvUnitdataReqSlot]) -> Vec<(TdmaTime, u32, bool)> {
+        slots
+            .iter()
+            .flat_map(|s| dl_resources(std::slice::from_ref(s)).into_iter().map(move |r| (s.ts, r.1, r.5)))
+            .collect()
+    }
+
+    /// A channel allocation to a carrier warming up (`secondary_carrier_on_demand`) waits for it,
+    /// however long: whole signalling for another address goes past it, but neither a PDU for its
+    /// address nor a second allocation to that carrier. Once the carrier is on the air it goes on
+    /// the next ts1 that is not frame 18, the others behind it in their order.
+    #[test]
+    fn test_a_channel_allocation_waits_for_its_carrier_to_warm_up() {
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+        sched.set_cold_carriers(&[1002]);
+        let (x, y, z) = (
+            TetraAddress::issi(1_030_036),
+            TetraAddress::issi(2_145_007),
+            TetraAddress::issi(2_145_008),
+        );
+        let (pdu, sdu) = chan_alloc_to(&sched, x, 44, 1002);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        let (pdu, sdu) = tagged_resource(&y, 0x09, 40);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        let (pdu, sdu) = tagged_resource(&x, 0x0a, 8);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        let (pdu, sdu) = chan_alloc_to(&sched, z, 44, 1002);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+
+        let slots = finalize_slots(&mut sched, 3 * 72);
+        assert_eq!((slots[2].ts.f, slots[2].ts.t), (3, 1));
+        let sent = dl_resources_at(&slots);
+        let at = |sent: &[(TdmaTime, u32, bool)], ssi: u32| -> Vec<(TdmaTime, bool)> {
+            sent.iter().filter(|r| r.1 == ssi).map(|r| (r.0, r.2)).collect()
+        };
+        assert_eq!(at(&sent, y.ssi), vec![(slots[2].ts, false)], "another address goes past it");
+        assert!(
+            at(&sent, x.ssi).is_empty(),
+            "neither the allocation nor its address's PDU: {sent:?}"
+        );
+        assert!(at(&sent, z.ssi).is_empty(), "nor a second allocation to that carrier: {sent:?}");
+        assert_eq!(sched.allocation_carriers().collect::<Vec<_>>(), vec![1002, 1002]);
+
+        // On the air: the next ts1 that is not frame 18.
+        sched.set_cold_carriers(&[]);
+        let slots = finalize_slots(&mut sched, 3 * 72);
+        let first_mcch = slots.iter().find(|s| s.ts.t == 1 && s.ts.f != 18).map(|s| s.ts).unwrap();
+        let sent = dl_resources_at(&slots);
+        let x_at = at(&sent, x.ssi);
+        assert_eq!(x_at.first(), Some(&(first_mcch, true)), "{sent:?}");
+        assert_eq!(x_at.len(), 2, "then its PDU: {sent:?}");
+        let z_at = at(&sent, z.ssi);
+        assert_eq!(z_at.len(), 1, "{sent:?}");
+        assert!(
+            z_at[0].1 && z_at[0].0.diff(x_at[0].0) > 0,
+            "the second allocation after the first: {sent:?}"
+        );
+        assert_eq!(sched.allocation_carriers().count(), 0);
+    }
+
+    /// The grant and random-access acknowledgement merged into a channel allocation to a carrier
+    /// warming up go on time on their own, without a usage marker (as for one waiting for room).
+    #[test]
+    fn test_a_grant_does_not_wait_with_an_allocation_to_a_cold_carrier() {
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+        sched.set_cold_carriers(&[1002]);
+        let x = TetraAddress::issi(1_030_036);
+        let (mut pdu, sdu) = chan_alloc_to(&sched, x, 44, 1002);
+        pdu.usage_marker = Some(10);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        sched.dl_enqueue_random_access_ack(1, x);
+        let (grant, marker) = sched.ul_process_cap_req(1, x, &ReservationRequirement::Req1Slot).expect("grant");
+        sched.dl_enqueue_grant(1, x, grant, marker);
+        let slots = finalize_slots(&mut sched, 12);
+        assert_eq!((slots[2].ts.f, slots[2].ts.t), (3, 1));
+        let x_at: Vec<_> = dl_resources(&slots).into_iter().filter(|r| r.1 == x.ssi).collect();
+        // (frame, ssi, li, grant, random access, chan_alloc): 7 octets, no usage marker.
+        assert_eq!(x_at, vec![(3, x.ssi, 7, true, true, false)]);
+    }
+
+    /// Only an allocation to a carrier warming up waits: one to another carrier, one to that
+    /// carrier once it is on the air, and a quit (no timeslot) go on the next MCCH.
+    #[test]
+    fn test_only_an_allocation_to_a_cold_carrier_waits() {
+        for (carrier, cold, quit) in [(1001, true, false), (1002, false, false), (1002, true, true)] {
+            let mut sched = get_testing_slotter();
+            sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+            if cold {
+                sched.set_cold_carriers(&[1002]);
+            }
+            let x = TetraAddress::issi(1_030_036);
+            let (mut pdu, sdu) = chan_alloc_to(&sched, x, 44, carrier);
+            if quit && let Some(a) = pdu.chan_alloc_element.as_mut() {
+                a.ts_assigned = [false; 4];
+            }
+            sched.dl_enqueue_tma(pdu, sdu, None);
+            let slots = finalize_slots(&mut sched, 12);
+            let x_at: Vec<_> = dl_resources(&slots)
+                .into_iter()
+                .filter(|r| r.1 == x.ssi)
+                .map(|r| (r.0, r.5))
+                .collect();
+            assert_eq!(x_at, vec![(3, true)], "carrier {carrier}, cold {cold}, quit {quit}");
+        }
+    }
+
+    /// `allocation_carriers` lists the carriers queued channel allocations send radios to: a
+    /// resource, a fragmented message not started yet and one held back for the next frame; not a
+    /// quit or a PDU without an allocation.
+    #[test]
+    fn test_allocation_carriers_lists_the_queued_allocations() {
+        let mut sched = get_testing_slotter();
+        let addr = |n: u32| TetraAddress::issi(1_030_030 + n);
+        let (pdu, sdu) = chan_alloc_to(&sched, addr(1), 44, 1002);
+        sched.dltx_queues[0].push(DlSchedElem::Resource(pdu, sdu, None, false));
+        let (pdu, sdu) = chan_alloc_to(&sched, addr(2), 44, 1003);
+        sched.dltx_queues[1].push(DlSchedElem::FragBuf(BsFragger::new(pdu, sdu, None)));
+        let (mut pdu, sdu) = chan_alloc_to(&sched, addr(3), 44, 1004);
+        if let Some(a) = pdu.chan_alloc_element.as_mut() {
+            a.ts_assigned = [false; 4];
+        }
+        sched.dltx_queues[0].push(DlSchedElem::Resource(pdu, sdu, None, false));
+        let (pdu, sdu) = tagged_resource(&addr(4), 0x09, 40);
+        sched.dltx_queues[0].push(DlSchedElem::Resource(pdu, sdu, None, false));
+        let (pdu, sdu) = chan_alloc_to(&sched, addr(5), 44, 1005);
+        sched.dltx_next_slot_queue.push(DlSchedElem::Resource(pdu, sdu, None, false));
+        assert_eq!(sched.allocation_carriers().collect::<Vec<_>>(), vec![1002, 1003, 1005]);
     }
 
     /// Frame 18 already leaves a channel of three slots three slots without a fragment, and N.203
