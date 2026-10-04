@@ -1196,6 +1196,14 @@ tr.row-emergency td:first-child{box-shadow:inset 3px 0 0 var(--danger);}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .ts-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+/* Carriers on demand: ON AIR / WARMING / OFF next to the carrier title, slots dimmed while off. */
+.ts-air{
+  margin-left:8px;padding:1px 6px;border-radius:4px;border:1px solid currentColor;
+  font-size:9px;letter-spacing:0.08em;color:var(--text3);
+}
+.ts-air.on{color:var(--ok);}
+.ts-air.warming{color:var(--warn);}
+.ts-carrier-group.air-off .ts-row{opacity:0.35;filter:grayscale(1);}
 .ts-block{
   border:1px solid var(--border);border-radius:8px;
   padding:12px 10px 8px;text-align:center;
@@ -4238,6 +4246,7 @@ const LANGS={
   en:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
+    air_on:'ON AIR',air_warming:'WARMING UP',air_off:'OFF',air_hint:'Carrier on demand: on the air only while needed. The PAPR and RMS of the TX monitor change when it switches.',
     stations:'Radios',calls:'Calls',lastheard:'Last Heard',log:'Log',rf:'RF',health:'Health',asterisk:'Asterisk SIP',dapnet:'DAPNET',echolink:'EchoLink',echolink_title:'EchoLink',meshcom:'MeshCom',meshcom_title:'MeshCom',geoalarm:'GeoAlarm',geoalarm_title:'GeoAlarm',config:'Config',
     sdslog:'SDS Log',th_dir:'Dir',th_from:'From',th_to:'To',th_message:'Message',no_sds:'No SDS messages yet',sds_refresh:'Refresh',
     rf_freq:'Center freq',rf_rate:'Sample rate',rf_rms:'RMS',rf_peak:'Peak',rf_age:'Snapshot',
@@ -4355,6 +4364,7 @@ const LANGS={
   ro:{
     bts_ip:'IP BTS',offline:'DECONECTAT',online:'CONECTAT',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
+    air_on:'ÎN EMISIE',air_warming:'ÎNCĂLZIRE',air_off:'OPRITĂ',air_hint:'Purtătoare la cerere: emite doar când e nevoie. PAPR și RMS din monitorul TX se schimbă la comutare.',
     stations:'Radiouri',calls:'Apeluri',lastheard:'Ultima Activitate',log:'Log',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Config',
     sdslog:'Jurnal SDS',th_dir:'Dir',th_from:'De la',th_to:'Către',th_message:'Mesaj',no_sds:'Niciun mesaj SDS încă',sds_refresh:'Reîmprospătează',
     rf_freq:'Frecvență centru',rf_rate:'Rată eșantion',rf_rms:'RMS',rf_peak:'Vârf',rf_age:'Captură',
@@ -4460,6 +4470,7 @@ const LANGS={
   de:{
     bts_ip:'BTS-IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
+    air_on:'AUF SENDUNG',air_warming:'AUFWÄRMEN',air_off:'AUS',air_hint:'Träger bei Bedarf: sendet nur, wenn er gebraucht wird. PAPR und RMS des TX-Monitors ändern sich beim Umschalten.',
     stations:'Radios',calls:'Anrufe',lastheard:'Zuletzt Gehört',log:'Log',rf:'RF',health:'Health',asterisk:'Asterisk SIP',dapnet:'DAPNET',echolink:'EchoLink',echolink_title:'EchoLink',meshcom:'MeshCom',meshcom_title:'MeshCom',geoalarm:'GeoAlarm',geoalarm_title:'GeoAlarm',config:'Config',
     sdslog:'SDS-Log',th_dir:'Ri.',th_from:'Von',th_to:'An',th_message:'Nachricht',no_sds:'Noch keine SDS-Nachrichten',sds_refresh:'Aktualisieren',
     rf_freq:'Mittenfrequenz',rf_rate:'Abtastrate',rf_rms:'RMS',rf_peak:'Spitze',rf_age:'Aufnahme',
@@ -4542,6 +4553,7 @@ const LANGS={
   es:{
     bts_ip:'IP BTS',offline:'SIN CONEXIÓN',online:'EN LÍNEA',
     brew_online:'EN LÍNEA',brew_offline:'SIN CONEXIÓN',
+    air_on:'EN EL AIRE',air_warming:'CALENTANDO',air_off:'APAGADA',air_hint:'Portadora bajo demanda: solo emite cuando hace falta. El PAPR y el RMS del monitor TX cambian al conmutar.',
     stations:'Radios',calls:'Llamadas',lastheard:'Última Actividad',log:'Log',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Config',
     sdslog:'Registro SDS',th_dir:'Dir',th_from:'De',th_to:'Para',th_message:'Mensaje',no_sds:'Aún no hay mensajes SDS',sds_refresh:'Actualizar',
     rf_freq:'Frecuencia central',rf_rate:'Tasa de muestreo',rf_rms:'RMS',rf_peak:'Pico',rf_age:'Captura',
@@ -4614,6 +4626,7 @@ const LANGS={
   hu:{
     bts_ip:'BTS IP',offline:'OFFLINE',online:'ONLINE',
     brew_online:'ONLINE',brew_offline:'OFFLINE',
+    air_on:'ADÁSBAN',air_warming:'BEMELEGÍTÉS',air_off:'KI',air_hint:'Igény szerinti vivő: csak akkor sugároz, ha szükséges. A TX monitor PAPR és RMS értéke kapcsoláskor változik.',
     stations:'Rádiók',calls:'Hívások',lastheard:'Utoljára Hallott',log:'Napló',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'Konfig',
     sdslog:'SDS Napló',th_dir:'Irány',th_from:'Feladó',th_to:'Címzett',th_message:'Üzenet',no_sds:'Még nincs SDS üzenet',sds_refresh:'Frissítés',
     rf_freq:'Központi frekvencia',rf_rate:'Mintavételezési ráta',rf_rms:'RMS',rf_peak:'Csúcs',rf_age:'Pillanatkép',
@@ -4678,6 +4691,7 @@ const LANGS={
   zh:{
     bts_ip:'BTS IP',offline:'离线',online:'在线',
     brew_online:'在线',brew_offline:'离线',
+    air_on:'发射中',air_warming:'预热中',air_off:'关闭',air_hint:'按需载波：仅在需要时发射。切换时 TX 监视器的 PAPR 和 RMS 会变化。',
     stations:'终端',calls:'通话',lastheard:'最近通话',log:'日志',rf:'RF',health:'Health',echolink:'EchoLink',echolink_title:'EchoLink',config:'配置',
     sdslog:'SDS日志',th_dir:'方向',th_from:'发件',th_to:'收件',th_message:'消息',no_sds:'暂无SDS消息',sds_refresh:'刷新',
     rf_freq:'中心频率',rf_rate:'采样率',rf_rms:'RMS',rf_peak:'峰值',rf_age:'快照',
@@ -5191,7 +5205,7 @@ async function wifiCall(url, body){
 function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
 
 // ── State + WS ────────────────────────────────────────────────────────────
-let ws=null,state={ms:{},calls:{},emergencies:{},lastHeard:[],sdsLog:[],dapnetLog:[],geoalarmEvents:[],brewOnline:false,brewVer:0,dgnaDefaultAttachmentMode:0,dgnaAttachmentModePickerEnabled:false},sdsDest=0;
+let ws=null,state={ms:{},calls:{},emergencies:{},carrierAir:{},lastHeard:[],sdsLog:[],dapnetLog:[],geoalarmEvents:[],brewOnline:false,brewVer:0,dgnaDefaultAttachmentMode:0,dgnaAttachmentModePickerEnabled:false},sdsDest=0;
 let dgnaUi={selectedGssi:0,targetChecks:{},statusLog:[],lastByIssi:{}};
 
 // ── RadioID callsigns (indicativ) ──────────────────────────────────────────────
@@ -5340,6 +5354,9 @@ function handleMsg(msg){
       dgnaUi.statusLog=Array.isArray(msg.dgna_log)?msg.dgna_log:[];
       rebuildDgnaLastByIssi();
       (msg.emergencies||[]).forEach(e=>{state.emergencies[e.issi]={...e};});
+      state.carrierAir={};
+      (msg.carrier_air||[]).forEach(a=>{state.carrierAir[a.carrier_num]=a.state;});
+      tsCarrierNumbers().forEach(tsApplyCarrierAir);
       (msg.ms||[]).forEach(m=>{state.ms[m.issi]={...m,group_catalog:m.group_catalog||[],_last_seen_ts:Date.now()-(m.last_seen_secs_ago||0)*1000,energy_saving_mode:m.energy_saving_mode||0};});
       (msg.calls||[]).forEach(c=>{
         state.calls[c.call_id]={...c,started_at:Date.now()-(c.started_secs_ago||0)*1000};
@@ -5444,6 +5461,8 @@ function handleMsg(msg){
       delete state.calls[msg.call_id];renderCalls();break;
     case 'ts_voice':
       if(msg.carrier_num!=null)tsVoiceCarrier(msg.carrier_num,msg.ts,msg.speaker_issi);break;
+    case 'carrier_air':
+      state.carrierAir[msg.carrier_num]=msg.state;tsApplyCarrierAir(msg.carrier_num);break;
     case 'speaker_changed':
       if(state.calls[msg.call_id])state.calls[msg.call_id].active_speaker=msg.speaker_issi;
       if(msg.carrier_num!=null)tsEnsureCarrierInfo(msg.carrier_num);
@@ -5725,13 +5744,30 @@ function renderTsGridCarrier(){
     const info=tsCarrierInfo[String(carrierNum)]||{carrier_num:carrierNum};
     return `<div class="ts-carrier-group" data-carrier="${carrierNum}">
       <div class="ts-carrier-head">
-        <div class="ts-carrier-title">Carrier #${carrierNum}${carrierNum===state.mainCarrierNum?' | Main':''}</div>
+        <div class="ts-carrier-title">Carrier #${carrierNum}${carrierNum===state.mainCarrierNum?' | Main':''}<span class="ts-air" hidden></span></div>
         <div class="ts-carrier-meta">${tsCarrierMeta(info)}</div>
       </div>
       <div class="ts-row">${[1,2,3,4].map(ts=>tsCarrierBlockHtml(carrierNum,ts)).join('')}</div>
     </div>`;
   }).join('');
+  carriers.forEach(tsApplyCarrierAir);
   updateTsBlocksCarrier();
+}
+// Carriers on demand (`secondary_carrier_on_demand`): the state of a carrier other than the main
+// one from the snapshot's `carrier_air` and the `carrier_air` messages. Without the feature none
+// comes and nothing is marked.
+function tsApplyCarrierAir(carrierNum){
+  const group=document.querySelector(`.ts-carrier-group[data-carrier="${carrierNum}"]`);
+  if(!group)return;
+  const air=state.carrierAir[carrierNum];
+  group.classList.toggle('air-off',air==='off');
+  const badge=group.querySelector('.ts-air');
+  if(!badge)return;
+  badge.hidden=!air;
+  if(!air)return;
+  badge.className='ts-air '+air;
+  badge.textContent=t(air==='on'?'air_on':(air==='warming'?'air_warming':'air_off'));
+  badge.title=t('air_hint');
 }
 function tsRandWaveCarrier(carrierNum,ts){
   tsWaveHeightsCarrier[tsCarrierKey(carrierNum,ts)]=Array.from({length:7},()=>Math.floor(Math.random()*14)+4);

@@ -1460,6 +1460,9 @@ impl DashboardServer {
                     // Broadcast below, rate-limited.
                     msg = None;
                 }
+                TelemetryEvent::CarrierAirChanged { carrier_num, state } => {
+                    s.carrier_air.insert(*carrier_num, *state);
+                }
             }
         }
         if let Some(json) = msg {
@@ -1699,6 +1702,9 @@ fn event_to_ws_msg(event: &TelemetryEvent) -> Option<String> {
             uplink,
         } => {
             serde_json::json!({"type":"ts_data","carrier_num":carrier_num,"ts":ts,"issi":issi,"dir":if *uplink { "ul" } else { "dl" }})
+        }
+        TelemetryEvent::CarrierAirChanged { carrier_num, state } => {
+            serde_json::json!({"type":"carrier_air","carrier_num":carrier_num,"state":crate::net_dashboard::state::carrier_air_name(*state)})
         }
     };
     serde_json::to_string(&v).ok()
@@ -2729,6 +2735,7 @@ fn ws_snapshot_json(state: &DashboardState, shared_config: &Option<tetra_config:
     let last_sys_health = s.last_sys_health.clone();
     let last_health = s.last_health.clone();
     let dgna_log: Vec<_> = s.dgna_log.iter().rev().cloned().collect();
+    let carrier_air_states = s.carrier_air.clone();
     drop(s);
     let (dgna_default_attachment_mode, dgna_attachment_mode_picker_enabled) = shared_config
         .as_ref()
@@ -2743,7 +2750,7 @@ fn ws_snapshot_json(state: &DashboardState, shared_config: &Option<tetra_config:
             )
         })
         .unwrap_or((0, false));
-    serde_json::to_string(&serde_json::json!({
+    let mut snapshot = serde_json::json!({
         "type": "snapshot", "ms": ms, "calls": calls, "emergencies": emergencies, "log": logs,
         "brew_online": brew_online, "brew_version": brew_version, "last_heard": last_heard,
         "fallback_config_active": fallback_active, "fallback_config_reason": fallback_reason,
@@ -2756,8 +2763,34 @@ fn ws_snapshot_json(state: &DashboardState, shared_config: &Option<tetra_config:
         "dgna_default_attachment_mode": dgna_default_attachment_mode,
         "dgna_attachment_mode_picker_enabled": dgna_attachment_mode_picker_enabled,
         "pdch": pdch,
-    }))
-    .ok()
+    });
+    // Carriers on demand: each carrier other than the main one, in config order, with its state
+    // (off until the UMAC says otherwise). Only with the feature, so the snapshot is unchanged
+    // without it.
+    if let Some(carrier_air) = shared_config.as_ref().and_then(|cfg| carrier_air_json(cfg, &carrier_air_states)) {
+        snapshot["carrier_air"] = carrier_air;
+    }
+    serde_json::to_string(&snapshot).ok()
+}
+
+/// The snapshot's `carrier_air` list, `[{"carrier_num":1530,"state":"off"|"warming"|"on"}, ...]`,
+/// or None without `[cell_info] secondary_carrier_on_demand`.
+fn carrier_air_json(cfg: &tetra_config::bluestation::SharedConfig, states: &HashMap<u16, u8>) -> Option<serde_json::Value> {
+    let c = cfg.config();
+    if !(c.cell.secondary_carrier_on_demand && c.cell.secondary_carrier.is_some()) {
+        return None;
+    }
+    let list: Vec<serde_json::Value> = c
+        .cell
+        .other_carriers()
+        .map(|carrier_num| {
+            serde_json::json!({
+                "carrier_num": carrier_num,
+                "state": crate::net_dashboard::state::carrier_air_name(states.get(&carrier_num).copied().unwrap_or(0)),
+            })
+        })
+        .collect();
+    Some(serde_json::json!(list))
 }
 
 fn handle_ws(
@@ -3269,7 +3302,7 @@ fn serve_bts_info(mut stream: TcpStream, shared_config: &Option<tetra_config::bl
                 _ => None,
             };
 
-            serde_json::json!({
+            let mut info = serde_json::json!({
                 "tx_freq_hz": tx,
                 "rx_freq_hz": rx,
                 "shift_hz": shift,
@@ -3281,8 +3314,16 @@ fn serve_bts_info(mut stream: TcpStream, shared_config: &Option<tetra_config::bl
                 "hangtime_secs": c.cell.hangtime_secs,
                 "whitelist_restricted": restricted,
                 "whitelist_count": wl_count,
-            })
-            .to_string()
+            });
+            // Carriers on demand, only with the feature: without it the body is unchanged.
+            if c.cell.secondary_carrier_on_demand && c.cell.secondary_carrier.is_some() {
+                info["on_demand"] = serde_json::json!({
+                    "carriers": c.cell.other_carriers().collect::<Vec<u16>>(),
+                    "warmup_frames": c.cell.secondary_carrier_warmup_frames,
+                    "inactivity_secs": c.cell.secondary_carrier_inactivity_secs,
+                });
+            }
+            info.to_string()
         }
         None => "{}".to_string(),
     };
@@ -6363,6 +6404,97 @@ dest_issi = 2632585
             snapshot(),
             serde_json::json!([{"carrier_num":1521,"ts":3,"issi":2260619,"since_secs":0}])
         );
+    }
+
+    /// Carriers on demand: `carrier_air` on the WebSocket as the UMAC reports it, the snapshot's
+    /// `carrier_air` list (every carrier but the main one, off until reported) and `/api/btsinfo`'s
+    /// `on_demand`, the last two only with the feature: without it both are byte for byte what they
+    /// were.
+    #[test]
+    fn carrier_air_messages_snapshot_and_btsinfo() {
+        use std::io::Read;
+        let cells = "secondary_carrier = 1586\nextra_carriers = [1588]\n";
+        let on = format!(
+            "{cells}secondary_carrier_on_demand = true\nsecondary_carrier_warmup_frames = 6\nsecondary_carrier_inactivity_secs = 30\n"
+        );
+        let off = format!("{cells}secondary_carrier_on_demand = false\nsecondary_carrier_warmup_frames = 6\n");
+        let shared = |extra: &str| {
+            tetra_config::bluestation::SharedConfig::from_parts(
+                tetra_config::bluestation::parsing::from_toml_str(&format!("{MINIMAL_CONFIG}{extra}")).unwrap(),
+                None,
+            )
+        };
+        let server = |extra: &str| {
+            let mut server = DashboardServer::new("/tmp/fs_carrier_air_test_config.toml".to_string());
+            server.set_shared_config(shared(extra));
+            server
+        };
+        let bts_info = |extra: &str| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            super::serve_bts_info(stream, &Some(shared(extra)));
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            response.split("\r\n\r\n").nth(1).expect("HTTP body").to_string()
+        };
+        let json = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+
+        // Off (absent or false): no `carrier_air`, no `on_demand`, the same bytes.
+        let (plain, without) = (server(cells), server(&off));
+        let snapshot_off = without.snapshot_json().unwrap();
+        assert_eq!(snapshot_off, plain.snapshot_json().unwrap());
+        assert!(!snapshot_off.contains("carrier_air"));
+        let bts_off = bts_info(&off);
+        assert_eq!(bts_off, bts_info(cells));
+        assert!(!bts_off.contains("on_demand"));
+
+        // On: every carrier but the main one, in config order, off until the UMAC says otherwise.
+        let with = server(&on);
+        let ws = with.subscribe();
+        let sent = || std::iter::from_fn(|| ws.try_recv().ok()).collect::<Vec<String>>();
+        let carrier_air = || json(&with.snapshot_json().unwrap())["carrier_air"].clone();
+        assert_eq!(
+            carrier_air(),
+            serde_json::json!([{"carrier_num":1586,"state":"off"},{"carrier_num":1588,"state":"off"}])
+        );
+        let mut snapshot_on = json(&with.snapshot_json().unwrap());
+        snapshot_on.as_object_mut().unwrap().remove("carrier_air");
+        assert_eq!(snapshot_on, json(&snapshot_off), "nothing else changes");
+
+        for state in [1, 2] {
+            with.handle_telemetry(TelemetryEvent::CarrierAirChanged { carrier_num: 1588, state });
+        }
+        with.handle_telemetry(TelemetryEvent::CarrierAirChanged {
+            carrier_num: 1586,
+            state: 1,
+        });
+        assert_eq!(
+            sent(),
+            [
+                r#"{"carrier_num":1588,"state":"warming","type":"carrier_air"}"#,
+                r#"{"carrier_num":1588,"state":"on","type":"carrier_air"}"#,
+                r#"{"carrier_num":1586,"state":"warming","type":"carrier_air"}"#,
+            ]
+        );
+        assert_eq!(
+            carrier_air(),
+            serde_json::json!([{"carrier_num":1586,"state":"warming"},{"carrier_num":1588,"state":"on"}])
+        );
+        with.handle_telemetry(TelemetryEvent::CarrierAirChanged {
+            carrier_num: 1588,
+            state: 0,
+        });
+        assert_eq!(sent(), [r#"{"carrier_num":1588,"state":"off","type":"carrier_air"}"#]);
+        assert_eq!(carrier_air()[1], serde_json::json!({"carrier_num":1588,"state":"off"}));
+
+        let mut bts_on = json(&bts_info(&on));
+        assert_eq!(
+            bts_on["on_demand"],
+            serde_json::json!({"carriers":[1586,1588],"warmup_frames":6,"inactivity_secs":30})
+        );
+        bts_on.as_object_mut().unwrap().remove("on_demand");
+        assert_eq!(bts_on, json(&bts_off), "nothing else changes");
     }
 
     #[test]

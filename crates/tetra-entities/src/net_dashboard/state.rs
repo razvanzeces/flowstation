@@ -64,6 +64,15 @@ pub struct PdchState {
     pub since_secs: u64,
 }
 
+/// The wire name of a CarrierAirChanged state: "off", "warming" or "on".
+pub fn carrier_air_name(state: u8) -> &'static str {
+    match state {
+        1 => "warming",
+        2 => "on",
+        _ => "off",
+    }
+}
+
 /// Log entry
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LogEntry {
@@ -132,6 +141,9 @@ pub struct DashboardStateInner {
     /// Packet-data channels right now: (carrier, timeslot) -> (ISSI, since). From the UMAC's
     /// PdchChanged telemetry; empty unless `[packet_data] bearer = "pdch"`.
     pub pdch: HashMap<(u16, u8), (u32, Instant)>,
+    /// `[cell_info] secondary_carrier_on_demand`: the last CarrierAirChanged state of each carrier
+    /// other than the main one (absent: off, as at start). Empty without the feature.
+    pub carrier_air: HashMap<u16, u8>,
     pub log_ring: std::collections::VecDeque<LogEntry>,
     pub last_heard: std::collections::VecDeque<LastHeardEntry>,
     /// SDS Log ring (chronological, oldest at the front). Backed by an on-disk JSON file.
@@ -296,6 +308,7 @@ impl DashboardStateInner {
             calls: HashMap::new(),
             emergencies: HashMap::new(),
             pdch: HashMap::new(),
+            carrier_air: HashMap::new(),
             log_ring: std::collections::VecDeque::with_capacity(500),
             last_heard: std::collections::VecDeque::with_capacity(LAST_HEARD_MAX + 1),
             sds_log,
