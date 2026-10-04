@@ -133,6 +133,10 @@ main_carrier = 1521                 # + 1521 * 25kHz = 38250kHz
 # extra_carriers = [1525]           # Optional 3rd/4th carrier: voice + BCCH like the secondary (needs secondary_carrier; off with dual_carrier_enabled = false)
 #                                   # Omit it, never write it empty: an older binary refuses to start with it. No 25 kHz neighbours, no equal spacing (IM3).
 #                                   # From 3 carriers on each one is sent 20*log10(2/N) dB lower (-3.5 dB with 3) so the sum cannot clip.
+# secondary_carrier_on_demand = true # Every carrier but the main one on the air only while needed: a call or PDCH on it, or the next call goes there
+# secondary_carrier_warmup_frames = 4  # Frames it transmits before a radio is sent there (0-18, ~57 ms each)
+# secondary_carrier_inactivity_secs = 180 # On the air this long after it was last needed (1-3600)
+#                                   # Omit them, never write them false: an older binary or razvan refuses to start. The TX back-off counts every configured carrier.
 duplex_spacing = 4                  # Use 5MHz spacing between ul and dl (for 400 MHz band)
 # custom_duplex_spacing = 7600000   # Do not uncomment unless you have programmed a custom duplex spacing entry in your radios
 freq_offset = 0                     # Carrier offset. Usually 0. Options: 0, 6250, -6250, 12500 Hz.

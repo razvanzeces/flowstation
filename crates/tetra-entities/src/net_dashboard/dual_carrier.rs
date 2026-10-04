@@ -312,6 +312,42 @@ issi_whitelist = []
         assert!(!compute_toml(SAMPLE, true, Some(1522)).contains("extra_carriers"), "never added");
     }
 
+    /// The on-demand keys start with `secondary_carrier` but are other keys: the number is read from
+    /// `secondary_carrier` alone, and the toggle leaves them as they are, ON and OFF.
+    #[test]
+    fn on_demand_keys_are_not_secondary_carrier() {
+        let with_on_demand = SAMPLE.replace(
+            "duplex_spacing = 4",
+            "secondary_carrier_on_demand = true\nsecondary_carrier_warmup_frames = 4\nsecondary_carrier_inactivity_secs = 180\nsecondary_carrier = 1530\nduplex_spacing = 4",
+        );
+        let path = std::env::temp_dir().join("dc_test_on_demand.toml");
+        std::fs::write(&path, &with_on_demand).unwrap();
+        assert_eq!(
+            read_dual_carrier(path.to_str().unwrap()),
+            DualCarrierState {
+                enabled: true,
+                secondary_carrier: Some(1530)
+            }
+        );
+        let _ = std::fs::remove_file(&path);
+        let keys = [
+            "secondary_carrier_on_demand = true",
+            "secondary_carrier_warmup_frames = 4",
+            "secondary_carrier_inactivity_secs = 180",
+        ];
+        for (enabled, secondary) in [(false, None), (true, Some(1531))] {
+            let out = compute_toml(&with_on_demand, enabled, secondary);
+            for key in keys {
+                assert_eq!(out.matches(key).count(), 1, "{key}: {out}");
+            }
+            let expected = with_on_demand.replace(
+                "secondary_carrier = 1530",
+                &format!("secondary_carrier = {}", secondary.unwrap_or(1530)),
+            );
+            assert_eq!(out.replace(&format!("dual_carrier_enabled = {enabled}\n"), ""), expected);
+        }
+    }
+
     #[test]
     fn missing_cell_section_is_appended() {
         let out = compute_toml("[net]\nmcc = 1\n", true, Some(1522));

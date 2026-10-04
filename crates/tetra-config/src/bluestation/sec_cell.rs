@@ -117,6 +117,15 @@ pub struct CfgCellInfo {
     /// Carriers after the secondary (`extra_carriers`), voice + BCCH without MCCH like the
     /// secondary; empty while `dual_carrier_enabled = false`.
     pub extra_carriers: Vec<u16>,
+    /// `secondary_carrier_on_demand`: every carrier but the main one (the secondary and the extra
+    /// ones) is on the air only while it is needed — a call or packet-data channel on it, a channel
+    /// allocation to it, or the next call would go there — and goes quiet
+    /// `secondary_carrier_inactivity_secs` after. Off: they always transmit, as today.
+    pub secondary_carrier_on_demand: bool,
+    /// Frames a carrier just switched on transmits before a channel allocation sends a radio to it (0..=18).
+    pub secondary_carrier_warmup_frames: u8,
+    /// Seconds a carrier stays on the air after it was last needed (1..=3600).
+    pub secondary_carrier_inactivity_secs: u16,
     /// 4 bits, from MAC SYSINFO
     pub freq_band: u8,
     /// Offset in Hz from 25kHz aligned carrier. Options: 0, 6250, -6250, 12500 Hz
@@ -260,6 +269,12 @@ pub struct CellInfoDto {
     /// A third and further carriers of the cell, after `secondary_carrier` (needs it). Switched
     /// off with it by `dual_carrier_enabled = false`.
     pub extra_carriers: Option<Vec<u16>>,
+    /// Carriers other than the main one on the air only while needed. Default: false.
+    pub secondary_carrier_on_demand: Option<bool>,
+    /// Warm-up frames before a radio is sent to a carrier just switched on. Default: 4, clamped to 18.
+    pub secondary_carrier_warmup_frames: Option<u32>,
+    /// Seconds on the air after a carrier was last needed. Default: 180, clamped to 1..=3600.
+    pub secondary_carrier_inactivity_secs: Option<u32>,
     pub freq_band: u8,
     pub freq_offset: i16,
     pub duplex_spacing: u8,
@@ -355,6 +370,9 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         secondary_carrier: if on { ci.secondary_carrier } else { None },
         // The extra carriers go with it: OFF is a single-carrier cell.
         extra_carriers: if on { ci.extra_carriers.unwrap_or_default() } else { Vec::new() },
+        secondary_carrier_on_demand: ci.secondary_carrier_on_demand.unwrap_or(false),
+        secondary_carrier_warmup_frames: ci.secondary_carrier_warmup_frames.unwrap_or(4).min(18) as u8,
+        secondary_carrier_inactivity_secs: ci.secondary_carrier_inactivity_secs.unwrap_or(180).clamp(1, 3600) as u16,
         freq_band: ci.freq_band,
         freq_offset_hz: ci.freq_offset,
         duplex_spacing_id: ci.duplex_spacing,

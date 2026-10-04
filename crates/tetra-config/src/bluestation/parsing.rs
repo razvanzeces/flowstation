@@ -1014,6 +1014,50 @@ ready_timer_code = 9
         assert_eq!(cfg.cell.carriers(), vec![1584, 1586, 1589, 1581], "config order");
     }
 
+    /// Without the on-demand keys every carrier is always on the air, as today.
+    #[test]
+    fn on_demand_keys_absent_are_today_s() {
+        let cfg = from_toml_str(&minimal_toml("secondary_carrier = 1586\nextra_carriers = [1589]")).expect("parse");
+        assert!(cfg.validate().is_ok());
+        assert!(!cfg.cell.secondary_carrier_on_demand);
+        assert_eq!(cfg.cell.secondary_carrier_warmup_frames, 4);
+        assert_eq!(cfg.cell.secondary_carrier_inactivity_secs, 180);
+    }
+
+    /// The `[cell_info]` lines of Rafa EA7KEN's notes (his build of 30-09) are read as written.
+    #[test]
+    fn on_demand_keys_as_rafa_wrote_them() {
+        let cell = "\
+secondary_carrier               = 1586
+dual_carrier_enabled            = true
+secondary_carrier_on_demand     = true   # por defecto false
+secondary_carrier_warmup_frames = 4      # ~220 ms antes de mandar al terminal
+secondary_carrier_inactivity_secs = 180  # gracia tras la ultima llamada";
+        let cfg = from_toml_str(&minimal_toml(cell)).expect("parse");
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.cell.carriers(), vec![1584, 1586]);
+        assert!(cfg.cell.secondary_carrier_on_demand);
+        assert_eq!(cfg.cell.secondary_carrier_warmup_frames, 4);
+        assert_eq!(cfg.cell.secondary_carrier_inactivity_secs, 180);
+    }
+
+    /// Out-of-range values are brought into range, never an error: the station starts.
+    #[test]
+    fn on_demand_values_are_clamped() {
+        let cell = |warmup: u32, secs: u32| {
+            let cell = format!(
+                "secondary_carrier = 1586\nsecondary_carrier_on_demand = true\nsecondary_carrier_warmup_frames = {warmup}\nsecondary_carrier_inactivity_secs = {secs}"
+            );
+            let cfg = from_toml_str(&minimal_toml(&cell)).expect("parse");
+            assert!(cfg.validate().is_ok());
+            (cfg.cell.secondary_carrier_warmup_frames, cfg.cell.secondary_carrier_inactivity_secs)
+        };
+        assert_eq!(cell(0, 0), (0, 1));
+        assert_eq!(cell(200, 99_999), (18, 3600));
+        assert_eq!(cell(18, 3600), (18, 3600));
+        assert_eq!(cell(2, 10), (2, 10));
+    }
+
     #[test]
     fn dual_carrier_off_hides_the_extra_carriers() {
         let cell = "secondary_carrier = 1586\nextra_carriers = [1589]\ndual_carrier_enabled = false";
