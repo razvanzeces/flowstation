@@ -6241,3 +6241,301 @@ fn dual_identity_duplex_calls_with_a_packet_data_carrier() {
     });
     assert_eq!(hash, 0xdb61_bf54_cae9_5f0b);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Carriers on demand (`secondary_carrier_on_demand`) with packet data and through the whole stack
+// ---------------------------------------------------------------------------------------------
+
+/// The same with `secondary_carrier_on_demand = false`, whatever the warm-up and grace say.
+#[test]
+fn dual_identity_with_carriers_on_demand_off() {
+    fn on_demand_off(cfg: &mut StackConfig) {
+        cfg.packet_data.pdch_carrier = cfg.cell.secondary_carrier;
+        cfg.cell.secondary_carrier_on_demand = false;
+        cfg.cell.secondary_carrier_warmup_frames = 9;
+        cfg.cell.secondary_carrier_inactivity_secs = 1;
+    }
+    let hash = common::component_test::with_config_tweak(on_demand_off, || {
+        fingerprint(duplex_calls_on_two_carriers_are_the_same_with_packet_data_on)
+    });
+    assert_eq!(hash, 0xdb61_bf54_cae9_5f0b);
+}
+
+/// Every carrier but the main one on demand.
+fn on_demand(cfg: &mut StackConfig, warmup_frames: u8, inactivity_secs: u16) {
+    cfg.cell.secondary_carrier_on_demand = true;
+    cfg.cell.secondary_carrier_warmup_frames = warmup_frames;
+    cfg.cell.secondary_carrier_inactivity_secs = inactivity_secs;
+}
+
+/// The packet-data carrier on demand: the radio's channel there puts it on the air, its
+/// assignment goes on the MCCH once the carrier has been on the air for the warm-up, and what was
+/// queued for the radio behind it does not overtake it and follows it to its channel.
+#[test]
+fn the_mcch_items_follow_the_radio_to_a_carrier_on_demand() {
+    debug::setup_logging_verbose();
+    let mut cfg = carrier_config(false, 4, false);
+    on_demand(&mut cfg, 4, 180);
+    let mut air = UmacAir::new(cfg);
+    grant_carrier_slots(&air.test.config, ISSI, &[4, 3, 2, 1], false);
+    air.tick();
+    let req = |category: Option<i32>, chan_alloc: Option<CmceChanAllocReq>, bits: &str| SapMsg {
+        sap: Sap::TmaSap,
+        src: TetraEntity::Llc,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
+            req_handle: 0,
+            pdu: BitBuffer::from_bitstr(bits),
+            main_address: TetraAddress::issi(ISSI),
+            link_id: 0,
+            endpoint_id: 0,
+            stealing_permission: false,
+            subscriber_class: 0,
+            air_interface_encryption: None,
+            stealing_repeats_flag: None,
+            data_category: category,
+            carrier_num: Some(SECONDARY_CARRIER),
+            chan_alloc,
+            tx_reporter: None,
+        }),
+    };
+    air.test.submit_message(req(
+        Some(DATA_CATEGORY_PDCH_ASSIGNMENT),
+        Some(CmceChanAllocReq {
+            usage: None,
+            carrier: Some(SECONDARY_CARRIER),
+            timeslots: [true; 4],
+            alloc_type: ChanAllocType::Replace,
+            ul_dl_assigned: UlDlAssignment::Both,
+        }),
+        &"0000100110011000".repeat(12),
+    ));
+    air.test.submit_message(req(None, None, &"0010".repeat(12)));
+    for _ in 0..48 {
+        air.tick();
+    }
+    let t_on = air
+        .slots
+        .iter()
+        .find(|s| s.carrier_num == SECONDARY_CARRIER)
+        .map(|s| s.ts)
+        .expect("the carrier went on the air");
+    assert_eq!(t_on, air.slots[0].ts, "on the air with the channel");
+    let mine: Vec<(u16, u8, bool, TdmaTime)> = air
+        .slots
+        .iter()
+        .flat_map(|s| mac_resources(s).into_iter().map(move |r| (s.carrier_num, s.ts.t, r, s.ts)))
+        .filter(|(_, _, r, _)| r.addr.is_some_and(|a| a.ssi == ISSI))
+        .map(|(c, t, r, at)| (c, t, r.chan_alloc_element.is_some(), at))
+        .collect();
+    let first = mine.first().expect("the assignment");
+    assert_eq!(
+        (first.0, first.1, first.2),
+        (MAIN_CARRIER, 1, true),
+        "the assignment on the MCCH: {mine:?}"
+    );
+    assert!(first.3.diff(t_on) >= 16, "after the warm-up: on {t_on}, assignment {}", first.3);
+    assert!(
+        mine.len() >= 2 && mine[1..].iter().all(|m| m.0 == SECONDARY_CARRIER),
+        "the rest on its channel: {mine:?}"
+    );
+}
+
+/// When the channel goes, the carrier stays on the air for the multiframe its slots show
+/// unallocated, then for the grace, and goes off.
+#[test]
+fn a_carrier_on_demand_stays_on_for_the_released_pdch_and_the_grace() {
+    debug::setup_logging_verbose();
+    let mut cfg = carrier_config(false, 4, false);
+    on_demand(&mut cfg, 4, 1);
+    let mut air = UmacAir::new(cfg);
+    for _ in 0..8 {
+        air.tick();
+    }
+    assert!(air.slots.iter().all(|s| s.carrier_num == MAIN_CARRIER), "off without a channel");
+    let slots = grant_carrier_slots(&air.test.config, ISSI, &[4, 3, 2, 1], true);
+    for _ in 0..40 {
+        air.tick();
+    }
+    assert_eq!(air.slots.last().map(|s| s.carrier_num), Some(SECONDARY_CARRIER));
+    {
+        let mut state = air.test.config.state_write();
+        state.pdch_by_issi.remove(&ISSI);
+        state.pdch_timeslots_by_issi.remove(&ISSI);
+        for s in slots {
+            state.timeslot_alloc.release_slot(TimeslotOwner::PacketData, s).unwrap();
+        }
+    }
+    let from = air.slots.len();
+    for _ in 0..300 {
+        air.tick();
+    }
+    let on: Vec<TdmaTime> = air.slots[from..]
+        .iter()
+        .filter(|s| s.carrier_num == SECONDARY_CARRIER)
+        .map(|s| s.ts)
+        .collect();
+    // 73 slots with the released channel (both ends of its multiframe), then 72 of grace.
+    assert_eq!(on.len(), 73 + 72, "{:?}..{:?}", on.first(), on.last());
+    assert_eq!(on.last().unwrap().diff(on[0]), 73 + 72 - 1, "without a gap");
+}
+
+/// A data-only carrier on demand: a full main carrier does not put it on the air (no call goes
+/// there), a packet-data channel does.
+#[test]
+fn a_data_only_carrier_on_demand_goes_on_for_packet_data_only() {
+    debug::setup_logging_verbose();
+    let mut cfg = carrier_config(false, 4, true);
+    on_demand(&mut cfg, 4, 180);
+    let mut air = UmacAir::new(cfg);
+    {
+        let mut state = air.test.config.state_write();
+        for ts in 2..=4 {
+            state.timeslot_alloc.reserve(TimeslotOwner::Cmce, ts).unwrap();
+        }
+    }
+    for _ in 0..40 {
+        air.tick();
+    }
+    assert!(air.slots.iter().all(|s| s.carrier_num == MAIN_CARRIER), "a full main carrier");
+    grant_carrier_slots(&air.test.config, ISSI, &[4, 3, 2, 1], true);
+    let from = air.slots.len();
+    air.tick();
+    assert!(
+        air.slots[from..].iter().any(|s| s.carrier_num == SECONDARY_CARRIER),
+        "a channel there"
+    );
+}
+
+/// A group call that overflows the main carrier through the whole stack, the secondary carrier
+/// on demand (or always on): the main carrier filled up 20 slots before the U-SETUP (`warm`: the
+/// secondary already on the air for the call that would go there) or in the tick of the U-SETUP.
+/// What went down from the U-SETUP on.
+fn overflowing_group_call(carriers_on_demand: bool, warm: bool) -> Voice {
+    let mut cfg = voice_config(None, true);
+    if carriers_on_demand {
+        on_demand(&mut cfg, 4, 1);
+    }
+    let mut v = Voice::new(cfg, true);
+    v.register(ISSI, Some(GSSI));
+    v.register(ISSI2, Some(GSSI));
+    let fill_main = |v: &Voice| {
+        let mut state = v.test.config.state_write();
+        for ts in 2..=4 {
+            state.timeslot_alloc.reserve(TimeslotOwner::Brew, ts).unwrap();
+        }
+    };
+    if warm {
+        fill_main(&v);
+        v.run(20);
+    }
+    while v.ticks % 4 != 2 {
+        v.run(1);
+    }
+    if !warm {
+        fill_main(&v);
+    }
+    v.msgs.clear();
+    v.cmce(ISSI, u_setup(GSSI, true, false, 0));
+    v.run(60);
+    v
+}
+
+/// The slots the real MAC sent down.
+fn voice_slots(v: &Voice) -> Vec<tetra_saps::tmv::TmvUnitdataReqSlot> {
+    v.msgs
+        .iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::TmvUnitdataReqSlots(slots) => Some(slots.slots.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// The MAC-RESOURCEs on the MCCH, sorted: (slot time, SSI, channel allocation).
+fn mcch_resources(slots: &[tetra_saps::tmv::TmvUnitdataReqSlot]) -> Vec<(TdmaTime, u32, bool)> {
+    let mut out: Vec<(TdmaTime, u32, bool)> = slots
+        .iter()
+        .filter(|s| s.carrier_num == MAIN_CARRIER && s.ts.t == 1)
+        .flat_map(|s| {
+            mac_resources(s)
+                .into_iter()
+                .filter_map(move |r| Some((s.ts, r.addr?.ssi, r.chan_alloc_element.is_some())))
+        })
+        .collect();
+    out.sort_by_key(|r| (r.0.diff(TdmaTime::default()), r.1, r.2));
+    out
+}
+
+/// The call that fills the main carrier switches the secondary on: the next one finds it on the
+/// air, its D-CONNECT and D-SETUP go on the MCCH when they would with the secondary always on.
+#[test]
+fn a_call_overflowing_to_a_warm_carrier_on_demand_does_not_wait() {
+    debug::setup_logging_verbose();
+    let on_demand = overflowing_group_call(true, true);
+    let always = overflowing_group_call(false, true);
+    use tetra_saps::control::call_control::CallControl;
+    let on_secondary = on_demand
+        .msgs
+        .iter()
+        .any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::Open(c)) if c.carrier_num == SECONDARY_CARRIER));
+    assert!(on_secondary, "the call on the secondary carrier");
+    let (on_demand, always) = (mcch_resources(&voice_slots(&on_demand)), mcch_resources(&voice_slots(&always)));
+    assert!(on_demand.iter().any(|r| r.1 == GSSI && r.2), "the D-SETUP: {on_demand:?}");
+    assert_eq!(on_demand, always);
+}
+
+/// The call that fills the main carrier needs the secondary at once: the BS acknowledges the
+/// U-SETUP at once, but its D-CONNECT and the group's D-SETUP go only once the secondary has been
+/// on the air for the warm-up. The call ends as always, and the carrier goes off after it.
+#[test]
+fn a_call_overflowing_to_a_cold_carrier_on_demand_waits_for_the_warm_up() {
+    debug::setup_logging_verbose();
+    let mut v = overflowing_group_call(true, false);
+    let slots = voice_slots(&v);
+    let t_on = slots
+        .iter()
+        .find(|s| s.carrier_num == SECONDARY_CARRIER)
+        .map(|s| s.ts)
+        .expect("on the air");
+    let mcch = mcch_resources(&slots);
+    let first = |ssi: u32, chan_alloc: bool| mcch.iter().find(|r| r.1 == ssi && r.2 == chan_alloc).map(|r| r.0);
+    let ack = first(ISSI, false).expect("the U-SETUP acknowledged");
+    assert!(ack.diff(t_on) < 16, "at once: on {t_on}, {ack}: {mcch:?}");
+    let d_connect = first(ISSI, true).expect("the D-CONNECT");
+    let d_setup = first(GSSI, true).expect("the D-SETUP");
+    assert!(d_connect.diff(t_on) >= 16, "D-CONNECT after the warm-up: on {t_on}, {d_connect}");
+    assert!(d_setup.diff(t_on) >= 16, "D-SETUP after the warm-up: on {t_on}, {d_setup}");
+    let always = mcch_resources(&voice_slots(&overflowing_group_call(false, false)));
+    let d_connect_always = always.iter().find(|r| r.1 == ISSI && r.2).map(|r| r.0).expect("the D-CONNECT");
+    assert!(
+        d_connect_always.diff(t_on) < 16,
+        "with the secondary always on it goes at once: {d_connect_always}"
+    );
+    println!("on {t_on}, acknowledged {ack}, D-CONNECT {d_connect} (always on: {d_connect_always}), D-SETUP {d_setup}");
+
+    let call_id = v.d_setup_call_id(GSSI);
+    v.cmce(ISSI, u_tx_ceased(call_id));
+    // Hangtime (5 s) and the D-RELEASE.
+    v.run(500);
+    assert!(count(&v.log, "CallEnded") >= 1, "the call ended after the hangtime");
+    let last = |v: &Voice| -> Vec<u16> { voice_slots(v).iter().rev().take(40).map(|s| s.carrier_num).collect() };
+    assert!(
+        last(&v).contains(&SECONDARY_CARRIER),
+        "still on: the main carrier is full, the next call goes there"
+    );
+    {
+        let mut state = v.test.config.state_write();
+        for ts in 2..=4 {
+            state.timeslot_alloc.release(TimeslotOwner::Brew, ts).unwrap();
+        }
+    }
+    // The grace (1 s).
+    v.run(120);
+    assert!(
+        last(&v).iter().all(|c| *c == MAIN_CARRIER),
+        "off once nothing needs it: {:?}",
+        last(&v)
+    );
+}

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use tetra_config::bluestation::{PacketDataBearer, SharedConfig};
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};
+use tetra_core::{BitBuffer, CarrierSlot, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};
 use tetra_pdus::mle::fields::bs_service_details::BsServiceDetails;
 use tetra_pdus::mle::pdus::d_mle_sync::DMleSync;
 use tetra_pdus::mle::pdus::d_mle_sysinfo::DMleSysinfo;
@@ -102,6 +102,46 @@ pub struct UmacBs {
     /// block, so the radio's multislot reservations are freed once the whole block is read.
     ul_block_release: Option<(u16, TdmaTime, u32)>,
     ul_block_requirement: bool,
+    /// `[cell_info] secondary_carrier_on_demand`: whether each carrier other than the main one is
+    /// on the air. None without it: every carrier always transmits.
+    on_demand: Option<OnDemandCarriers>,
+}
+
+/// Whether a carrier other than the main one is on the air (`secondary_carrier_on_demand`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Air {
+    /// Not transmitted: its scheduler still builds every slot (time, queues), none goes to the LMAC.
+    Off,
+    /// Transmitted, `left` more slots before a channel allocation may send a radio there.
+    WarmingUp { left: u16 },
+    /// Transmitted, `idle` slots since it was last needed.
+    On { idle: u32 },
+}
+
+/// The carriers other than the main one, in config order, with `secondary_carrier_on_demand`.
+struct OnDemandCarriers {
+    /// `secondary_carrier_warmup_frames` in slots.
+    warmup_slots: u16,
+    /// `secondary_carrier_inactivity_secs` in slots (one multiframe at least).
+    grace_slots: u32,
+    grace_secs: u16,
+    air: Vec<(u16, Air)>,
+}
+
+impl OnDemandCarriers {
+    fn state(&self, carrier: u16) -> Option<Air> {
+        self.air.iter().find(|(c, _)| *c == carrier).map(|(_, a)| *a)
+    }
+
+    /// Its slots go to the LMAC (always for the main carrier).
+    fn on_air(&self, carrier: u16) -> bool {
+        self.state(carrier) != Some(Air::Off)
+    }
+
+    /// Not on the air long enough: no radio was sent there, anything received there is a copy.
+    fn cold(&self, carrier: u16) -> bool {
+        matches!(self.state(carrier), Some(Air::Off | Air::WarmingUp { .. }))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -174,6 +214,22 @@ impl UmacBs {
                 );
             }
         }
+        // Every carrier but the main one on the air only while needed: all off at start.
+        let on_demand = (c.cell.secondary_carrier_on_demand && c.cell.secondary_carrier.is_some()).then(|| {
+            let others: Vec<u16> = c.cell.other_carriers().collect();
+            tracing::info!(
+                "UmacBs: carriers {:?} on demand: on the air while a call or packet-data channel needs them or the next call goes there; {} frame warm-up before a radio is sent to one, off {} s after",
+                others,
+                c.cell.secondary_carrier_warmup_frames,
+                c.cell.secondary_carrier_inactivity_secs
+            );
+            OnDemandCarriers {
+                warmup_slots: u16::from(c.cell.secondary_carrier_warmup_frames) * 4,
+                grace_slots: u32::from(c.cell.secondary_carrier_inactivity_secs.max(1)) * 72,
+                grace_secs: c.cell.secondary_carrier_inactivity_secs,
+                air: others.into_iter().map(|carrier| (carrier, Air::Off)).collect(),
+            }
+        });
         Self {
             self_component: TetraEntity::Umac,
             config,
@@ -199,6 +255,104 @@ impl UmacBs {
             ul_block_copy: false,
             ul_block_release: None,
             ul_block_requirement: false,
+            on_demand,
+        }
+    }
+
+    /// `secondary_carrier_on_demand`, every tick before the slots are built: a carrier other than
+    /// the main one goes on the air when it is needed (a call, its hangtime or a packet-data channel
+    /// on it, the next call would go there, a channel allocation to it or signalling queued on it),
+    /// and off `secondary_carrier_inactivity_secs` after it was last needed. Until it has been on
+    /// the air `secondary_carrier_warmup_frames`, a channel allocation to it waits in every
+    /// scheduler (no radio is sent to a carrier it cannot lock on to yet).
+    fn on_demand_tick(&mut self) {
+        let Some(od) = &self.on_demand else {
+            return;
+        };
+        let mut queued: Vec<u16> = self.channel_scheduler.allocation_carriers().collect();
+        for sched in &self.secondary_channel_schedulers {
+            queued.extend(sched.allocation_carriers());
+        }
+        let (owned, next_call) = {
+            let state = self.config.state_read();
+            let alloc = &state.timeslot_alloc;
+            let owned: Vec<bool> = od
+                .air
+                .iter()
+                .map(|(c, _)| (1..=4).any(|ts| alloc.slot_owner(CarrierSlot { carrier_num: *c, ts }).is_some()))
+                .collect();
+            (owned, alloc.next_call_carrier())
+        };
+        let reasons: Vec<Option<&'static str>> = od
+            .air
+            .iter()
+            .zip(owned)
+            .map(|(&(c, _), owned)| {
+                let sched = self.scheduler_for(c);
+                // A circuit stays until its deferred close (hangtime included), and a packet-data
+                // channel for a multiframe after its release (its radio may still be there).
+                let busy = (1..=4).any(|ts| {
+                    sched.circuit_is_active(Direction::Dl, ts)
+                        || sched.circuit_is_active(Direction::Ul, ts)
+                        || sched.pdch_released_owner(ts).is_some()
+                });
+                if owned || busy || sched.has_pdch() {
+                    Some("a call or packet-data channel on it")
+                } else if next_call == Some(c) {
+                    Some("the next call goes there: the carriers before it are full")
+                } else if queued.contains(&c) {
+                    Some("a channel allocation to it")
+                } else if sched.dl_queue_depth() > 0 {
+                    Some("signalling queued on it")
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let Some(od) = self.on_demand.as_mut() else {
+            return;
+        };
+        let (warmup, grace, grace_secs) = (od.warmup_slots, od.grace_slots, od.grace_secs);
+        let mut cold = Vec::new();
+        for ((carrier, air), reason) in od.air.iter_mut().zip(reasons) {
+            *air = match (*air, reason) {
+                (Air::Off, None) => Air::Off,
+                (Air::Off, Some(reason)) => {
+                    tracing::info!(
+                        "UMAC: secondary carrier {} switching ON ({}; {} frame warm-up before a radio is sent there)",
+                        carrier,
+                        reason,
+                        warmup / 4
+                    );
+                    if warmup == 0 {
+                        Air::On { idle: 0 }
+                    } else {
+                        Air::WarmingUp { left: warmup }
+                    }
+                }
+                (Air::WarmingUp { left }, _) if left > 1 => Air::WarmingUp { left: left - 1 },
+                (Air::WarmingUp { .. }, _) => {
+                    tracing::info!("UMAC: secondary carrier {} on the air, channel allocations to it go out", carrier);
+                    Air::On { idle: 0 }
+                }
+                (Air::On { .. }, Some(_)) => Air::On { idle: 0 },
+                (Air::On { idle }, None) if idle < grace => Air::On { idle: idle + 1 },
+                (Air::On { .. }, None) => {
+                    tracing::info!(
+                        "UMAC: secondary carrier {} switching OFF ({} s without traffic)",
+                        carrier,
+                        grace_secs
+                    );
+                    Air::Off
+                }
+            };
+            if matches!(*air, Air::Off | Air::WarmingUp { .. }) {
+                cold.push(*carrier);
+            }
+        }
+        self.channel_scheduler.set_cold_carriers(&cold);
+        for sched in &mut self.secondary_channel_schedulers {
+            sched.set_cold_carriers(&cold);
         }
     }
 
@@ -802,6 +956,18 @@ impl UmacBs {
         self.ul_block_release = None;
         self.ul_block_requirement = false;
         self.ul_block_copy = false;
+
+        // `secondary_carrier_on_demand`: no radio is sent to a carrier not on the air long enough,
+        // so a burst received on it is the adjacent-channel copy of one on another carrier. Dropped
+        // before the copy rules and not kept as a label block: the real burst is taken.
+        if self.on_demand.as_ref().is_some_and(|o| o.cold(prim.carrier_num)) {
+            tracing::debug!(
+                "UmacBs: dropping uplink on carrier {} ({:?}): carrier not on the air yet, adjacent-channel copy",
+                prim.carrier_num,
+                prim.logical_channel
+            );
+            return;
+        }
 
         // While a channel of the packet-data carrier exists, or always with three or more carriers,
         // one burst is often received on several carriers (adjacent channels, the PHY hands the
@@ -2402,6 +2568,17 @@ impl UmacBs {
                 let ts = prim.ts;
                 let data = prim.data;
 
+                // A circuit on a carrier still warming up (`secondary_carrier_on_demand`) has no
+                // radio on it yet: its uplink is the copy of another carrier's.
+                if self.on_demand.as_ref().is_some_and(|o| o.cold(carrier_num)) {
+                    tracing::debug!(
+                        "UmacBs: dropping uplink voice on carrier {} ts {}: carrier not on the air yet, adjacent-channel copy",
+                        carrier_num,
+                        ts
+                    );
+                    return;
+                }
+
                 // Track last UL voice frame time for inactivity detection
                 if (1..=4).contains(&ts) {
                     self.last_ul_voice.insert((carrier_num, ts), self.dltime);
@@ -2980,6 +3157,12 @@ impl TetraEntityTrait for UmacBs {
             self.sync_pdch();
         }
 
+        // Carriers on demand: which are on the air, before the slots are built (the MCCH holds
+        // back a channel allocation to one not on the air long enough).
+        if self.on_demand.is_some() {
+            self.on_demand_tick();
+        }
+
         // Collect/construct traffic that should be sent down to the LMAC
         // This is basically the _previous_ timeslot
         let mut slots = Vec::with_capacity(1 + self.secondary_channel_schedulers.len());
@@ -2988,8 +3171,13 @@ impl TetraEntityTrait for UmacBs {
         if let Some(carrier) = self.pdch_carrier {
             self.pdch_handoff(carrier);
         }
+        // A carrier on demand that is off still builds its slot (time, queues) but does not send it:
+        // the PHY transmits nothing there.
+        let on_demand = &self.on_demand;
         for scheduler in &mut self.secondary_channel_schedulers {
-            if let Some(slot) = scheduler.finalize_secondary_ts_for_tick() {
+            if let Some(slot) = scheduler.finalize_secondary_ts_for_tick()
+                && on_demand.as_ref().is_none_or(|o| o.on_air(scheduler.carrier_num()))
+            {
                 slots.push(slot);
             }
         }
