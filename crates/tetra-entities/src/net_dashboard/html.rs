@@ -4774,6 +4774,7 @@ function applyLang(){
     if(el)el.textContent=t(p);
   });
   renderStations();renderCalls();renderLastHeard();renderEmergencyBanner();
+  tsCarrierNumbers().forEach(tsApplyCarrierAir);
 }
 function setLang(l,btn){
   currentLang=l;localStorage.setItem('fs_lang',l);
