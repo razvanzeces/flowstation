@@ -2051,6 +2051,14 @@ impl BsChannelScheduler {
             self.cur_dltime,
             ts
         );
+        // A packet-data channel released long enough ago is forgotten: TDMA time wraps, and some
+        // 46 days later it would be "just released" again (`pdch_released_owner`).
+        let now = self.cur_dltime;
+        for at in &mut self.pdch_released_at {
+            if at.is_some_and(|at| now.diff(at) > PDCH_RELEASED_UNALLOCATED_SLOTS) {
+                *at = None;
+            }
+        }
         self.ul_grant_pdch_debts();
     }
 

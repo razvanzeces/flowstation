@@ -1898,6 +1898,8 @@ mod tests {
             }
         }
         assert_eq!(sched.pdch_released_owner(2), None, "a multiframe later");
+        sched.set_dl_time(t0);
+        assert_eq!(sched.pdch_released_owner(2), None, "nor once TDMA time wraps back to it");
         let mut main = channel_sched(&[2, 3]);
         main.set_pdch(2, None);
         assert_eq!(main.pdch_released_owner(2), Some(RADIO));
