@@ -175,6 +175,16 @@ impl TimeslotAllocator {
         None
     }
 
+    /// The carrier the next call would get a slot on (`allocate_any_slot` for any owner but packet
+    /// data, before a packet-data channel gives way), without taking it; None when only a
+    /// packet-data channel could give way.
+    pub fn next_call_carrier(&self) -> Option<u16> {
+        (0..self.carriers.len()).filter(|i| !self.data_only(*i)).find_map(|i| {
+            let slots = if i == 0 { &self.owners[0][1..] } else { &self.owners[i][..] };
+            slots.iter().any(Option::is_none).then_some(self.carriers[i])
+        })
+    }
+
     /// A packet-data channel on the main carrier: the first free timeslot of `prefs` (2..=4 only).
     pub fn reserve_packet_data_slot(&mut self, prefs: &[u8]) -> Option<CarrierSlot> {
         let ts = prefs
@@ -575,6 +585,66 @@ mod tests {
         let voice: Vec<_> = (0..7).map(|_| alloc.allocate_any_slot(TimeslotOwner::Cmce).unwrap()).collect();
         assert!(voice.iter().all(|s| s.carrier_num != 1587), "{voice:?}");
         assert_eq!(alloc.allocate_any_slot(TimeslotOwner::Cmce), None);
+    }
+
+    /// `next_call_carrier` is where `allocate_any_slot` puts the next call while no packet-data
+    /// channel has to give way: three carriers, the packet-data one last, filled step by step.
+    #[test]
+    fn next_call_carrier_is_where_the_next_call_goes() {
+        let (m, s, e) = (1584, 1587, 1589);
+        let mut alloc = TimeslotAllocator::default();
+        // Voice order: main, the extra carrier, the packet-data carrier last.
+        alloc.configure_carriers(&[m, e, s]);
+        let slot = |carrier_num, ts| CarrierSlot { carrier_num, ts };
+        let check = |alloc: &TimeslotAllocator, expected: Option<u16>, case: &str| {
+            assert_eq!(alloc.next_call_carrier(), expected, "{case}");
+            let mut next = alloc.clone();
+            let taken = next.allocate_any_slot(TimeslotOwner::Cmce);
+            if next.drain_preempted_packet_data().is_empty() {
+                assert_eq!(taken.map(|t| t.carrier_num), expected, "{case}");
+            } else {
+                assert_eq!(expected, None, "{case}: a packet-data channel gave way");
+            }
+        };
+        check(&alloc, Some(m), "empty");
+        alloc.reserve(TimeslotOwner::Cmce, 2).unwrap();
+        alloc.reserve(TimeslotOwner::Brew, 3).unwrap();
+        check(&alloc, Some(m), "one main slot left");
+        alloc.reserve_packet_data_slot(&[4]).unwrap();
+        check(&alloc, Some(e), "the main carrier full with a packet-data channel");
+        for ts in 1..=4 {
+            alloc.reserve_slot(TimeslotOwner::Cmce, slot(e, ts)).unwrap();
+        }
+        check(&alloc, Some(s), "main and extra full");
+        assert_eq!(alloc.reserve_packet_data_slots_on(s, &[4, 3], 2).len(), 2);
+        for ts in 1..=2 {
+            alloc.reserve_slot(TimeslotOwner::Cmce, slot(s, ts)).unwrap();
+        }
+        check(&alloc, None, "everything full, packet data on main and on the last carrier");
+        alloc.release_slot(TimeslotOwner::Cmce, slot(e, 3)).unwrap();
+        check(&alloc, Some(e), "a slot of the extra carrier freed");
+    }
+
+    /// A data-only carrier is never where the next call goes.
+    #[test]
+    fn next_call_carrier_skips_a_data_only_carrier() {
+        let mut alloc = TimeslotAllocator::default();
+        alloc.configure_carriers(&[1584, 1585]);
+        alloc.set_data_only_carrier(Some(1585));
+        assert_eq!(alloc.next_call_carrier(), Some(1584));
+        for ts in 2..=4 {
+            alloc.reserve(TimeslotOwner::Cmce, ts).unwrap();
+        }
+        assert_eq!(alloc.next_call_carrier(), None);
+        assert_eq!(alloc.allocate_any_slot(TimeslotOwner::Cmce), None);
+
+        let mut alloc = TimeslotAllocator::default();
+        alloc.configure_carriers(&[1584, 1585, 1587]);
+        alloc.set_data_only_carrier(Some(1585));
+        for ts in 2..=4 {
+            alloc.reserve(TimeslotOwner::Cmce, ts).unwrap();
+        }
+        assert_eq!(alloc.next_call_carrier(), Some(1587));
     }
 
     #[test]
