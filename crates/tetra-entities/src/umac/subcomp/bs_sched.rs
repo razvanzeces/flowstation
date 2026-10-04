@@ -1919,12 +1919,40 @@ impl BsChannelScheduler {
             // A packet-data TM-SDU being fragmented lets signalling go first that fits whole in this
             // block and leaves room for its next fragment: the BS may interrupt a fragmented
             // message with non-fragmented ones (EN 300 392-2 23.4.2.1.1), and a fragment still goes
-            // in every block.
-            if matches!(&q[i], DlSchedElem::FragBuf(f) if f.is_packet_data())
-                && let_in
-                && let Some(j) = q.iter().position(|e| Self::fits_before_a_fragment(e, room))
-            {
-                return Some(q.remove(j));
+            // in every block. Not a channel allocation to a carrier warming up, nor what follows one
+            // for its address (as below); a grant or random-access acknowledgement merged into one
+            // goes on its own.
+            if matches!(&q[i], DlSchedElem::FragBuf(f) if f.is_packet_data()) && let_in {
+                let is_cold = |e: &DlSchedElem| Self::allocation_carrier(e).is_some_and(|c| cold.contains(&c));
+                if let Some(k) = q.iter().position(|e| {
+                    is_cold(e)
+                        && matches!(e, DlSchedElem::Resource(pdu, ..)
+                            if pdu.addr.is_some() && (pdu.slot_granting_element.is_some() || pdu.random_access_flag))
+                }) && let DlSchedElem::Resource(pdu, ..) = &mut q[k]
+                    && let Some(addr) = pdu.addr
+                {
+                    let own = Self::dl_make_minimal_resource(&addr, pdu.slot_granting_element.clone(), pdu.random_access_flag);
+                    let own = DlSchedElem::Resource(own, BitBuffer::new(0), None, false);
+                    if Self::fits_before_a_fragment(&own, room) {
+                        pdu.slot_granting_element = None;
+                        pdu.random_access_flag = false;
+                        return Some(own);
+                    }
+                }
+                let mut held = Vec::new();
+                if let Some(j) = q.iter().position(|e| {
+                    let e_ssi = match e {
+                        DlSchedElem::Resource(pdu, ..) => pdu.addr.map(|a| a.ssi),
+                        DlSchedElem::FragBuf(f) => f.ssi(),
+                        _ => return false,
+                    };
+                    if is_cold(e) {
+                        held.push(e_ssi);
+                    }
+                    Self::fits_before_a_fragment(e, room) && !held.contains(&e_ssi)
+                }) {
+                    return Some(q.remove(j));
+                }
             }
             return Some(q.remove(i));
         }
@@ -4043,5 +4071,78 @@ mod tests {
             .filter(|s| dl_pdus(s).iter().any(|p| p.0 == 0 && p.2 != 0b111111))
             .count();
         assert!(signalling >= 1, "and the signalling went after it");
+    }
+
+    /// Whole signalling goes ahead of a packet-data TM-SDU being fragmented on the MCCH, but not a
+    /// channel allocation to a carrier warming up, nor a PDU for its address behind it; the grant
+    /// and random-access acknowledgement merged into it go on their own. Once the carrier is on the
+    /// air the allocation goes, then that PDU.
+    #[test]
+    fn test_a_cold_allocation_does_not_pass_a_packet_data_fragment() {
+        let mut sched = get_testing_slotter();
+        sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+        sched.set_cold_carriers(&[1002]);
+        let (x, y, z) = (
+            TetraAddress::issi(1_030_036),
+            TetraAddress::issi(2_145_007),
+            TetraAddress::issi(2_145_008),
+        );
+        let reporter = TxReporter::new();
+        let (pdu, sdu) = tagged_resource(&y, 0xd0, 6400);
+        sched.dl_enqueue_packet_data_for_link(0, pdu, sdu, Some(reporter.clone()));
+        finalize_slots(&mut sched, 4);
+        let (pdu, sdu) = chan_alloc_to(&sched, x, 44, 1002);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        let (pdu, sdu) = tagged_resource(&x, 0x0a, 8);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        let (pdu, sdu) = tagged_resource(&z, 0x09, 40);
+        sched.dl_enqueue_tma(pdu, sdu, None);
+        sched.dl_enqueue_random_access_ack(1, x);
+        let (grant, marker) = sched.ul_process_cap_req(1, x, &ReservationRequirement::Req1Slot).expect("grant");
+        sched.dl_enqueue_grant(1, x, grant, marker);
+
+        let slots = finalize_slots(&mut sched, 4 * 8);
+        assert!(!reporter.is_transmitted(), "the datagram is still under way");
+        let sent = dl_resources(&slots);
+        let x_at: Vec<_> = sent.iter().filter(|r| r.1 == x.ssi).collect();
+        // (frame, ssi, li, grant, random access, chan_alloc): 7 octets, no usage marker.
+        assert_eq!(x_at, vec![&(4, x.ssi, 7, true, true, false)], "{sent:?}");
+        assert_eq!(sent.iter().filter(|r| r.1 == z.ssi).count(), 1, "another address goes: {sent:?}");
+
+        sched.set_cold_carriers(&[]);
+        let slots = finalize_slots(&mut sched, 4 * 8);
+        assert!(!reporter.is_transmitted(), "still under way");
+        let x_at: Vec<_> = dl_resources(&slots).into_iter().filter(|r| r.1 == x.ssi).map(|r| r.5).collect();
+        assert_eq!(x_at, vec![true, false], "the allocation, then the PDU");
+    }
+
+    /// On a packet-data channel of several slots, group signalling copied there goes ahead of the
+    /// radio's fragment under way, but not a channel allocation to a carrier warming up.
+    #[test]
+    fn test_a_cold_group_allocation_does_not_pass_a_fragment_on_a_pdch() {
+        let y = TetraAddress::issi(2_145_007);
+        let g = TetraAddress::new(214_900, SsiType::Gssi);
+        let mut sched = multislot_slotter(y.ssi, &[2, 3, 4]);
+        sched.set_dl_time(TdmaTime { t: 1, f: 2, m: 1, h: 0 });
+        sched.set_cold_carriers(&[1002]);
+        let reporter = TxReporter::new();
+        let (pdu, sdu) = tagged_resource(&y, 0xd0, 12800);
+        sched.dl_enqueue_packet_data_for_link(2, pdu, sdu, Some(reporter.clone()));
+        finalize_slots(&mut sched, 4);
+        let (pdu, sdu) = chan_alloc_to(&sched, g, 44, 1002);
+        sched.dl_enqueue_tma_for_link(2, pdu, sdu, None);
+        let slots = finalize_slots(&mut sched, 4 * 4);
+        assert!(!reporter.is_transmitted(), "the datagram is still under way");
+        let g_at = dl_resources_at(&slots).into_iter().filter(|r| r.1 == g.ssi).count();
+        assert_eq!(g_at, 0, "held while the carrier warms up");
+
+        sched.set_cold_carriers(&[]);
+        let slots = finalize_slots(&mut sched, 4 * 4);
+        assert!(!reporter.is_transmitted(), "still under way");
+        let g_at: Vec<_> = dl_resources_at(&slots).into_iter().filter(|r| r.1 == g.ssi).collect();
+        assert!(
+            g_at.len() == 1 && g_at[0].2 && (2..=4).contains(&g_at[0].0.t),
+            "then on the channel: {g_at:?}"
+        );
     }
 }
