@@ -2207,6 +2207,56 @@ fn on_demand_drops_the_uplink_of_a_cold_carrier() {
     assert_eq!(heard(&batches, &other), (1, true), "on the air: the radio's own");
 }
 
+/// The uplink inactivity of a floor granted on a carrier switched on for the call counts from when
+/// the carrier has warmed up (its radio is sent there no sooner), not from the grant.
+#[test]
+fn on_demand_ul_inactivity_counts_from_the_warm_up() {
+    debug::setup_logging_verbose();
+    let mut cfg = on_demand_config(false, 18, 180);
+    cfg.cell.ul_inactivity_secs = 1;
+    let mut test = ComponentTest::from_config(cfg, Some(START));
+    test.populate_entities(
+        vec![TetraEntity::Umac],
+        vec![TetraEntity::Lmac, TetraEntity::Llc, TetraEntity::Brew, TetraEntity::Cmce],
+    );
+    test.submit_message(open_on(SECONDARY_CARRIER, 2));
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Cmce,
+        dest: TetraEntity::Umac,
+        msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+            call_id: 1,
+            source_issi: 1000001,
+            dest_gssi: 1000002,
+            carrier_num: SECONDARY_CARRIER,
+            ts: 2,
+        }),
+    });
+    let (mut on, mut timeout) = (None, None);
+    for tick in 0..4 * 72 {
+        let (batches, other) = run_ticks(&mut test, 1);
+        if on.is_none() && batches.iter().any(|b| on_air(b).contains(&SECONDARY_CARRIER)) {
+            on = Some(tick);
+        }
+        if timeout.is_none()
+            && other.iter().any(|m| {
+                matches!(
+                    m.msg,
+                    SapMsgInner::CmceCallControl(CallControl::UlInactivityTimeout {
+                        carrier_num: SECONDARY_CARRIER,
+                        ts: 2
+                    })
+                )
+            })
+        {
+            timeout = Some(tick);
+        }
+    }
+    let (on, timeout) = (on.expect("the carrier went on"), timeout.expect("the timeout"));
+    // Warm-up 72 slots, then 1 s without uplink voice.
+    assert!(timeout - on > 2 * 72, "on at tick {on}, timeout at tick {timeout}");
+}
+
 #[test]
 fn test_local_loopback_ul_still_loops_back_and_reaches_brew() {
     // Only a LocalParrot circuit hands its uplink to CMCE: an ordinary simplex circuit keeps

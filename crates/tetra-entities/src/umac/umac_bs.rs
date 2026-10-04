@@ -315,6 +315,7 @@ impl UmacBs {
         let (warmup, grace, grace_secs) = (od.warmup_slots, od.grace_slots, od.grace_secs);
         let mut cold = Vec::new();
         for ((carrier, air), reason) in od.air.iter_mut().zip(reasons) {
+            let was_cold = matches!(*air, Air::Off | Air::WarmingUp { .. });
             *air = match (*air, reason) {
                 (Air::Off, None) => Air::Off,
                 (Air::Off, Some(reason)) => {
@@ -348,6 +349,12 @@ impl UmacBs {
             };
             if matches!(*air, Air::Off | Air::WarmingUp { .. }) {
                 cold.push(*carrier);
+            } else if was_cold {
+                // The uplink inactivity of a floor granted on it counts from now: its radio is sent
+                // there no sooner.
+                for (_, t) in self.last_ul_voice.iter_mut().filter(|(key, _)| key.0 == *carrier) {
+                    *t = self.dltime;
+                }
             }
         }
         self.channel_scheduler.set_cold_carriers(&cold);
@@ -2984,6 +2991,10 @@ impl UmacBs {
                     continue;
                 }
                 if self.scheduler_for(carrier_num).is_hangtime(ts) {
+                    continue;
+                }
+                // No radio on a carrier still warming up (`secondary_carrier_on_demand`).
+                if self.on_demand.as_ref().is_some_and(|o| o.cold(carrier_num)) {
                     continue;
                 }
 
