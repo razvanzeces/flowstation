@@ -2123,6 +2123,67 @@ fn on_demand_carriers_are_independent() {
     );
 }
 
+/// The dashboards follow each carrier on demand: the UMAC reports each change of state once (1
+/// warming up, 2 on the air after the warm-up, 0 off after the grace), nothing while it does not
+/// change, and nothing at all without the feature.
+#[test]
+fn on_demand_reports_each_change_of_state() {
+    use tetra_entities::net_telemetry::{TelemetryEvent, TelemetrySource, telemetry_channel};
+    debug::setup_logging_verbose();
+    let air = |source: &TelemetrySource| -> Vec<(u16, u8)> {
+        std::iter::from_fn(|| source.try_recv())
+            .filter_map(|e| match e {
+                TelemetryEvent::CarrierAirChanged { carrier_num, state } => Some((carrier_num, state)),
+                _ => None,
+            })
+            .collect()
+    };
+    for on_demand in [true, false] {
+        let mut cfg = on_demand_config(true, 4, 1);
+        cfg.cell.secondary_carrier_on_demand = on_demand;
+        let (sink, source) = telemetry_channel();
+        let mut test = ComponentTest::from_config(cfg, Some(START));
+        test.populate_entities(vec![], vec![TetraEntity::Lmac, TetraEntity::Llc, TetraEntity::Brew]);
+        test.register_entity(UmacBs::new(test.get_shared_config(), Some(sink)));
+        let mut seen = Vec::new();
+        run_ticks(&mut test, 8);
+        seen.push(air(&source));
+        test.submit_message(open_on(SECONDARY_CARRIER, 1));
+        // The open is taken after the first tick's slots were built: on in the second tick.
+        run_ticks(&mut test, 2);
+        seen.push(air(&source));
+        run_ticks(&mut test, 15);
+        seen.push(air(&source));
+        run_ticks(&mut test, 1);
+        seen.push(air(&source));
+        run_ticks(&mut test, 100);
+        seen.push(air(&source));
+        // The tick of the close, the one its deferred close runs in, then the grace (1 s).
+        test.submit_message(close_on(SECONDARY_CARRIER, 1));
+        run_ticks(&mut test, 2 + 72);
+        seen.push(air(&source));
+        run_ticks(&mut test, 1);
+        seen.push(air(&source));
+        run_ticks(&mut test, 100);
+        seen.push(air(&source));
+        let expected: Vec<Vec<(u16, u8)>> = if on_demand {
+            vec![
+                vec![],
+                vec![(SECONDARY_CARRIER, 1)],
+                vec![],
+                vec![(SECONDARY_CARRIER, 2)],
+                vec![],
+                vec![],
+                vec![(SECONDARY_CARRIER, 0)],
+                vec![],
+            ]
+        } else {
+            vec![vec![]; 8]
+        };
+        assert_eq!(seen, expected, "on demand: {on_demand}");
+    }
+}
+
 /// What is received on a carrier not on the air long enough is a copy: a random access on a
 /// carrier that is off reaches no one and does not put it on the air (with the feature off it is
 /// taken); the uplink voice of a circuit on a carrier warming up reaches neither Brew nor the

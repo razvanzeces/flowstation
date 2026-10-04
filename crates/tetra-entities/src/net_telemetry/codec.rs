@@ -70,6 +70,26 @@ mod tests {
         assert_eq!(issi, 1234);
     }
 
+    /// The wire form TetraBrew's receiver gets (JSON, externally tagged): a type it does not know
+    /// is ignored there.
+    #[test]
+    fn carrier_air_changed_wire_form() {
+        let event = TelemetryEvent::CarrierAirChanged {
+            carrier_num: 1530,
+            state: 1,
+        };
+        assert_eq!(
+            String::from_utf8(TelemetryCodecJson.encode(&event)).unwrap(),
+            r#"{"CarrierAirChanged":{"carrier_num":1530,"state":1}}"#
+        );
+        let TelemetryEvent::CarrierAirChanged { carrier_num, state } =
+            TelemetryCodecBitcode.decode(&TelemetryCodecBitcode.encode(&event)).unwrap()
+        else {
+            panic!("expected CarrierAirChanged");
+        };
+        assert_eq!((carrier_num, state), (1530, 1));
+    }
+
     #[test]
     fn test_decode_invalid_bytes() {
         let codec = TelemetryCodecBitcode;

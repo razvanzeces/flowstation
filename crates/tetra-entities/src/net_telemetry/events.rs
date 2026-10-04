@@ -235,6 +235,11 @@ pub enum TelemetryEvent {
     /// scheduler for it (downlink). One event per PDU; the dashboard rate-limits the broadcast per
     /// slot, like `TsVoiceActivity`.
     TsDataActivity { carrier_num: u16, ts: u8, issi: u32, uplink: bool },
+    /// `[cell_info] secondary_carrier_on_demand`: carrier `carrier_num` (not the main one) changed
+    /// state: 0 off (not transmitted), 1 warming up (transmitted, no radio sent there yet), 2 on the
+    /// air. Emitted by the UMAC on each change only; never without the feature (every carrier is then
+    /// always on the air). Appended last for bitcode wire-stability.
+    CarrierAirChanged { carrier_num: u16, state: u8 },
 }
 
 /// A single host-system sensor reading. Kept flat for easy JSON serialisation

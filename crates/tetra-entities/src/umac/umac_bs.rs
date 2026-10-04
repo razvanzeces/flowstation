@@ -118,6 +118,17 @@ enum Air {
     On { idle: u32 },
 }
 
+impl Air {
+    /// The `CarrierAirChanged` telemetry state: 0 off, 1 warming up, 2 on the air.
+    fn code(self) -> u8 {
+        match self {
+            Air::Off => 0,
+            Air::WarmingUp { .. } => 1,
+            Air::On { .. } => 2,
+        }
+    }
+}
+
 /// The carriers other than the main one, in config order, with `secondary_carrier_on_demand`.
 struct OnDemandCarriers {
     /// `secondary_carrier_warmup_frames` in slots.
@@ -316,6 +327,7 @@ impl UmacBs {
         let mut cold = Vec::new();
         for ((carrier, air), reason) in od.air.iter_mut().zip(reasons) {
             let was_cold = matches!(*air, Air::Off | Air::WarmingUp { .. });
+            let was = air.code();
             *air = match (*air, reason) {
                 (Air::Off, None) => Air::Off,
                 (Air::Off, Some(reason)) => {
@@ -347,6 +359,14 @@ impl UmacBs {
                     Air::Off
                 }
             };
+            if air.code() != was
+                && let Some(sink) = &self.telemetry
+            {
+                sink.send(TelemetryEvent::CarrierAirChanged {
+                    carrier_num: *carrier,
+                    state: air.code(),
+                });
+            }
             if matches!(*air, Air::Off | Air::WarmingUp { .. }) {
                 cold.push(*carrier);
             } else if was_cold {
