@@ -2268,6 +2268,33 @@ fn on_demand_drops_the_uplink_of_a_cold_carrier() {
     assert_eq!(heard(&batches, &other), (1, true), "on the air: the radio's own");
 }
 
+/// Two carriers without a packet-data carrier (the uplink copy rules do not run): what a carrier
+/// on demand receives while on the air with nothing on it (its grace) is a copy too. The copy of a
+/// random access every 32 slots reaches no one and does not keep the carrier on the air.
+#[test]
+fn on_demand_drops_the_uplink_of_an_idle_carrier() {
+    debug::setup_logging_verbose();
+    let radio = TetraAddress::issi(2200699);
+    // Uplink slot ts2: the tick at ts4 takes it, and every fourth tick after it.
+    let ts2_start = TdmaTime { h: 0, m: 1, f: 1, t: 4 };
+    let mut test = on_demand_test(on_demand_config(false, 4, 1), ts2_start);
+    test.submit_message(open_on(SECONDARY_CARRIER, 1));
+    run_ticks(&mut test, 100);
+    test.submit_message(close_on(SECONDARY_CARRIER, 1));
+    let (mut batches, _) = run_ticks(&mut test, 8);
+    let mut to_llc = 0;
+    for i in 0..100 {
+        if i % 8 == 0 {
+            test.submit_message(sch_hu_mac_access(SECONDARY_CARRIER, radio));
+        }
+        let (b, other) = run_ticks(&mut test, 4);
+        batches.extend(b);
+        to_llc += other.iter().filter(|m| matches!(m.msg, SapMsgInner::TmaUnitdataInd(_))).count();
+    }
+    assert_eq!(to_llc, 0, "every copy dropped");
+    assert_eq!(leading_with(&batches, SECONDARY_CARRIER), 2 + 72, "off after the grace");
+}
+
 /// The uplink inactivity of a floor granted on a carrier switched on for the call counts from when
 /// the carrier has warmed up (its radio is sent there no sooner), not from the grant.
 #[test]

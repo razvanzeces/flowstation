@@ -153,6 +153,11 @@ impl OnDemandCarriers {
     fn cold(&self, carrier: u16) -> bool {
         matches!(self.state(carrier), Some(Air::Off | Air::WarmingUp { .. }))
     }
+
+    /// On the air with nothing on it since the last tick (its grace): no radio is there either.
+    fn idle(&self, carrier: u16) -> bool {
+        matches!(self.state(carrier), Some(Air::On { idle }) if idle > 0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -985,11 +990,18 @@ impl UmacBs {
         self.ul_block_copy = false;
 
         // `secondary_carrier_on_demand`: no radio is sent to a carrier not on the air long enough,
-        // so a burst received on it is the adjacent-channel copy of one on another carrier. Dropped
-        // before the copy rules and not kept as a label block: the real burst is taken.
-        if self.on_demand.as_ref().is_some_and(|o| o.cold(prim.carrier_num)) {
+        // and none is on one with nothing on it (its grace; with two carriers and no packet-data
+        // carrier the copy rules do not run, and the random-access acknowledgement of a copy would
+        // keep it on the air), so a burst received on it is the adjacent-channel copy of one on
+        // another carrier. Dropped before the copy rules and not kept as a label block: the real
+        // burst is taken.
+        if self
+            .on_demand
+            .as_ref()
+            .is_some_and(|o| o.cold(prim.carrier_num) || o.idle(prim.carrier_num))
+        {
             tracing::debug!(
-                "UmacBs: dropping uplink on carrier {} ({:?}): carrier not on the air yet, adjacent-channel copy",
+                "UmacBs: dropping uplink on carrier {} ({:?}): no radio on it, adjacent-channel copy",
                 prim.carrier_num,
                 prim.logical_channel
             );
