@@ -31,7 +31,7 @@ use super::fetcher::{FetchReply, FetchRequest, FetchTarget, Fetcher, Page};
 use super::home;
 use super::netpolicy::{NetPolicy, Refusal};
 use super::paginate::render_page;
-use super::router::query_param;
+use super::router::form_param;
 use super::wsp::{ContentKind, status};
 use crate::net_dashboard::wx_service;
 
@@ -602,8 +602,8 @@ impl Worker {
 
     /// `/wx?i=ICAO` (decoded METAR) or `/wx?l=place` (current weather), with the forms again.
     fn weather(&mut self, req: &FetchRequest, query: Option<&str>) -> Page {
-        let icao = query_param(query, "i").filter(|v| !v.trim().is_empty());
-        let place = query_param(query, "l").map(|l| {
+        let icao = form_param(query, "i").filter(|v| !v.trim().is_empty());
+        let place = form_param(query, "l").map(|l| {
             l.chars()
                 .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | ',' | '-' | '.'))
                 .take(40)

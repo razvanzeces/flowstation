@@ -104,6 +104,21 @@ fn is_http(scheme: &str) -> bool {
 
 /// Value of `key` in a form-encoded query ('+' is a space).
 pub fn query_param(query: Option<&str>, key: &str) -> Option<String> {
+    query_bytes(query, key).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Text typed in one of the gateway's own forms: UTF-8, or Windows-1252 when its octets are not
+/// UTF-8 (a terminal that sends the form in Latin-1: "A Coru%F1a" is "A Coruña").
+pub fn form_param(query: Option<&str>, key: &str) -> Option<String> {
+    let bytes = query_bytes(query, key)?;
+    Some(match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => encoding_rs::WINDOWS_1252.decode_without_bom_handling(e.as_bytes()).0.into_owned(),
+    })
+}
+
+/// Octets of the value of `key` in a form-encoded query.
+fn query_bytes(query: Option<&str>, key: &str) -> Option<Vec<u8>> {
     let pair = query?.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
         (k == key).then_some(v)
@@ -123,7 +138,7 @@ pub fn query_param(query: Option<&str>, key: &str) -> Option<String> {
         }
         i += 1;
     }
-    Some(String::from_utf8_lossy(&out).into_owned())
+    Some(out)
 }
 
 /// The URL typed in the home page's form: http/https only, `http://` when no scheme is given.
@@ -376,5 +391,19 @@ mod tests {
         assert_eq!(query_param(Some("q=%E2%82%AC+5"), "q").as_deref(), Some("€ 5"));
         assert_eq!(query_param(Some("q=100%"), "q").as_deref(), Some("100%"));
         assert_eq!(query_param(None, "q"), None);
+    }
+
+    #[test]
+    fn form_text_utf8_or_windows_1252() {
+        assert_eq!(form_param(Some("l=A+Coru%C3%B1a"), "l").as_deref(), Some("A Coruña"));
+        // The same place sent in Latin-1 / Windows-1252.
+        assert_eq!(form_param(Some("l=A+Coru%F1a"), "l").as_deref(), Some("A Coruña"));
+        assert_eq!(form_param(Some("l=Alcal%E1+de+Henares"), "l").as_deref(), Some("Alcalá de Henares"));
+        assert_eq!(form_param(Some("q=%80+5"), "q").as_deref(), Some("€ 5"));
+        assert_eq!(form_param(Some("q=EA5GVK"), "q").as_deref(), Some("EA5GVK"));
+        assert_eq!(form_param(Some("q="), "q").as_deref(), Some(""));
+        assert_eq!(form_param(Some("i=LELC"), "q"), None);
+        // The URL form keeps refusing octets that are not UTF-8 (see typed_url).
+        assert_eq!(query_param(Some("u=Espa%F1a"), "u").as_deref(), Some("Espa\u{FFFD}a"));
     }
 }
