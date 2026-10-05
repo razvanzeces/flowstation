@@ -165,6 +165,11 @@ pub fn decode_metar(raw: &str) -> String {
     while i < tokens.len() {
         let t = tokens[i];
 
+        // The remarks are not decoded ("PK WND 31031/1946" is not a temperature).
+        if t == "RMK" {
+            break;
+        }
+
         // Cloud layers
         if t.len() >= 6 && matches!(&t[..3], "FEW" | "SCT" | "BKN" | "OVC") {
             let cov = match &t[..3] {
@@ -736,8 +741,25 @@ pub fn metar_lines_es(raw: &str) -> Vec<String> {
     let mut clouds = Vec::new();
     let mut weather = Vec::new();
     let mut rest = Vec::new();
-    for t in &tokens[i.min(tokens.len())..] {
+    let tail = &tokens[i.min(tokens.len())..];
+    for (k, t) in tail.iter().enumerate() {
         let t = *t;
+        // The remarks are not decoded, and a trend is a forecast, not the weather now: one line
+        // with its groups as they come.
+        if t == "RMK" {
+            break;
+        }
+        if t == "TEMPO" || t == "BECMG" {
+            let label = if t == "TEMPO" { "Cambios temporales" } else { "Cambio previsto" };
+            let what: Vec<&str> = tail[k + 1..].iter().take_while(|x| **x != "RMK").copied().collect();
+            let what = if what.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", what.join(" "))
+            };
+            rest.push(format!("{label} ({t}){what}"));
+            break;
+        }
         if t.len() >= 6 && matches!(&t[..3], "FEW" | "SCT" | "BKN" | "OVC") {
             let cover = match &t[..3] {
                 "FEW" => "pocas",
@@ -779,14 +801,8 @@ pub fn metar_lines_es(raw: &str) -> Vec<String> {
                 continue;
             }
         }
-        let trend = match t {
-            "NOSIG" => Some("Sin cambios previstos (NOSIG)"),
-            "TEMPO" => Some("Cambios temporales (TEMPO)"),
-            "BECMG" => Some("Cambio previsto (BECMG)"),
-            _ => None,
-        };
-        if let Some(trend) = trend {
-            rest.push(trend.to_string());
+        if t == "NOSIG" {
+            rest.push("Sin cambios previstos (NOSIG)".to_string());
             continue;
         }
         let phenomenon = match t {
@@ -1041,6 +1057,55 @@ mod tests {
         // Unknown code: an empty HTTP 204.
         assert_eq!(metar_lines_es_from_body(""), None);
         assert_eq!(metar_lines_es_from_body("\n\n"), None);
+    }
+
+    #[test]
+    fn metar_trend_and_remarks_are_not_the_weather_now() {
+        // The thunderstorm with rain is the TEMPO forecast, not what is going on now.
+        let lemd = "METAR LEMD 051930Z 17007KT 060V210 9999 VCTS SCT065CB BKN075 23/14 Q1021 TEMPO TSRA";
+        assert_eq!(
+            metar_lines_es(lemd),
+            [
+                "LEMD día 05, 19:30 UTC",
+                "Viento 170° 7 kt (entre 060 y 210)",
+                "Visibilidad 10 km o más",
+                "Tiempo: tormenta en las cercanías",
+                "Nubes: dispersas a 6500 ft (cumulonimbos), muy nubosas a 7500 ft",
+                "Temperatura 23 °C, rocío 14 °C",
+                "QNH 1021 hPa",
+                "Cambios temporales (TEMPO): TSRA",
+                lemd,
+            ]
+        );
+        // The peak wind of the remarks is not a second temperature.
+        let kjfk = "METAR KJFK 051951Z 30019G31KT 10SM SCT070 SCT250 21/03 A2992 RMK AO2 PK WND 31031/1946 SLP130 T02110028";
+        assert_eq!(
+            metar_lines_es(kjfk),
+            [
+                "KJFK día 05, 19:51 UTC",
+                "Viento 300° 19 kt, rachas 31 kt",
+                "Nubes: dispersas a 7000 ft, dispersas a 25000 ft",
+                "Temperatura 21 °C, rocío 3 °C",
+                "QNH 29.92 inHg",
+                kjfk,
+            ]
+        );
+        let becmg = metar_lines_es("LEBL 051930Z 18010KT 9999 FEW020 22/18 Q1020 BECMG 24015KT BKN015 RMK 8/106");
+        assert_eq!(
+            becmg[3..],
+            [
+                "Nubes: pocas a 2000 ft",
+                "Temperatura 22 °C, rocío 18 °C",
+                "QNH 1020 hPa",
+                "Cambio previsto (BECMG): 24015KT BKN015",
+                "LEBL 051930Z 18010KT 9999 FEW020 22/18 Q1020 BECMG 24015KT BKN015 RMK 8/106",
+            ]
+        );
+        // Over SDS the remarks are left out as well.
+        assert_eq!(
+            decode_metar(kjfk),
+            "KJFK | 19:51Z | Wind 300 19kt gust 31kt | SCT 7000ft | SCT 25000ft | 21C/3C | 29.92inHg"
+        );
     }
 
     #[test]
