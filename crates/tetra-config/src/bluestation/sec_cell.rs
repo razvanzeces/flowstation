@@ -468,6 +468,16 @@ pub struct CfgSdsCommandEntry {
     pub action: String,
 }
 
+impl CfgSdsCommandEntry {
+    /// Whether the status code is one a command must not use (EN 300 392-2 table 14.72): 0 is
+    /// Emergency, and 31744..=32767 are SDS-TL short reports, which the station does not
+    /// acknowledge and which a radio also sends by itself to acknowledge an SDS from 9999.
+    /// Commands belong in 32768..=65535.
+    pub fn status_code_is_reserved(&self) -> bool {
+        self.status_code == 0 || (31744..=32767).contains(&self.status_code)
+    }
+}
+
 /// Remote control via SDS U-STATUS PDUs sent to ISSI 9999.
 /// Only ISSIs listed in `authorized_issis` can trigger commands.
 #[derive(Debug, Clone)]

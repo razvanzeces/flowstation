@@ -386,6 +386,21 @@ mod tests {
         from_file(path).unwrap_or_else(|e| panic!("example_config/config.toml must parse: {e}"));
     }
 
+    #[test]
+    fn sds_command_status_codes_reserved() {
+        use crate::bluestation::sec_cell::CfgSdsCommandEntry;
+        let entry = |status_code| CfgSdsCommandEntry {
+            status_code,
+            action: "restart".to_string(),
+        };
+        for code in [0, 31744, 32001, 32012, 32767] {
+            assert!(entry(code).status_code_is_reserved(), "{code}");
+        }
+        for code in [1, 50, 31743, 32768, 33001, 33012, 65535] {
+            assert!(!entry(code).status_code_is_reserved(), "{code}");
+        }
+    }
+
     /// Gold-standard guard: every optional block documented (commented) in example_config must
     /// parse against the DTOs when a user UNCOMMENTS it — field names and types must match.
     #[test]

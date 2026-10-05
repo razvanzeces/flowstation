@@ -146,6 +146,17 @@ pub struct SdsBsSubentity {
 
 impl SdsBsSubentity {
     pub fn new(config: SharedConfig) -> Self {
+        if let Some(ctrl) = &config.config().cell.sds_command_control {
+            for entry in ctrl.commands.iter().filter(|e| e.status_code_is_reserved()) {
+                tracing::warn!(
+                    "SDS-CMD: status_code {} (action '{}') is reserved: 0 is Emergency and 31744-32767 are SDS-TL \
+                     acknowledgements, which are not acknowledged and which a radio may send by itself. \
+                     Use 32768-65535 (and the same code in the radio's status list, sent to ISSI 9999).",
+                    entry.status_code,
+                    entry.action
+                );
+            }
+        }
         SdsBsSubentity {
             config,
             telemetry: None,
