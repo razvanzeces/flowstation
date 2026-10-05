@@ -674,7 +674,7 @@ impl Worker {
                 Ok(body) => body,
                 Err(sentence) => return vec![sentence],
             };
-            match wx_service::place_from_body(&body, spain, hint) {
+            match wx_service::place_from_body(&body, name, spain, hint) {
                 Ok(Some(p)) => {
                     found = Some(p);
                     break;

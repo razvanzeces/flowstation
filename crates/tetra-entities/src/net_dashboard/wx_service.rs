@@ -494,10 +494,12 @@ fn fold(s: &str) -> String {
 }
 
 /// The place in a geocoding reply, `None` when there is none that fits. In the Spain-only pass
-/// only towns count (feature code PPL...: otherwise "Paris" is a park in Madrid). With a `hint`
-/// (what followed a comma, as in "Cartagena, Colombia"), the first candidate whose country or
-/// region contains it. An error when the reply is not the geocoder's JSON.
-pub fn place_from_body(body: &str, spain: bool, hint: Option<&str>) -> Result<Option<Place>, String> {
+/// only towns count (feature code PPL...: otherwise "Paris" is a park in Madrid), and not a town
+/// whose name only starts like the `asked` one (the geocoder matches by prefix: otherwise "Lima"
+/// is Limanes, in Asturias). With a `hint` (what followed a comma, as in "Cartagena, Colombia"),
+/// the first candidate whose country or region contains it. An error when the reply is not the
+/// geocoder's JSON.
+pub fn place_from_body(body: &str, asked: &str, spain: bool, hint: Option<&str>) -> Result<Option<Place>, String> {
     let value: serde_json::Value = serde_json::from_str(body).map_err(|e| format!("bad geocoding JSON: {e}"))?;
     if !value.is_object() {
         return Err("bad geocoding JSON".to_string());
@@ -507,8 +509,16 @@ pub fn place_from_body(body: &str, spain: bool, hint: Option<&str>) -> Result<Op
     };
     let hint = hint.map(fold).filter(|h| !h.is_empty());
     let field = |r: &serde_json::Value, key: &str| r.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let asked = fold(asked);
+    // "Limanes" for "Lima": the asked name cut off in the middle of a word.
+    let longer_word = |r: &serde_json::Value| {
+        fold(&field(r, "name"))
+            .strip_prefix(asked.as_str())
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(char::is_alphabetic)
+    };
     let found = results.iter().find(|r| {
-        (!spain || field(r, "feature_code").starts_with("PPL"))
+        (!spain || (field(r, "feature_code").starts_with("PPL") && !longer_word(r)))
             && hint.as_ref().is_none_or(|h| {
                 ["country", "country_code", "admin1", "admin2"]
                     .iter()
@@ -952,37 +962,72 @@ mod tests {
 
     #[test]
     fn geocoding_picks_the_place() {
-        let place = place_from_body(GEO_SAN_JAVIER_ES, true, None).unwrap().unwrap();
+        let place = place_from_body(GEO_SAN_JAVIER_ES, "San Javier", true, None).unwrap().unwrap();
         assert_eq!(place.label, "San Javier (Murcia)");
         assert_eq!((place.latitude, place.longitude), (37.80626, -0.83736));
         // The province is the place itself: shown once.
-        assert_eq!(place_from_body(GEO_CORUNA_ES, true, None).unwrap().unwrap().label, "La Coruña");
-        // In the Spain-only pass a park is not a town: the second pass looks worldwide.
-        assert_eq!(place_from_body(GEO_PARIS_ES, true, None).unwrap(), None);
         assert_eq!(
-            place_from_body(GEO_PARIS_ES, false, None).unwrap().unwrap().label,
+            place_from_body(GEO_CORUNA_ES, "A Coruña", true, None).unwrap().unwrap().label,
+            "La Coruña"
+        );
+        // In the Spain-only pass a park is not a town: the second pass looks worldwide.
+        assert_eq!(place_from_body(GEO_PARIS_ES, "Paris", true, None).unwrap(), None);
+        assert_eq!(
+            place_from_body(GEO_PARIS_ES, "Paris", false, None).unwrap().unwrap().label,
             "París Park (Madrid)"
         );
         // "Cartagena, Chile": the hint chooses among the worldwide candidates (accents ignored).
-        let chile = place_from_body(GEO_CARTAGENA_WORLD, false, Some("chile")).unwrap().unwrap();
+        let chile = place_from_body(GEO_CARTAGENA_WORLD, "Cartagena", false, Some("chile"))
+            .unwrap()
+            .unwrap();
         assert_eq!(chile.label, "Cartagena (Chile)");
-        let valparaiso = place_from_body(GEO_CARTAGENA_WORLD, false, Some("Valparaiso")).unwrap().unwrap();
+        let valparaiso = place_from_body(GEO_CARTAGENA_WORLD, "Cartagena", false, Some("Valparaiso"))
+            .unwrap()
+            .unwrap();
         assert_eq!(valparaiso.label, "Cartagena (Chile)");
-        let spain = place_from_body(GEO_CARTAGENA_WORLD, false, Some("España")).unwrap().unwrap();
+        let spain = place_from_body(GEO_CARTAGENA_WORLD, "Cartagena", false, Some("España"))
+            .unwrap()
+            .unwrap();
         assert_eq!(spain.label, "Cartagena (Murcia)");
         assert_eq!(
-            place_from_body(GEO_CARTAGENA_WORLD, false, None).unwrap().unwrap().label,
+            place_from_body(GEO_CARTAGENA_WORLD, "Cartagena", false, None)
+                .unwrap()
+                .unwrap()
+                .label,
             "Cartagena de Indias (Colombia)"
         );
-        assert_eq!(place_from_body(GEO_CARTAGENA_WORLD, false, Some("Peru")).unwrap(), None);
-        assert_eq!(place_from_body(GEO_NONE, true, None).unwrap(), None);
-        assert!(place_from_body("<!DOCTYPE html>", true, None).is_err());
-        assert!(place_from_body("[]", true, None).is_err());
+        assert_eq!(
+            place_from_body(GEO_CARTAGENA_WORLD, "Cartagena", false, Some("Peru")).unwrap(),
+            None
+        );
+        assert_eq!(place_from_body(GEO_NONE, "Nowhere", true, None).unwrap(), None);
+        assert!(place_from_body("<!DOCTYPE html>", "Murcia", true, None).is_err());
+        assert!(place_from_body("[]", "Murcia", true, None).is_err());
+    }
+
+    #[test]
+    fn geocoding_in_spain_skips_a_name_that_only_starts_like_it() {
+        // There is no Lima in Spain: the geocoder matches by prefix, and the worldwide pass must
+        // give Lima (Peru), not a hamlet in Asturias.
+        const GEO_LIMA_ES: &str = r#"{"results":[{"id":3118425,"name":"Limanes","latitude":43.36667,"longitude":-5.78333,"elevation":245.0,"feature_code":"PPL","country_code":"ES","admin1_id":3114710,"admin2_id":6355236,"admin3_id":3109005,"timezone":"Europe/Madrid","postcodes":["33199"],"country_id":2510769,"country":"España","admin1":"Principado de Asturias","admin2":"Provincia de Asturias","admin3":"Siero"},{"id":7114174,"name":"Limaria","latitude":37.39253,"longitude":-2.08114,"elevation":472.0,"feature_code":"PPL","country_code":"ES","admin1_id":2593109,"admin2_id":2521883,"admin3_id":6355533,"timezone":"Europe/Madrid","postcodes":["04661"],"country_id":2510769,"country":"España","admin1":"Andalucía","admin2":"Provincia de Almería","admin3":"Arboleas"}],"generationtime_ms":0.8306503}"#;
+        assert_eq!(place_from_body(GEO_LIMA_ES, "Lima", true, None).unwrap(), None);
+        assert_eq!(place_from_body(GEO_LIMA_ES, "Lima", true, Some("Asturias")).unwrap(), None);
+        // The whole name, in any case and without the accents, is still the place.
+        assert_eq!(
+            place_from_body(GEO_LIMA_ES, "LIMANES", true, None).unwrap().unwrap().label,
+            "Limanes (Asturias)"
+        );
+        // A name that goes on with another word is not cut off.
+        let santiago = r#"{"results":[{"name":"Santiago de Compostela","latitude":42.88052,"longitude":-8.54569,"feature_code":"PPLA3","country_code":"ES","country":"España","admin1":"Galicia","admin2":"Provincia de La Coruña"}]}"#;
+        assert_eq!(
+            place_from_body(santiago, "Santiago", true, None).unwrap().unwrap().label,
+            "Santiago de Compostela (La Coruña)"
+        );
     }
 
     #[test]
     fn forecast_in_spanish_over_several_lines() {
-        let place = place_from_body(GEO_SAN_JAVIER_ES, true, None).unwrap().unwrap();
+        let place = place_from_body(GEO_SAN_JAVIER_ES, "San Javier", true, None).unwrap().unwrap();
         assert!(
             forecast_url(&place)
                 .starts_with("https://api.open-meteo.com/v1/forecast?latitude=37.8063&longitude=-0.8374&current=temperature_2m,")
