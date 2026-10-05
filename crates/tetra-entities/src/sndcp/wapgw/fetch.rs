@@ -31,9 +31,11 @@ use super::fetcher::{FetchReply, FetchRequest, FetchTarget, Fetcher, Page};
 use super::home;
 use super::netpolicy::{NetPolicy, Refusal};
 use super::paginate::render_page;
+use super::rid::{self, RidFound, RidQuery};
 use super::router::form_param;
 use super::wsp::{ContentKind, status};
 use crate::net_dashboard::wx_service;
+use crate::sndcp::wap_status::escape_xhtml_text;
 
 /// Requests waiting for a download thread; a full queue answers "busy" at once.
 const QUEUE_LEN: usize = 8;
@@ -179,12 +181,14 @@ fn wsp_status_for_http(code: u16) -> u8 {
     }
 }
 
-/// A gateway path served by the pool: page of a document, link of a document, or the weather.
+/// A gateway path served by the pool: page of a document, link of a document, the weather or a
+/// radioid.net lookup.
 #[derive(Debug, PartialEq, Eq)]
 enum DocPath<'a> {
     Page { doc: u32, page: usize },
     Link { doc: u32, link: usize, query: Option<&'a str> },
     Weather { query: Option<&'a str> },
+    RadioId { query: Option<&'a str> },
 }
 
 fn parse_doc_path(path: &str) -> Option<DocPath<'_>> {
@@ -194,6 +198,9 @@ fn parse_doc_path(path: &str) -> Option<DocPath<'_>> {
     };
     if path == "/wx" {
         return Some(DocPath::Weather { query });
+    }
+    if path == "/rid" {
+        return Some(DocPath::RadioId { query });
     }
     let mut parts = path.strip_prefix('/')?.split('/');
     let (kind, doc, n) = (parts.next()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
@@ -353,6 +360,7 @@ impl Worker {
                     }
                 }
                 Some(DocPath::Weather { query }) => (self.weather(req, query), None),
+                Some(DocPath::RadioId { query }) => (self.radioid(req, query), None),
                 None => (notice(status::NOT_FOUND, "No encontrado", "Esa página no existe.", req), None),
             },
         }
@@ -689,6 +697,46 @@ impl Worker {
             tracing::debug!("WAP: weather for ISSI {}: {e}", req.issi);
             vec![BAD_REPLY.to_string()]
         })
+    }
+
+    /// `/rid?q=`: a callsign or a DMR ID in radioid.net, with the form again. One entry is shown
+    /// in detail, several as a list with a link to each ID; the page stays within `page_bytes`.
+    /// Not cached: every lookup is a request (and counts against the radio's limit).
+    fn radioid(&mut self, req: &FetchRequest, query: Option<&str>) -> Page {
+        let budget = self.page_bytes(req);
+        let asked = form_param(query, "q").unwrap_or_default();
+        let found = rid::parse_input(&asked).and_then(|asked| self.radioid_lookup(req, &asked).map(|found| (found, asked)));
+        let body = match found {
+            Ok((found, asked)) => (1..=rid::MAX_ROWS)
+                .rev()
+                .map(|rows| home::rid_page(Some(&rid::render(&found, &asked, rows)), &req.home, budget))
+                .find(|page| page.len() <= budget)
+                .unwrap_or_else(|| home::rid_page(Some(&rid::render(&found, &asked, 1)), &req.home, budget)),
+            Err(sentence) => home::rid_page(Some(&format!("<p>{}</p>", escape_xhtml_text(&sentence))), &req.home, budget),
+        };
+        Page {
+            status: status::OK,
+            kind: ContentKind::Xhtml,
+            body: body.into_bytes(),
+        }
+    }
+
+    /// The users with that callsign or ID or, when there are none, the repeaters.
+    fn radioid_lookup(&mut self, req: &FetchRequest, asked: &RidQuery) -> Result<RidFound, String> {
+        const BAD_REPLY: &str = "Respuesta de radioid.net no válida.";
+        // One time budget for both requests.
+        let deadline = Instant::now() + Duration::from_secs(self.cfg.timeout_secs);
+        let bad_reply = |e: String| {
+            tracing::debug!("WAP: radioid.net for ISSI {}: {e}", req.issi);
+            BAD_REPLY.to_string()
+        };
+        let body = self.api_text(req, &rid::user_url(asked), deadline, "radioid.net")?;
+        let users = rid::parse_users(&body).map_err(bad_reply)?;
+        if !users.is_empty() {
+            return Ok(RidFound::Users(users));
+        }
+        let body = self.api_text(req, &rid::repeater_url(asked), deadline, "radioid.net")?;
+        Ok(RidFound::Repeaters(rid::parse_repeaters(&body).map_err(bad_reply)?))
     }
 }
 
@@ -1035,6 +1083,49 @@ mod tests {
     }
 
     #[test]
+    fn radioid_goes_through_the_network_policy() {
+        let cfg = CfgWapBrowse {
+            domain_denylist: vec!["radioid.net".to_string()],
+            ..browse_cfg(80)
+        };
+        let mut w = worker(cfg);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        for asked in [RidQuery::Id(2_145_007), RidQuery::Callsign("EA5GVK".to_string())] {
+            for url in [rid::user_url(&asked), rid::repeater_url(&asked)] {
+                let err = w.api_get(&url, deadline).unwrap_err();
+                assert!(matches!(err, FetchError::Refused(Refusal::Domain)), "{url}: {err}");
+            }
+        }
+        let (page, domain) = get(&mut w, FetchTarget::Doc("/rid?q=EA5GVK".to_string()));
+        let html = body(&page);
+        assert_eq!((page.status, domain), (status::OK, None));
+        assert!(html.contains("<p>radioid.net no responde. Prueba más tarde.</p>"), "{html}");
+        assert!(html.contains("name=\"q\"") && html.len() <= 1200, "{html}");
+        assert_well_formed(&html);
+    }
+
+    #[test]
+    fn radioid_input_checked_again_without_network() {
+        // Nothing may be fetched: a request would be refused and say so.
+        let mut w = worker(CfgWapBrowse {
+            domain_denylist: vec!["radioid.net".to_string()],
+            ..browse_cfg(80)
+        });
+        for (asked, expected) in [
+            ("/rid?q=", "Escribe un indicativo"),
+            ("/rid", "Escribe un indicativo"),
+            ("/rid?q=EA5%25", "no es un indicativo ni un ID válido"),
+            ("/rid?q=%2A", "no es un indicativo ni un ID válido"),
+            ("/rid?q=Coru%F1a", "«Coruña» no es un indicativo"),
+        ] {
+            let (page, _) = get(&mut w, FetchTarget::Doc(asked.to_string()));
+            let html = body(&page);
+            assert!(html.contains(expected) && !html.contains("no responde"), "{asked}: {html}");
+            assert_well_formed(&html);
+        }
+    }
+
+    #[test]
     fn resolver_refuses_names_of_private_addresses() {
         let resolver = PolicyResolver {
             policy: NetPolicy::new(&CfgWapBrowse::default()),
@@ -1165,6 +1256,7 @@ mod tests {
         );
         assert_eq!(parse_doc_path("/wx?i=LEMD"), Some(DocPath::Weather { query: Some("i=LEMD") }));
         assert_eq!(parse_doc_path("/wx"), Some(DocPath::Weather { query: None }));
+        assert_eq!(parse_doc_path("/rid?q=EA5GVK"), Some(DocPath::RadioId { query: Some("q=EA5GVK") }));
         assert_eq!(parse_doc_path("/p/x/2"), None);
         assert_eq!(parse_doc_path("/p/1/2/3"), None);
         assert_eq!(parse_doc_path("/q/1/2"), None);

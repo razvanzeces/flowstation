@@ -10,8 +10,9 @@ pub(crate) const DOCTYPE: &str =
     "<!DOCTYPE html PUBLIC \"-//WAPFORUM//DTD XHTML Mobile 1.0//EN\" \"http://www.wapforum.org/DTD/xhtml-mobile10.dtd\">";
 pub(crate) const HTML_OPEN: &str = "<html xmlns=\"http://www.w3.org/1999/xhtml\">";
 
-/// The home page is shown on every browser start: keep it within two SAR packets.
-pub const HOME_MAX_BYTES: usize = 900;
+/// The home page is shown on every browser start: keep it within two SAR packets (with an MTU of
+/// 576, 1080 bytes of body after the short WSP header).
+pub const HOME_MAX_BYTES: usize = 1000;
 
 /// What the requesting radio may do beyond the local pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +91,8 @@ pub fn home_page(s: &WapStatusSnapshot, browse: Browse, gateway: Ipv4Addr, bookm
         String::new()
     };
     let status_link = if browse == Browse::Allowed {
-        "<p><a href=\"/status.xhtml\">Estado de la BS</a> | <a href=\"/wx\">Tiempo</a></p>"
+        "<p><a href=\"/status.xhtml\">Estado de la BS</a> | <a href=\"/wx\">Tiempo</a><br/>\
+         <a href=\"/rid\">Consulta en radioid.net</a></p>"
     } else {
         "<p><a href=\"/status.xhtml\">Estado de la BS</a></p>"
     };
@@ -133,6 +135,25 @@ pub fn wx_page(result: &[String], home: &str, budget: usize) -> String {
         return short;
     }
     document(false, "Tiempo", None, &result)
+}
+
+/// radioid.net page (`/rid`): the answer, if any (markup, already escaped), the form for a
+/// callsign or a DMR ID and a link home.
+pub fn rid_page(result_html: Option<&str>, home: &str, budget: usize) -> String {
+    let result = result_html.unwrap_or_default();
+    let form = "<form action=\"/rid\" method=\"get\"><p>Indicativo o ID \
+         <input type=\"text\" name=\"q\" size=\"10\" maxlength=\"10\"/>\
+         <input type=\"submit\" value=\"Buscar\"/></p></form>";
+    let link = format!("<p><a href=\"{home}\">Inicio</a></p>");
+    let full = document(true, "radioid.net", Some(home), &format!("{result}{form}{link}"));
+    if full.len() <= budget {
+        return full;
+    }
+    let short = document(false, "radioid.net", Some(home), &format!("{result}{form}"));
+    if short.len() <= budget {
+        return short;
+    }
+    document(false, "radioid.net", Some(home), result)
 }
 
 /// A short page with a title, a sentence and a link home.
@@ -208,7 +229,22 @@ mod tests {
         assert!(page.contains("action=\"/go\"") && page.contains("action=\"/s\""));
         assert!(page.contains("<a href=\"/go?u=http%3A%2F%2F68k.news%2F\">68k.news</a>"));
         assert!(page.contains("Radios 3 SDS 1"));
+        assert!(page.contains("<a href=\"/rid\">Consulta en radioid.net</a>"), "{page}");
         assert_well_formed(&page);
+
+        // The longest station values still leave room for the bookmarks and every link.
+        let mut worst = snapshot();
+        worst.service_state = "CRÍTICO".to_string();
+        worst.stack_version = "v0.4.10".to_string();
+        worst.registered_ms = 999;
+        worst.queued_sds = 999;
+        worst.uptime_secs = 99 * 86_400 + 23 * 3_600;
+        let page = home_page(&worst, Browse::Allowed, gw, &bookmarks(), 8192);
+        assert!(page.len() <= HOME_MAX_BYTES, "{} bytes", page.len());
+        assert!(
+            page.contains("text.npr.org") && page.contains("/rid") && page.contains("/wx"),
+            "{page}"
+        );
 
         // One datagram without SAR (MTU 296): the page sheds the extras but stays valid.
         let small = home_page(&snapshot(), Browse::Allowed, gw, &bookmarks(), 230);
@@ -252,6 +288,42 @@ mod tests {
         let small = wx_page(&[], "http://10.0.0.1/", 500);
         assert!(small.len() <= 500 && small.contains("name=\"l\""), "{small}");
         assert_well_formed(&small);
+    }
+
+    #[test]
+    fn rid_page_fits_page_bytes() {
+        use crate::sndcp::wapgw::rid::{self, RidFound, RidQuery, samples};
+        let home = "http://10.0.0.1/";
+        let form = rid_page(None, home, 4096);
+        assert!(form.contains("action=\"/rid\"") && form.contains("name=\"q\"") && form.contains("Indicativo o ID"));
+        assert_well_formed(&form);
+        let asked = RidQuery::Callsign("EA5GVK".to_string());
+        let list = RidFound::Users(rid::parse_users(samples::USERS_EA5GVK).unwrap());
+        let one = RidFound::Users(rid::parse_users(samples::USER_2145007).unwrap());
+        let repeater = RidFound::Repeaters(rid::parse_repeaters(samples::REPEATER_ED3ZAQ).unwrap());
+        for found in [&list, &one, &repeater] {
+            let page = rid_page(Some(&rid::render(found, &asked, rid::MAX_ROWS)), home, 1200);
+            assert!(page.len() <= 1200, "{} bytes: {page}", page.len());
+            assert!(page.contains("name=\"q\"") && page.contains(">Inicio</a>"), "{page}");
+            assert_well_formed(&page);
+        }
+        // Eight rows, the most a list shows, still fit with the form.
+        let eight = RidFound::Users(
+            (0..12)
+                .map(|i| rid::RidUser {
+                    id: 2_145_000 + i,
+                    callsign: "EA5GVK".to_string(),
+                    name: "Joaquin".to_string(),
+                    place: "Alguazas, Murcia (Spain)".to_string(),
+                    last_heard: "Mon, 05 Oct 2026 15:26:19 GMT".to_string(),
+                    last_tg: "214".to_string(),
+                    last_master: "OBP-PORTUG".to_string(),
+                })
+                .collect(),
+        );
+        let page = rid_page(Some(&rid::render(&eight, &asked, rid::MAX_ROWS)), home, 1200);
+        assert!(page.len() <= 1200 && page.contains("… y 4 más"), "{} bytes: {page}", page.len());
+        assert_well_formed(&page);
     }
 
     #[test]

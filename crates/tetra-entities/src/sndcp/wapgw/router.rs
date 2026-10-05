@@ -4,8 +4,9 @@
 //! - `/`: home page;
 //! - `/status.xhtml` (also `/status`, `/status.html`) and `/status.wml`, with `?s=N` for a
 //!   section: station status (Nexus-BS renderers);
-//! - `/go?u=URL`, `/s?q=QUERY`, `/p/...`, `/l/...` and `/wx?i=ICAO` / `/wx?l=PLACE`: Internet
-//!   side, only for the radios allowed to browse (`/wx` alone is the local weather form).
+//! - `/go?u=URL`, `/s?q=QUERY`, `/p/...`, `/l/...`, `/wx?i=ICAO` / `/wx?l=PLACE` and
+//!   `/rid?q=CALLSIGN-OR-ID`: Internet side, only for the radios allowed to browse (`/wx` and
+//!   `/rid` alone are the local forms).
 //!
 //! Any other host is a page the terminal asks for through the gateway (WSP proxy): Internet side
 //! as well, with the same permission.
@@ -14,9 +15,10 @@ use tetra_config::bluestation::CfgWap;
 
 use super::fetcher::{FetchTarget, Page};
 use super::home::{self, Browse};
+use super::rid;
 use super::wsp::{ContentKind, status};
 use crate::sndcp::wap_status::{
-    WAP_STATUS_SECTOR_QUERY, WapStatusSnapshot, render_wml_status_browser_index, render_wml_status_browser_sector,
+    WAP_STATUS_SECTOR_QUERY, WapStatusSnapshot, escape_xhtml_text, render_wml_status_browser_index, render_wml_status_browser_sector,
     render_wml2_status_sector,
 };
 
@@ -236,6 +238,26 @@ pub fn route(uri: &str, ctx: &RouteCtx<'_>) -> Route {
                 ctx.fetch(FetchTarget::Doc(format!("/wx?{}", parts.query.unwrap_or(""))))
             }
         }
+        // radioid.net: the form, and what was typed in it checked here, are local; the lookup
+        // comes from the Internet side.
+        "/rid" => {
+            if ctx.browse() != Browse::Allowed {
+                return ctx.fetch(FetchTarget::Doc("/rid".to_string()));
+            }
+            let local = |result: Option<String>| {
+                let home = home::home_url(ctx.cfg.gateway_ipv4);
+                Route::Page(Page {
+                    status: status::OK,
+                    kind: ContentKind::Xhtml,
+                    body: home::rid_page(result.as_deref(), &home, ctx.budget).into_bytes(),
+                })
+            };
+            match form_param(parts.query, "q").map(|q| rid::parse_input(&q)) {
+                None => local(None),
+                Some(Ok(asked)) => ctx.fetch(FetchTarget::Doc(format!("/rid?q={}", home::percent_encode(&asked.as_text())))),
+                Some(Err(sentence)) => local(Some(format!("<p>{}</p>", escape_xhtml_text(&sentence)))),
+            }
+        }
         _ => ctx.notice(status::NOT_FOUND, "No encontrado", "Esa página no existe en la estación."),
     }
 }
@@ -346,6 +368,37 @@ mod tests {
         );
         assert_eq!(page(route_for("/wx", &allowed, 2, 900)).status, status::FORBIDDEN);
         assert_eq!(page(route_for("/wx?l=Madrid", &allowed, 2, 900)).status, status::FORBIDDEN);
+    }
+
+    #[test]
+    fn radioid_form_and_checks_local_lookup_fetched() {
+        let allowed = cfg(true, &[1]);
+        let text = |route: Route| {
+            let p = page(route);
+            assert_eq!(p.status, status::OK);
+            String::from_utf8(p.body).unwrap()
+        };
+        assert!(text(route_for("/rid", &allowed, 1, 900)).contains("name=\"q\""));
+        assert_eq!(
+            route_for("/rid?q=+ea5gvk+", &allowed, 1, 900),
+            Route::Fetch(FetchTarget::Doc("/rid?q=EA5GVK".to_string()))
+        );
+        assert_eq!(
+            route_for("http://10.0.0.1/rid?q=2145007", &allowed, 1, 900),
+            Route::Fetch(FetchTarget::Doc("/rid?q=2145007".to_string()))
+        );
+        // Refused before any request to radioid.net, with the form again.
+        let empty = text(route_for("/rid?q=", &allowed, 1, 900));
+        assert!(empty.contains("Escribe un indicativo") && empty.contains("name=\"q\""), "{empty}");
+        for bad in ["/rid?q=EA5%25", "/rid?q=%2A", "/rid?q=EA5GVK%2FP", "/rid?q=%3Cb%3E"] {
+            let body = text(route_for(bad, &allowed, 1, 900));
+            assert!(body.contains("no es un indicativo ni un ID válido"), "{bad}: {body}");
+        }
+        assert!(text(route_for("/rid?q=%3Cb%3E", &allowed, 1, 900)).contains("«&lt;b&gt;»"));
+        // Not for the radios that may not browse.
+        assert_eq!(page(route_for("/rid", &allowed, 2, 900)).status, status::FORBIDDEN);
+        assert_eq!(page(route_for("/rid?q=EA5GVK", &allowed, 2, 900)).status, status::FORBIDDEN);
+        assert_eq!(page(route_for("/rid", &cfg(false, &[1]), 1, 900)).status, status::FORBIDDEN);
     }
 
     #[test]

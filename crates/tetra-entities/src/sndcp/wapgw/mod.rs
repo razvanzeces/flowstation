@@ -23,6 +23,7 @@ pub mod fetcher;
 pub mod home;
 pub mod netpolicy;
 pub mod paginate;
+pub mod rid;
 pub mod router;
 pub mod snapshot;
 pub mod wsp;
@@ -262,6 +263,7 @@ fn target_for_log(target: &FetchTarget) -> String {
             .to_string(),
         FetchTarget::Search(_) => "(search)".to_string(),
         FetchTarget::Doc(path) if path.starts_with("/wx") => "(weather)".to_string(),
+        FetchTarget::Doc(path) if path.starts_with("/rid") => "(radioid)".to_string(),
         FetchTarget::Doc(_) => "(document page)".to_string(),
     }
 }
