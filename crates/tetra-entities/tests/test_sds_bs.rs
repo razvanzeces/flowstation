@@ -996,6 +996,50 @@ fn test_u_status_command_ip_replies_to_authorized() {
     );
 }
 
+/// The "info" action answers "FlowStation v0.4.0-<hash> | IP ... | ...C": the version once, with a
+/// single "v" (STACK_VERSION carries its own).
+#[test]
+fn test_u_status_command_info_names_the_version_once() {
+    debug::setup_logging_verbose();
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.sds_command_control = Some(CfgSdsCommandControl {
+        authorized_issis: vec![1000001],
+        commands: vec![CfgSdsCommandEntry {
+            status_code: 33012,
+            action: "info".to_string(),
+        }],
+    });
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Brew]);
+    register_subscriber(&mut test, 1000001);
+
+    test.submit_message(build_u_status_msg(1000001, 9999, 33012));
+    test.run_stack(Some(2));
+
+    let after = test.dump_sinks();
+    let texts: Vec<String> = d_sds_to(&after, 1000001)
+        .into_iter()
+        .filter_map(|p| {
+            let mut sdu = p.sdu.clone();
+            sdu.seek(0);
+            match DSdsData::from_bitbuf(&mut sdu).ok()?.user_defined_data {
+                SdsUserData::Type4(_, data) => Some(String::from_utf8_lossy(&data).into_owned()),
+                _ => None,
+            }
+        })
+        .collect();
+    let info = texts
+        .iter()
+        .find(|t| t.contains("FlowStation"))
+        .unwrap_or_else(|| panic!("an info SDS reply, got {texts:?}"));
+    assert!(
+        info.contains(&format!("FlowStation {} | IP ", tetra_core::STACK_VERSION)),
+        "{info:?}"
+    );
+    assert!(!info.contains("vv"), "{info:?}");
+}
+
 /// FH-FEAT-014: a U-STATUS from an ISSI that is NOT in authorized_issis must not run any action —
 /// no SDS reply. Since FH-BUG-075 the status transaction itself is still acknowledged (see
 /// `test_u_status_to_9999_is_acknowledged_with_d_status`): authorization decides whether the command

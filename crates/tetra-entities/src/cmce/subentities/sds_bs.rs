@@ -1595,7 +1595,8 @@ impl SdsBsSubentity {
                     queue,
                     9999,
                     source_ssi,
-                    &format!("FlowStation v{} | IP {} | {}", tetra_core::STACK_VERSION, ip, temp),
+                    // STACK_VERSION already starts with its "v".
+                    &format!("FlowStation {} | IP {} | {}", tetra_core::STACK_VERSION, ip, temp),
                 );
             }
             other => {
