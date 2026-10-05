@@ -5,8 +5,36 @@
 
 use tetra_config::bluestation::StackConfig;
 
-use crate::health::{HealthThresholds, registry};
+use crate::health::{HealthDomain, HealthLevel, HealthThresholds, registry};
 use crate::sndcp::wap_status::WapStatusSnapshot;
+
+// The WAP pages are in Spanish. The health names themselves (`as_str`) stay as they are: the
+// dashboard, the telemetry and Telegram use them.
+
+fn overall_es(level: HealthLevel) -> &'static str {
+    match level {
+        HealthLevel::Ok => "OK",
+        HealthLevel::Degraded => "DEGRADADO",
+        HealthLevel::Critical => "CRÍTICO",
+    }
+}
+
+fn level_es(level: HealthLevel) -> &'static str {
+    match level {
+        HealthLevel::Ok => "OK",
+        HealthLevel::Degraded => "degradado",
+        HealthLevel::Critical => "crítico",
+    }
+}
+
+fn domain_es(domain: HealthDomain) -> &'static str {
+    match domain {
+        HealthDomain::Service => "Servicio",
+        HealthDomain::Backhaul => "Enlace Brew",
+        HealthDomain::Radios => "Radios",
+        HealthDomain::Congestion => "Congestión",
+    }
+}
 
 /// Health thresholds from `[health]`, as the health monitor builds them.
 pub fn thresholds(cfg: &StackConfig) -> HealthThresholds {
@@ -25,7 +53,7 @@ pub fn thresholds(cfg: &StackConfig) -> HealthThresholds {
 pub fn station_snapshot(thresholds: &HealthThresholds) -> WapStatusSnapshot {
     let reg = registry();
     let health = reg.snapshot(thresholds);
-    let overall = health.overall.as_str().to_ascii_uppercase();
+    let overall = overall_es(health.overall).to_string();
     WapStatusSnapshot {
         title: "FlowStation".to_string(),
         stack_version: format!("v{}", env!("CARGO_PKG_VERSION")),
@@ -41,7 +69,7 @@ pub fn station_snapshot(thresholds: &HealthThresholds) -> WapStatusSnapshot {
         health_lines: health
             .domains
             .iter()
-            .map(|d| format!("{} {}", d.domain.as_str(), d.level.as_str()))
+            .map(|d| format!("{}: {}", domain_es(d.domain), level_es(d.level)))
             .collect(),
         radio_lines: Vec::new(),
         call_lines: Vec::new(),
@@ -51,7 +79,7 @@ pub fn station_snapshot(thresholds: &HealthThresholds) -> WapStatusSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sndcp::wap_status::render_wml2_status;
+    use crate::sndcp::wap_status::{render_wml2_status, render_wml2_status_sector};
 
     #[test]
     fn snapshot_without_telemetry_renders() {
@@ -62,5 +90,56 @@ mod tests {
         assert!(!snap.health_lines.is_empty());
         let page = render_wml2_status(&snap, 2048).expect("status page renders");
         assert!(page.contains("FlowStation"));
+    }
+
+    #[test]
+    fn status_blocks_are_in_spanish_and_small() {
+        let snap = station_snapshot(&HealthThresholds::default());
+        assert!(
+            ["OK", "DEGRADADO", "CRÍTICO"].contains(&snap.service_state.as_str()),
+            "{}",
+            snap.service_state
+        );
+        let summary = render_wml2_status_sector(&snap, 8192, 0).unwrap();
+        let health = render_wml2_status_sector(&snap, 8192, 1).unwrap();
+        for page in [&summary, &health] {
+            for english in [
+                "Summary",
+                "Health",
+                "Block",
+                "Next",
+                "Prev",
+                "Top",
+                "State",
+                "Version ",
+                "Uptime",
+                "service",
+                "backhaul",
+                "congestion",
+                "degraded",
+                "critical",
+                " G ",
+                " P ",
+            ] {
+                assert!(!page.contains(english), "{english:?} in {page}");
+            }
+            assert!(page.contains("<a href=\"/\">Inicio</a>"), "{page}");
+            // Both blocks fit in two SAR packets of a 576-byte MTU, like the home page.
+            assert!(page.len() <= 1000, "{} bytes: {page}", page.len());
+        }
+        assert!(
+            summary.contains("FlowStation: Resumen") && summary.contains("Bloque 1/2"),
+            "{summary}"
+        );
+        assert!(summary.contains("<br />Estado ") && summary.contains("<br />Versión v") && summary.contains("<br />Activa "));
+        assert!(summary.contains("<br />Radios ") && summary.contains(" SDS "), "{summary}");
+        assert!(
+            health.contains("FlowStation: Salud") && health.contains("<br />General "),
+            "{health}"
+        );
+        // Every health line is shown, congestion (the last one) included.
+        for domain in ["Servicio: ", "Enlace Brew: ", "Radios: ", "Congestión: "] {
+            assert!(health.contains(&format!("<br />{domain}")), "{domain} in {health}");
+        }
     }
 }

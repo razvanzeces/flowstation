@@ -2,7 +2,7 @@
 // Owner: Chris YO3TCO / Nexus-BS Project
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileComment: Nexus-BS original WAP-over-UDP/IP adapter primitives for TETRA SNDCP experiments.
-// SPDX-FileComment: Modified by flowstation-miura (EA5GVK): visibility only (pub(crate) on helpers, structs, fields and constants).
+// SPDX-FileComment: Modified by flowstation-miura (EA5GVK): visibility only (pub(crate) on helpers, structs, fields and constants); tests follow the Spanish status pages.
 
 use super::ip::{IPV4_PROTOCOL_UDP, IpPrimitiveError, build_ipv4_udp_npdu, parse_ipv4_packet, parse_udp_datagram};
 use super::wap_status::{
@@ -1666,7 +1666,7 @@ mod tests {
             page.len()
         );
         assert!(!page.contains("http://www.w3.org/1999/xhtml"));
-        assert!(page.contains("Health OK"), "page={page:?}");
+        assert!(page.contains("General OK"), "page={page:?}");
         assert!(page.contains("2/"));
         assert!(page.contains("href=\"?s=0\""));
         assert!(page.contains("href=\"/\""));
@@ -1713,7 +1713,7 @@ mod tests {
             page.len()
         );
         assert!(page.contains("<wml>"), "page={page:?}");
-        assert!(page.contains("Health OK"), "page={page:?}");
+        assert!(page.contains("General OK"), "page={page:?}");
         assert!(page.contains("href=\"?s=0\""));
         assert!(page.contains("href=\"/\""));
         assert!(!page.contains("http://www.w3.org/1999/xhtml"));

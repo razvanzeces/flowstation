@@ -2,6 +2,7 @@
 // Owner: Chris YO3TCO / Nexus-BS Project
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileComment: Nexus-BS original WAP 2.0/WML2 status renderer for TETRA packet-data experiments.
+// SPDX-FileComment: Modified by flowstation-miura (EA5GVK): the status blocks and the WML status pages in Spanish, a link home, every health line shown, no group/private call counters.
 
 pub const DEFAULT_WAP_STATUS_MAX_BYTES: usize = 548;
 pub const WAP_STATUS_REFRESH_PATH: &str = "/status.xhtml";
@@ -139,16 +140,16 @@ pub fn render_wml_status_browser_index(snapshot: &WapStatusSnapshot, max_bytes: 
     let state = escape_xhtml_text_limited(snapshot.service_state.trim(), 12);
     let registered_ms = rendered_registered_ms(snapshot);
     let page = format!(
-        "<wml><card><p>{title}<br/>{state}<br/>MS {} G {} P {} S {}<br/><a href=\"{WAP_STATUS_LEGACY_WML_PATH}?{WAP_STATUS_SECTOR_QUERY}=1\">Next</a></p></card></wml>",
-        registered_ms, snapshot.active_group_calls, snapshot.active_private_calls, snapshot.queued_sds
+        "<wml><card><p>{title}<br/>{state}<br/>Radios {} SDS {}<br/><a href=\"{WAP_STATUS_LEGACY_WML_PATH}?{WAP_STATUS_SECTOR_QUERY}=1\">Sig</a></p></card></wml>",
+        registered_ms, snapshot.queued_sds
     );
     if page.len() <= max_bytes {
         return Ok(page);
     }
 
     let page = format!(
-        "<wml><card><p>{title}<br/>MS {} G {} P {} S {}<br/><a href=\"?{WAP_STATUS_SECTOR_QUERY}=1\">Next</a></p></card></wml>",
-        registered_ms, snapshot.active_group_calls, snapshot.active_private_calls, snapshot.queued_sds
+        "<wml><card><p>{title}<br/>Radios {} SDS {}<br/><a href=\"?{WAP_STATUS_SECTOR_QUERY}=1\">Sig</a></p></card></wml>",
+        registered_ms, snapshot.queued_sds
     );
     if page.len() <= max_bytes {
         return Ok(page);
@@ -223,15 +224,12 @@ fn render_wml2_status_sector_pages(snapshot: &WapStatusSnapshot) -> Vec<WapStatu
     let registered_ms = rendered_registered_ms(snapshot);
     let mut pages = Vec::new();
     pages.push(WapStatusSectorPage {
-        title: "Summary",
+        title: "Resumen",
         lines: vec![
-            format!("State {}", snapshot.service_state.trim()),
-            format!("Version {}", snapshot.stack_version.trim()),
-            format!("Uptime {}", compact_uptime(snapshot.uptime_secs)),
-            format!(
-                "MS {} G {} P {} SDS {}",
-                registered_ms, snapshot.active_group_calls, snapshot.active_private_calls, snapshot.queued_sds
-            ),
+            format!("Estado {}", snapshot.service_state.trim()),
+            format!("Versión {}", snapshot.stack_version.trim()),
+            format!("Activa {}", compact_uptime(snapshot.uptime_secs)),
+            format!("Radios {} SDS {}", registered_ms, snapshot.queued_sds),
         ],
     });
 
@@ -242,19 +240,19 @@ fn render_wml2_status_sector_pages(snapshot: &WapStatusSnapshot) -> Vec<WapStatu
         .map(str::trim)
         .filter(|summary| !summary.is_empty())
     {
-        health.push(format!("Health {summary}"));
+        health.push(format!("General {summary}"));
     }
-    health.push(format!("Uptime {}", compact_browser_uptime(snapshot.uptime_secs)));
+    health.push(format!("Activa {}", compact_browser_uptime(snapshot.uptime_secs)));
     health.extend(nonempty_lines(&snapshot.health_lines));
     if !health.is_empty() {
         pages.push(WapStatusSectorPage {
-            title: "Health",
+            title: "Salud",
             lines: health,
         });
     }
 
     push_chunked_sector_pages(&mut pages, "Radios", &snapshot.radio_lines, 5);
-    push_chunked_sector_pages(&mut pages, "Calls", &snapshot.call_lines, 5);
+    push_chunked_sector_pages(&mut pages, "Llamadas", &snapshot.call_lines, 5);
 
     if let Some(activity) = snapshot
         .last_activity
@@ -263,8 +261,8 @@ fn render_wml2_status_sector_pages(snapshot: &WapStatusSnapshot) -> Vec<WapStatu
         .filter(|activity| !activity.is_empty())
     {
         pages.push(WapStatusSectorPage {
-            title: "Activity",
-            lines: vec![format!("Last {activity}")],
+            title: "Actividad",
+            lines: vec![format!("Última {activity}")],
         });
     }
 
@@ -309,7 +307,8 @@ fn render_wml2_status_sector_page(
         WapStatusSectorRenderMode::Tiny => 18,
     };
     let max_lines = match mode {
-        WapStatusSectorRenderMode::Normal => 5,
+        // Every line of the block (the health block has six).
+        WapStatusSectorRenderMode::Normal => usize::MAX,
         WapStatusSectorRenderMode::Compact => 4,
         WapStatusSectorRenderMode::Tiny => 3,
     };
@@ -317,7 +316,7 @@ fn render_wml2_status_sector_page(
     let page = &pages[sector];
     let page_title = escape_xhtml_text_limited(page.title, 12);
     let sector_label = format!("{}/{}", sector + 1, pages.len());
-    let mut body = vec![format!("<b>{title}: {page_title}</b>"), format!("Block {sector_label}")];
+    let mut body = vec![format!("<b>{title}: {page_title}</b>"), format!("Bloque {sector_label}")];
     body.extend(
         page.lines
             .iter()
@@ -326,17 +325,20 @@ fn render_wml2_status_sector_page(
     );
     if sector + 1 < pages.len() {
         body.push(format!(
-            "<a href=\"{WAP_STATUS_REFRESH_PATH}?{WAP_STATUS_SECTOR_QUERY}={}\">Next</a>",
+            "<a href=\"{WAP_STATUS_REFRESH_PATH}?{WAP_STATUS_SECTOR_QUERY}={}\">Siguiente</a>",
             sector + 1
         ));
     }
     if sector > 0 {
         body.push(format!(
-            "<a href=\"{WAP_STATUS_REFRESH_PATH}?{WAP_STATUS_SECTOR_QUERY}={}\">Prev</a>",
+            "<a href=\"{WAP_STATUS_REFRESH_PATH}?{WAP_STATUS_SECTOR_QUERY}={}\">Anterior</a>",
             sector - 1
         ));
     }
-    body.push(format!("<a href=\"{WAP_STATUS_REFRESH_PATH}\">Top</a>"));
+    if sector > 1 {
+        body.push(format!("<a href=\"{WAP_STATUS_REFRESH_PATH}\">Primer bloque</a>"));
+    }
+    body.push("<a href=\"/\">Inicio</a>".to_string());
 
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{title}</title><meta http-equiv=\"Cache-Control\" content=\"no-cache\" /></head><body>{}</body></html>",
@@ -359,12 +361,12 @@ fn render_wml2_status_browser_sector_page(pages: &[WapStatusSectorPage], sector:
     }
     let mut nav = String::new();
     if sector + 1 < pages.len() {
-        nav.push_str(&format!("<a href=\"?{WAP_STATUS_SECTOR_QUERY}={}\">N</a>", sector + 1));
+        nav.push_str(&format!("<a href=\"?{WAP_STATUS_SECTOR_QUERY}={}\">Sig</a>", sector + 1));
     }
     if sector > 0 {
-        nav.push_str(&format!("<a href=\"?{WAP_STATUS_SECTOR_QUERY}={}\">P</a>", sector - 1));
+        nav.push_str(&format!("<a href=\"?{WAP_STATUS_SECTOR_QUERY}={}\">Ant</a>", sector - 1));
     }
-    nav.push_str("<a href=\"/\">H</a>");
+    nav.push_str("<a href=\"/\">Ini</a>");
     body.push(nav);
     let nav_count = 1;
 
@@ -399,12 +401,12 @@ fn render_wml_status_browser_sector_page(pages: &[WapStatusSectorPage], sector: 
     }
     let mut nav = String::new();
     if sector + 1 < pages.len() {
-        nav.push_str(&format!("<a href=\"?{WAP_STATUS_SECTOR_QUERY}={}\">N</a>", sector + 1));
+        nav.push_str(&format!("<a href=\"?{WAP_STATUS_SECTOR_QUERY}={}\">Sig</a>", sector + 1));
     }
     if sector > 0 {
-        nav.push_str(&format!("<a href=\"?{WAP_STATUS_SECTOR_QUERY}={}\">P</a>", sector - 1));
+        nav.push_str(&format!("<a href=\"?{WAP_STATUS_SECTOR_QUERY}={}\">Ant</a>", sector - 1));
     }
-    nav.push_str("<a href=\"/\">H</a>");
+    nav.push_str("<a href=\"/\">Ini</a>");
     body.push(nav);
     let nav_count = 1;
 
@@ -424,8 +426,8 @@ fn render_wml_status_browser_sector_page(pages: &[WapStatusSectorPage], sector: 
 
 fn browser_sector_title(title: &str) -> &str {
     match title {
-        "Summary" => "Status",
-        "Activity" => "Last",
+        "Resumen" => "Estado",
+        "Actividad" => "Última",
         other => other,
     }
 }
@@ -433,7 +435,7 @@ fn browser_sector_title(title: &str) -> &str {
 fn browser_sector_heading(page: &WapStatusSectorPage, sector: usize, page_count: usize) -> String {
     match page.title {
         "Radios" => format!("Radios {}", page.lines.len()),
-        "Calls" => format!("Calls {}", page.lines.len()),
+        "Llamadas" => format!("Llamadas {}", page.lines.len()),
         title => format!("{} {}/{}", browser_sector_title(title), sector + 1, page_count),
     }
 }
@@ -777,9 +779,10 @@ fn rendered_registered_ms(snapshot: &WapStatusSnapshot) -> usize {
 
 fn compact_tiny_state(snapshot: &WapStatusSnapshot) -> &'static str {
     let health = snapshot.health_summary.as_deref().unwrap_or_default();
-    if snapshot.service_state.contains("CRITICAL") || health.contains("CRITICAL") {
+    let has = |word: &str| snapshot.service_state.contains(word) || health.contains(word);
+    if has("CRITICAL") || has("CRÍTICO") {
         "Err"
-    } else if snapshot.service_state.contains("DEGRADED") || health.contains("DEGRADED") {
+    } else if has("DEGRADED") || has("DEGRADADO") {
         "Warn"
     } else {
         "OK"
@@ -1010,11 +1013,14 @@ mod tests {
         assert!(first.len() <= 541);
         assert!(second.len() <= 541);
         assert!(later.len() <= 541);
-        assert!(first.contains("Block 1/"));
+        assert!(first.contains("Bloque 1/"));
         assert!(first.contains("href=\"/status.xhtml?s=1\""));
         assert!(second.contains("href=\"/status.xhtml?s=0\""));
         assert!(later.contains("href=\"/status.xhtml\""));
-        assert!(later.contains("Radios") || later.contains("Calls"));
+        assert!(later.contains("Radios") || later.contains("Llamadas"));
+        for page in [&first, &second, &later] {
+            assert!(page.contains("<a href=\"/\">Inicio</a>"), "{page}");
+        }
         assert!(!first.contains("<script"));
         assert!(!first.contains("<wml"));
     }
@@ -1041,10 +1047,10 @@ mod tests {
 
         assert!(page.len() <= 220);
         assert!(page.contains("2/"));
-        assert!(page.contains("Health 2/"), "page={page:?}");
-        assert!(page.contains("Health OK"), "page={page:?}");
-        assert!(page.contains(">P<"), "page={page:?}");
-        assert!(page.contains(">H<"), "page={page:?}");
+        assert!(page.contains("Salud 2/"), "page={page:?}");
+        assert!(page.contains("General OK"), "page={page:?}");
+        assert!(page.contains(">Ant<"), "page={page:?}");
+        assert!(page.contains(">Ini<"), "page={page:?}");
         assert!(page.contains("href=\"?s=0\""));
         assert!(page.contains("href=\"/\""));
         assert!(!page.contains("http://www.w3.org/1999/xhtml"));
@@ -1059,7 +1065,8 @@ mod tests {
         snapshot.radio_lines = vec!["MS 2260618".to_string()];
 
         let index = render_wml_status_browser_index(&snapshot, 160).expect("browser index should fit");
-        assert!(index.contains("MS 1 G 0 P 1 S 2"), "index={index:?}");
+        assert!(index.contains("Radios 1 SDS 2"), "index={index:?}");
+        assert!(!index.contains(" G "), "index={index:?}");
 
         let radios = render_wml_status_browser_sector(&snapshot, 144, 2).expect("radio sector should fit");
         assert!(radios.contains("Radios 1"), "radios={radios:?}");
@@ -1093,8 +1100,8 @@ mod tests {
 
         let health = render_wml_status_browser_sector(&snapshot, 144, 1).expect("health sector should fit");
 
-        assert!(health.contains("Health OK"), "health={health:?}");
-        assert!(health.contains("Uptime 0d0h0s"), "health={health:?}");
+        assert!(health.contains("General OK"), "health={health:?}");
+        assert!(health.contains("Activa 0d0h0s"), "health={health:?}");
         assert!(health.len() <= 144, "health={health:?}");
     }
 
@@ -1105,8 +1112,8 @@ mod tests {
 
         let health = render_wml2_status_browser_sector(&snapshot, 144, 1).expect("health sector should fit");
 
-        assert!(health.contains("Health OK"), "health={health:?}");
-        assert!(health.contains("Uptime 0d0h0s"), "health={health:?}");
+        assert!(health.contains("General OK"), "health={health:?}");
+        assert!(health.contains("Activa 0d0h0s"), "health={health:?}");
         assert!(health.len() <= 144, "health={health:?}");
     }
 
