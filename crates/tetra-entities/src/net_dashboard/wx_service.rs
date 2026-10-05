@@ -72,6 +72,12 @@ fn ascii_only(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii()).collect()
 }
 
+/// 1 when the report starts with its type ("METAR LELC 051530Z ...", as aviationweather.gov
+/// now sends it), 0 when it starts with the station.
+fn report_type_len(tokens: &[&str]) -> usize {
+    usize::from(tokens.first().is_some_and(|t| *t == "METAR" || *t == "SPECI"))
+}
+
 /// Decode a raw METAR into a compact human-readable summary, fields separated by " | ".
 /// Best-effort: unrecognised tokens are skipped. Ported from tetraflow-sds-bot.
 pub fn decode_metar(raw: &str) -> String {
@@ -81,7 +87,7 @@ pub fn decode_metar(raw: &str) -> String {
     }
 
     let mut parts: Vec<String> = Vec::new();
-    let mut i = 0;
+    let mut i = report_type_len(&tokens);
 
     // Station identifier (4 letters)
     if i < tokens.len() && tokens[i].len() == 4 && tokens[i].chars().all(|c| c.is_ascii_alphabetic()) {
@@ -476,6 +482,20 @@ mod tests {
         assert!(out.contains("gust 25kt"));
         assert!(out.contains("-2C/-5C"));
         assert!(out.contains("Vis 8km"));
+    }
+
+    #[test]
+    fn decode_with_report_type_prefix() {
+        // aviationweather.gov, 2026-10-05: the report type comes first.
+        let raw = "METAR LELC 051530Z 13006KT 080V170 9999 FEW030 27/22 Q1019 NOSIG";
+        let plain = "LELC 051530Z 13006KT 080V170 9999 FEW030 27/22 Q1019 NOSIG";
+        let out = decode_metar(raw);
+        assert_eq!(out, decode_metar(plain));
+        assert_eq!(
+            out,
+            "LELC | 15:30Z | Wind 130 6kt | var 080-170 | Vis >10km | Few 3000ft | 27C/22C | Q1019hPa | NOSIG"
+        );
+        assert!(decode_metar("SPECI LEMD 051545Z 18007KT 9999 FEW045 25/14 Q1019").starts_with("LEMD | 15:45Z | Wind 180 7kt"));
     }
 
     #[test]
