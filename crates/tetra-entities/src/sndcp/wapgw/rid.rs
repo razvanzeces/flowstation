@@ -41,9 +41,10 @@ impl RidQuery {
     }
 }
 
-/// The value of the form: digits only are a DMR ID, anything else a callsign. Empty input and
-/// anything but A-Z, a-z and 0-9 (`%` and `*` included) are refused: the API takes `%` as a
-/// wildcard and an empty callsign as "everything", with replies of 70 KB.
+/// The value of the form: digits only are a DMR ID, anything else a callsign. Of "EA5GVK/P" or
+/// "EA8/EA5GVK" only the longest part counts. Empty input and anything but A-Z, a-z, 0-9 and `/`
+/// (`%` and `*` included) are refused: the API takes `%` as a wildcard and an empty callsign as
+/// "everything", with replies of 70 KB.
 pub fn parse_input(input: &str) -> Result<RidQuery, String> {
     let input = input.trim();
     if input.is_empty() {
@@ -53,13 +54,18 @@ pub fn parse_input(input: &str) -> Result<RidQuery, String> {
         let shown: String = input.chars().take(MAX_INPUT + 2).collect();
         format!("«{shown}» no es un indicativo ni un ID válido.")
     };
-    if input.len() > MAX_INPUT || !input.chars().all(|c| c.is_ascii_alphanumeric()) {
+    if !input.chars().all(|c| c.is_ascii_alphanumeric() || c == '/') {
         return Err(invalid());
     }
-    if input.chars().all(|c| c.is_ascii_digit()) {
-        return input.parse().map(RidQuery::Id).map_err(|_| invalid());
+    // "EA5GVK/P", "EA8/EA5GVK": the callsign is the longest part.
+    let asked = input.split('/').max_by_key(|part| part.len()).unwrap_or(input);
+    if asked.is_empty() || asked.len() > MAX_INPUT {
+        return Err(invalid());
     }
-    Ok(RidQuery::Callsign(input.to_ascii_uppercase()))
+    if asked.chars().all(|c| c.is_ascii_digit()) {
+        return asked.parse().map(RidQuery::Id).map_err(|_| invalid());
+    }
+    Ok(RidQuery::Callsign(asked.to_ascii_uppercase()))
 }
 
 /// API URL of the user database for a query.
@@ -382,6 +388,14 @@ mod tests {
         assert_eq!(parse_input(" ea5gvk "), Ok(RidQuery::Callsign("EA5GVK".to_string())));
         // Callsigns starting with a digit always carry a letter.
         assert_eq!(parse_input("2E0ABC"), Ok(RidQuery::Callsign("2E0ABC".to_string())));
+        // A portable or mobile suffix, or a prefix of another country, is left out.
+        for with_slash in ["EA5GVK/P", "ea5gvk/m ", "EA8/EA5GVK", "EA5GVK/"] {
+            assert_eq!(
+                parse_input(with_slash),
+                Ok(RidQuery::Callsign("EA5GVK".to_string())),
+                "{with_slash}"
+            );
+        }
     }
 
     #[test]
@@ -393,7 +407,8 @@ mod tests {
             "%",
             "*",
             "EA5*",
-            "EA5GVK/P",
+            "EA5GVK/P%",
+            "/",
             "EA 5GVK",
             "ñ",
             "a_b",

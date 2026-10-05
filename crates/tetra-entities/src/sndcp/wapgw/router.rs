@@ -387,10 +387,17 @@ mod tests {
             route_for("http://10.0.0.1/rid?q=2145007", &allowed, 1, 900),
             Route::Fetch(FetchTarget::Doc("/rid?q=2145007".to_string()))
         );
+        for with_slash in ["/rid?q=EA5GVK%2FP", "/rid?q=EA8%2FEA5GVK"] {
+            assert_eq!(
+                route_for(with_slash, &allowed, 1, 900),
+                Route::Fetch(FetchTarget::Doc("/rid?q=EA5GVK".to_string())),
+                "{with_slash}"
+            );
+        }
         // Refused before any request to radioid.net, with the form again.
         let empty = text(route_for("/rid?q=", &allowed, 1, 900));
         assert!(empty.contains("Escribe un indicativo") && empty.contains("name=\"q\""), "{empty}");
-        for bad in ["/rid?q=EA5%25", "/rid?q=%2A", "/rid?q=EA5GVK%2FP", "/rid?q=%3Cb%3E"] {
+        for bad in ["/rid?q=EA5%25", "/rid?q=%2A", "/rid?q=EA5GVK%2FP%25", "/rid?q=%3Cb%3E"] {
             let body = text(route_for(bad, &allowed, 1, 900));
             assert!(body.contains("no es un indicativo ni un ID válido"), "{bad}: {body}");
         }
