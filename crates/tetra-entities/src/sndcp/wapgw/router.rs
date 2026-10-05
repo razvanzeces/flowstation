@@ -230,7 +230,7 @@ pub fn route(uri: &str, ctx: &RouteCtx<'_>) -> Route {
                 Route::Page(Page {
                     status: status::OK,
                     kind: ContentKind::Xhtml,
-                    body: home::wx_page(None, &home::home_url(ctx.cfg.gateway_ipv4), ctx.budget).into_bytes(),
+                    body: home::wx_page(&[], &home::home_url(ctx.cfg.gateway_ipv4), ctx.budget).into_bytes(),
                 })
             } else {
                 ctx.fetch(FetchTarget::Doc(format!("/wx?{}", parts.query.unwrap_or(""))))

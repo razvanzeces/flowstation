@@ -588,46 +588,107 @@ impl Worker {
         })
     }
 
-    /// Body of one of the weather services, downloaded like any page (network policy, redirects
-    /// checked hop by hop, size cap).
-    fn weather_body(&mut self, url: &str) -> Result<String, String> {
-        let url = Url::parse(url).map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(self.cfg.timeout_secs);
-        let dl = self.download(url, deadline).map_err(|e| e.to_string())?;
-        if !(200..300).contains(&dl.status) {
-            return Err(format!("HTTP {}", dl.status));
-        }
-        Ok(decode_body(&dl.body, &dl.content_type))
+    /// Reply of a web API (weather, radioid.net), downloaded like any page (network policy,
+    /// redirects checked hop by hop, size cap) before `deadline`: HTTP status and body.
+    fn api_get(&mut self, url: &str, deadline: Instant) -> Result<(u16, String), FetchError> {
+        let url = Url::parse(url).map_err(|e| FetchError::Other(e.to_string()))?;
+        let dl = self.download(url, deadline)?;
+        Ok((dl.status, decode_body(&dl.body, &dl.content_type)))
     }
 
-    /// `/wx?i=ICAO` (decoded METAR) or `/wx?l=place` (current weather), with the forms again.
+    /// Body of a 2xx reply of an API, or the sentence for the radio: `service` is how the API is
+    /// called in it ("radioid.net", "El servicio del tiempo").
+    fn api_text(&mut self, req: &FetchRequest, url: &str, deadline: Instant, service: &str) -> Result<String, String> {
+        match self.api_get(url, deadline) {
+            Ok((code, body)) if (200..300).contains(&code) => Ok(body),
+            Ok((code, _)) => {
+                tracing::debug!("WAP: {service} answered HTTP {code} to ISSI {}", req.issi);
+                Err(format!("{service} respondió HTTP {code}."))
+            }
+            Err(e) => {
+                tracing::debug!("WAP: {service} for ISSI {} failed: {e}", req.issi);
+                Err(format!("{service} no responde. Prueba más tarde."))
+            }
+        }
+    }
+
+    /// `/wx?i=ICAO` (METAR, aviationweather.gov) or `/wx?l=place` (Open-Meteo: the place is looked
+    /// for in Spain first, then anywhere), in Spanish over several lines, with the forms again.
     fn weather(&mut self, req: &FetchRequest, query: Option<&str>) -> Page {
         let icao = form_param(query, "i").filter(|v| !v.trim().is_empty());
         let place = form_param(query, "l").map(|l| {
             l.chars()
-                .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | ',' | '-' | '.'))
+                .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | ',' | '-' | '.' | '\''))
                 .take(40)
                 .collect::<String>()
         });
-        let result = match (icao, place.filter(|p| !p.trim().is_empty())) {
-            (Some(icao), _) => match wx_service::metar_url(&icao) {
-                Some(url) => self.weather_body(&url).and_then(|body| wx_service::metar_decoded_from_body(&body)),
-                None => Err("empty ICAO".to_string()),
-            },
-            (None, Some(place)) => self
-                .weather_body(&wx_service::wx_url(place.trim()))
-                .and_then(|body| wx_service::wx_from_body(&body)),
-            (None, None) => Err("nothing asked".to_string()),
+        // One time budget for all the requests of the answer.
+        let deadline = Instant::now() + Duration::from_secs(self.cfg.timeout_secs);
+        let lines = match (icao, place.filter(|p| !p.trim().is_empty())) {
+            (Some(icao), _) => self.metar_lines(req, &icao, deadline),
+            (None, Some(place)) => self.place_weather_lines(req, place.trim(), deadline),
+            (None, None) => vec!["Escribe un lugar o el código de un aeropuerto.".to_string()],
         };
-        let text = result.unwrap_or_else(|e| {
-            tracing::debug!("WAP: weather for ISSI {} failed: {e}", req.issi);
-            "Sin datos para esa consulta.".to_string()
-        });
         Page {
             status: status::OK,
             kind: ContentKind::Xhtml,
-            body: home::wx_page(Some(&text), &req.home, req.budget).into_bytes(),
+            body: home::wx_page(&lines, &req.home, req.budget).into_bytes(),
         }
+    }
+
+    fn metar_lines(&mut self, req: &FetchRequest, icao: &str, deadline: Instant) -> Vec<String> {
+        let Some(url) = wx_service::metar_url(icao) else {
+            return vec!["Escribe el código de un aeropuerto (LELC).".to_string()];
+        };
+        let code: String = icao.trim().chars().filter(char::is_ascii_alphanumeric).take(4).collect();
+        match self.api_text(req, &url, deadline, "El servicio del tiempo") {
+            // An unknown code is an empty HTTP 204.
+            Ok(body) => wx_service::metar_lines_es_from_body(&body)
+                .unwrap_or_else(|| vec![format!("No hay METAR para {}.", code.to_ascii_uppercase())]),
+            Err(sentence) => vec![sentence],
+        }
+    }
+
+    /// "Place" or "place, region or country": the place with the geocoder, then its forecast.
+    fn place_weather_lines(&mut self, req: &FetchRequest, place: &str, deadline: Instant) -> Vec<String> {
+        const NOT_FOUND: &str = "No encuentro ese lugar.";
+        const BAD_REPLY: &str = "Respuesta del servicio del tiempo no válida.";
+        let (name, hint) = match place.split_once(',') {
+            Some((name, hint)) => (name.trim(), Some(hint.trim())),
+            None => (place, None),
+        };
+        if name.is_empty() {
+            return vec![NOT_FOUND.to_string()];
+        }
+        let mut found = None;
+        for spain in [true, false] {
+            let body = match self.api_text(req, &wx_service::geocode_url(name, spain), deadline, "El servicio del tiempo") {
+                Ok(body) => body,
+                Err(sentence) => return vec![sentence],
+            };
+            match wx_service::place_from_body(&body, spain, hint) {
+                Ok(Some(p)) => {
+                    found = Some(p);
+                    break;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::debug!("WAP: weather for ISSI {}: {e}", req.issi);
+                    return vec![BAD_REPLY.to_string()];
+                }
+            }
+        }
+        let Some(found) = found else {
+            return vec![NOT_FOUND.to_string()];
+        };
+        let body = match self.api_text(req, &wx_service::forecast_url(&found), deadline, "El servicio del tiempo") {
+            Ok(body) => body,
+            Err(sentence) => return vec![sentence],
+        };
+        wx_service::forecast_lines_es(&found, &body).unwrap_or_else(|e| {
+            tracing::debug!("WAP: weather for ISSI {}: {e}", req.issi);
+            vec![BAD_REPLY.to_string()]
+        })
     }
 }
 
@@ -940,18 +1001,37 @@ mod tests {
     fn weather_goes_through_the_network_policy() {
         // Refused before any network access: the weather services are fetched like any page.
         let cfg = CfgWapBrowse {
-            domain_denylist: vec!["wttr.in".to_string(), "aviationweather.gov".to_string()],
+            domain_denylist: vec!["open-meteo.com".to_string(), "aviationweather.gov".to_string()],
             ..browse_cfg(80)
         };
         let mut w = worker(cfg);
-        for url in [wx_service::wx_url("Madrid"), wx_service::metar_url("LEMD").unwrap()] {
-            let err = w.weather_body(&url).unwrap_err();
-            assert!(err.starts_with("refused"), "{url}: {err}");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let place = wx_service::Place {
+            label: "Murcia".to_string(),
+            latitude: 37.98704,
+            longitude: -1.13004,
+        };
+        for url in [
+            wx_service::geocode_url("Murcia", true),
+            wx_service::forecast_url(&place),
+            wx_service::metar_url("LEMD").unwrap(),
+        ] {
+            let err = w.api_get(&url, deadline).unwrap_err();
+            assert!(matches!(err, FetchError::Refused(Refusal::Domain)), "{url}: {err}");
         }
-        let (page, _) = get(&mut w, FetchTarget::Doc("/wx?l=Madrid".to_string()));
-        assert!(body(&page).contains("Sin datos"), "{}", body(&page));
-        assert!(wx_service::metar_decoded_from_body("\nLEMD 261200Z 18005KT CAVOK 25/10 Q1015\n").is_ok());
-        assert!(wx_service::metar_decoded_from_body("\n\n").is_err());
+        for asked in ["/wx?l=Murcia", "/wx?i=LEMD"] {
+            let (page, _) = get(&mut w, FetchTarget::Doc(asked.to_string()));
+            let html = body(&page);
+            assert_eq!(page.status, status::OK);
+            assert!(
+                html.contains("<p>El servicio del tiempo no responde. Prueba más tarde.</p>"),
+                "{asked}: {html}"
+            );
+            assert!(html.contains("name=\"l\"") && html.contains("name=\"i\""), "{html}");
+            assert_well_formed(&html);
+        }
+        let (page, _) = get(&mut w, FetchTarget::Doc("/wx?l=+%2C+".to_string()));
+        assert!(body(&page).contains("No encuentro ese lugar."), "{}", body(&page));
     }
 
     #[test]
@@ -1084,6 +1164,7 @@ mod tests {
             })
         );
         assert_eq!(parse_doc_path("/wx?i=LEMD"), Some(DocPath::Weather { query: Some("i=LEMD") }));
+        assert_eq!(parse_doc_path("/wx"), Some(DocPath::Weather { query: None }));
         assert_eq!(parse_doc_path("/p/x/2"), None);
         assert_eq!(parse_doc_path("/p/1/2/3"), None);
         assert_eq!(parse_doc_path("/q/1/2"), None);

@@ -110,9 +110,15 @@ pub fn home_page(s: &WapStatusSnapshot, browse: Browse, gateway: Ipv4Addr, bookm
     candidates.into_iter().find(|page| page.len() <= budget).unwrap_or(smallest)
 }
 
-/// Weather page (`/wx`): the last answer, if any, and the forms for a place or an airport.
-pub fn wx_page(result: Option<&str>, home: &str, budget: usize) -> String {
-    let result = result.map(|r| format!("<p>{}</p>", escape_xhtml_text(r))).unwrap_or_default();
+/// Weather page (`/wx`): the lines of the last answer, if any, and the forms for a place or an
+/// airport.
+pub fn wx_page(result: &[String], home: &str, budget: usize) -> String {
+    let result = if result.is_empty() {
+        String::new()
+    } else {
+        let lines: Vec<String> = result.iter().map(|line| escape_xhtml_text(line)).collect();
+        format!("<p>{}</p>", lines.join("<br/>"))
+    };
     let forms = "<form action=\"/wx\" method=\"get\"><p>Lugar <input type=\"text\" name=\"l\" size=\"10\"/>\
          <input type=\"submit\" value=\"Ver\"/></p></form>\
          <form action=\"/wx\" method=\"get\"><p>METAR <input type=\"text\" name=\"i\" size=\"4\"/>\
@@ -239,10 +245,11 @@ mod tests {
 
     #[test]
     fn wx_page_has_forms_and_fits() {
-        let page = wx_page(Some("WX Madrid: Soleado <25C>"), "http://10.0.0.1/", 4096);
-        assert!(page.contains("<p>WX Madrid: Soleado &lt;25C&gt;</p>") && page.contains("name=\"i\""));
+        let lines = ["Madrid".to_string(), "Soleado <25 °C>".to_string()];
+        let page = wx_page(&lines, "http://10.0.0.1/", 4096);
+        assert!(page.contains("<p>Madrid<br/>Soleado &lt;25 °C&gt;</p>") && page.contains("name=\"i\""));
         assert_well_formed(&page);
-        let small = wx_page(None, "http://10.0.0.1/", 500);
+        let small = wx_page(&[], "http://10.0.0.1/", 500);
         assert!(small.len() <= 500 && small.contains("name=\"l\""), "{small}");
         assert_well_formed(&small);
     }
