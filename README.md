@@ -174,16 +174,18 @@ text_coding_scheme = "LATIN"
 
 ### Remote control from radio (U-STATUS)
 
+The radio sends a STATUS (not a text SDS) with the configured `status_code` to the individual ISSI 9999. Use codes in 32768-65535: 0 is Emergency and 31744-32767 are SDS-TL acknowledgements.
+
 ```toml
 [cell_info.sds_command_control]
 authorized_issis = [2260570, 2260571]
 
 [[cell_info.sds_command_control.commands]]
-status_code = 32001
+status_code = 33001
 action = "restart"
 
 [[cell_info.sds_command_control.commands]]
-status_code = 32003
+status_code = 33003
 action = "kick_all"
 ```
 

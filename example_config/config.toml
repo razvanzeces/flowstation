@@ -358,9 +358,15 @@ voice_service = true
 # Unrecognized status codes from authorized radios are silently ignored.
 # Enabled by the presence of this sub-section; remove to disable.
 #
+# A command is not an SDS text: the radio sends a STATUS (pre-coded status, the
+# same number as status_code in its status list) to the individual ISSI 9999.
+# status_code must be in 32768-65535. 0 is Emergency and 31744-32767 are SDS-TL
+# acknowledgements: they are not acknowledged and a radio sends them by itself,
+# so the station warns at startup about a command that uses them.
+#
 # Available actions:
 #   "restart"   — restarts the FlowStation service (equivalent to systemctl restart tetra)
-#   "shutdown"  — stops the FlowStation service (must be restarted manually or via systemd)
+#   "shutdown"  — stops the FlowStation service (a systemd unit with Restart=always starts it again)
 #   "kick_all"  — deregisters all currently registered terminals; they re-attach immediately
 #   "ip"        — replies (SDS to the requester) with the host's primary IP address
 #   "temp"      — replies (SDS to the requester) with the host CPU/SoC temperature
@@ -374,27 +380,27 @@ voice_service = true
 # authorized_issis = [2260570, 2260571]   # ISSIs allowed to send commands
 #
 # [[cell_info.sds_command_control.commands]]
-# status_code = 32001             # U-STATUS code sent from the radio to ISSI 9999
+# status_code = 33001             # STATUS sent from the radio to ISSI 9999 (32768-65535)
 # action = "restart"
 #
 # [[cell_info.sds_command_control.commands]]
-# status_code = 32002
+# status_code = 33002
 # action = "shutdown"
 #
 # [[cell_info.sds_command_control.commands]]
-# status_code = 32003
+# status_code = 33003
 # action = "kick_all"
 #
 # [[cell_info.sds_command_control.commands]]
-# status_code = 32010
+# status_code = 33010
 # action = "ip"
 #
 # [[cell_info.sds_command_control.commands]]
-# status_code = 32011
+# status_code = 33011
 # action = "temp"
 #
 # [[cell_info.sds_command_control.commands]]
-# status_code = 32012
+# status_code = 33012
 # action = "info"
 ###############################################################################
 
