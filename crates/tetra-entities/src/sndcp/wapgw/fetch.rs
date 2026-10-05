@@ -613,6 +613,12 @@ impl Worker {
                 tracing::debug!("WAP: {service} answered HTTP {code} to ISSI {}", req.issi);
                 Err(format!("{service} respondió HTTP {code}."))
             }
+            // The station's own network policy (allow or deny list, port, address): it will not
+            // pass later either, so it is not an outage.
+            Err(FetchError::Refused(r)) => {
+                tracing::info!("WAP: {service} refused by the network policy for ISSI {}: {r}", req.issi);
+                Err(format!("{service} no está permitido en esta estación."))
+            }
             Err(e) => {
                 tracing::debug!("WAP: {service} for ISSI {} failed: {e}", req.issi);
                 Err(format!("{service} no responde. Prueba más tarde."))
@@ -1072,7 +1078,7 @@ mod tests {
             let html = body(&page);
             assert_eq!(page.status, status::OK);
             assert!(
-                html.contains("<p>El servicio del tiempo no responde. Prueba más tarde.</p>"),
+                html.contains("<p>El servicio del tiempo no está permitido en esta estación.</p>"),
                 "{asked}: {html}"
             );
             assert!(html.contains("name=\"l\"") && html.contains("name=\"i\""), "{html}");
@@ -1099,7 +1105,7 @@ mod tests {
         let (page, domain) = get(&mut w, FetchTarget::Doc("/rid?q=EA5GVK".to_string()));
         let html = body(&page);
         assert_eq!((page.status, domain), (status::OK, None));
-        assert!(html.contains("<p>radioid.net no responde. Prueba más tarde.</p>"), "{html}");
+        assert!(html.contains("<p>radioid.net no está permitido en esta estación.</p>"), "{html}");
         assert!(html.contains("name=\"q\"") && html.len() <= 1200, "{html}");
         assert_well_formed(&html);
     }
@@ -1120,7 +1126,7 @@ mod tests {
         ] {
             let (page, _) = get(&mut w, FetchTarget::Doc(asked.to_string()));
             let html = body(&page);
-            assert!(html.contains(expected) && !html.contains("no responde"), "{asked}: {html}");
+            assert!(html.contains(expected) && !html.contains("no está permitido"), "{asked}: {html}");
             assert_well_formed(&html);
         }
     }
