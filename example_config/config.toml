@@ -490,7 +490,9 @@ voice_service = true
 # A WAP 1.x gateway (WTP/WSP over UDP, ports 9200 and 9201) inside the station. Radios with a
 # WAP browser (e.g. Motorola MXP600 / MTP3550) get a local home page with the station status;
 # the radios listed in [wap.browse] allowed_issis also get a search box and bookmarks for
-# text-only sites. Everything is off by default.
+# text-only sites, the weather ("Tiempo": Open-Meteo for a place, aviationweather.gov for a
+# METAR) and a callsign / DMR ID lookup ("Consulta en radioid.net"); with a domain_allowlist,
+# list open-meteo.com, aviationweather.gov and radioid.net in it. Everything is off by default.
 #
 # Browsing fetches the page on the station (http/https only, public addresses only: LAN,
 # loopback, link-local and CGNAT are refused, also after DNS and after every redirect), turns it
