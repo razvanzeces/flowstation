@@ -213,6 +213,9 @@ impl BrewEntity {
             let mut state = config.state_write();
             state.network_connected = false;
         }
+        // The health registry hears of the backhaul here too, not only from the telemetry fan-out
+        // (which a station without dashboard, telemetry or Telegram does not run).
+        crate::health::registry().set_brew_up(false);
 
         Self {
             config,
@@ -737,6 +740,8 @@ impl BrewEntity {
                 false
             }
         };
+        // With the same value as the state: the SDS "info" reply reads both (Health, Brew).
+        crate::health::registry().set_brew_up(connected);
         if changed {
             if let Some(ref sink) = self.telemetry_sink {
                 let _ = sink.send(TelemetryEvent::BrewConnected { connected, server_version });

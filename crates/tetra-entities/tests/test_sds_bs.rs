@@ -1058,6 +1058,109 @@ fn test_u_status_command_info_answers_in_three_parts() {
     }
 }
 
+/// A Brew core that accepts the connection and then says nothing, until `up` goes false.
+struct QuietCore {
+    up: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl tetra_entities::network::transports::NetworkTransport for QuietCore {
+    fn connect(&mut self) -> Result<(), tetra_entities::network::transports::NetworkError> {
+        match self.up.load(std::sync::atomic::Ordering::Relaxed) {
+            true => Ok(()),
+            false => Err(tetra_entities::network::transports::NetworkError::ConnectionFailed("down".into())),
+        }
+    }
+    fn send_reliable(&mut self, _: &[u8]) -> Result<(), tetra_entities::network::transports::NetworkError> {
+        Ok(())
+    }
+    fn send_unreliable(&mut self, _: &[u8]) -> Result<(), tetra_entities::network::transports::NetworkError> {
+        Ok(())
+    }
+    fn receive_reliable(&mut self) -> Vec<tetra_entities::network::transports::NetworkMessage> {
+        std::thread::sleep(Duration::from_millis(5));
+        Vec::new()
+    }
+    fn receive_unreliable(&mut self) -> Vec<tetra_entities::network::transports::NetworkMessage> {
+        Vec::new()
+    }
+    fn wait_for_response_reliable(
+        &mut self,
+    ) -> Result<tetra_entities::network::transports::NetworkMessage, tetra_entities::network::transports::NetworkError> {
+        Err(tetra_entities::network::transports::NetworkError::Timeout)
+    }
+    fn is_connected(&self) -> bool {
+        self.up.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// On a station with [brew] and no dashboard, telemetry or Telegram there is no telemetry fan-out,
+/// which used to be the only writer of the backhaul to the health registry: "info" then said
+/// "Health DEGRADED" and "Brew up" at once. The Brew entity now writes it with its state.
+#[test]
+fn test_u_status_command_info_health_follows_brew_without_telemetry() {
+    use tetra_entities::health::{HealthDomain, HealthLevel, HealthThresholds, registry};
+    debug::setup_logging_verbose();
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.sds_command_control = Some(CfgSdsCommandControl {
+        authorized_issis: vec![1000001],
+        commands: vec![CfgSdsCommandEntry {
+            status_code: 33012,
+            action: "info".to_string(),
+        }],
+    });
+    config.brew = Some(CfgBrew {
+        host: "test.local".into(),
+        port: 3000,
+        tls: false,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_millis(50),
+        jitter_initial_latency_frames: 0,
+        feature_sds_enabled: true,
+        feature_rssi_export: false,
+        whitelisted_ssis: None,
+        pbx_gateway_issis: None,
+    });
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+    test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle]);
+    let up = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    // No telemetry sink: as on such a station.
+    let brew = tetra_entities::net_brew::entity::BrewEntity::new(test.get_shared_config(), QuietCore { up: up.clone() });
+    test.register_entity(brew);
+    // As main.rs does for a config with [brew].
+    registry().set_brew_configured(true);
+    let backhaul = || {
+        let snapshot = registry().snapshot(&HealthThresholds::default());
+        snapshot.domains.iter().find(|d| d.domain == HealthDomain::Backhaul).unwrap().level
+    };
+    let run_until = |test: &mut ComponentTest, connected: bool| {
+        let start = std::time::Instant::now();
+        while test.get_shared_config().state_read().network_connected != connected {
+            assert!(start.elapsed() < Duration::from_secs(10), "Brew never became connected={connected}");
+            test.run_stack(Some(1));
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    run_until(&mut test, true);
+    assert_eq!(backhaul(), HealthLevel::Ok);
+
+    register_subscriber(&mut test, 1000001);
+    test.submit_message(build_u_status_msg(1000001, 9999, 33012));
+    test.run_stack(Some(2));
+    let texts = sds_texts_to(&test.dump_sinks(), 1000001);
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    assert!(texts[1].ends_with(" | Brew up"), "{texts:?}");
+    assert_eq!(backhaul(), HealthLevel::Ok, "{texts:?}");
+
+    up.store(false, std::sync::atomic::Ordering::Relaxed);
+    run_until(&mut test, false);
+    assert_eq!(backhaul(), HealthLevel::Degraded);
+    // Back up, so that the worker is in its message loop and ends with the entity.
+    up.store(true, std::sync::atomic::Ordering::Relaxed);
+    run_until(&mut test, true);
+}
+
 /// FH-FEAT-014: a U-STATUS from an ISSI that is NOT in authorized_issis must not run any action —
 /// no SDS reply. Since FH-BUG-075 the status transaction itself is still acknowledged (see
 /// `test_u_status_to_9999_is_acknowledged_with_d_status`): authorization decides whether the command
