@@ -967,8 +967,25 @@ fn build_u_status_msg(src: u32, dest: u32, status: u16) -> SapMsg {
     }
 }
 
+/// Texts of the SDS-TL simple-text replies to `issi`, in the order they were sent (the 4 octets
+/// of SDS-TL header left out).
+fn sds_texts_to(msgs: &[SapMsg], issi: u32) -> Vec<String> {
+    d_sds_to(msgs, issi)
+        .into_iter()
+        .filter_map(|p| {
+            let mut sdu = p.sdu.clone();
+            sdu.seek(0);
+            match DSdsData::from_bitbuf(&mut sdu).ok()?.user_defined_data {
+                SdsUserData::Type4(_, data) => Some(String::from_utf8_lossy(data.get(4..)?).into_owned()),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 /// FH-FEAT-014: an authorized ISSI sending a U-STATUS to 9999 whose status code maps to the "ip"
-/// action gets a text-SDS reply addressed back to it.
+/// action gets a text-SDS reply addressed back to it: the LAN address and the public one, which
+/// the tests never look up (no network), so it is said to be unknown.
 #[test]
 fn test_u_status_command_ip_replies_to_authorized() {
     debug::setup_logging_verbose();
@@ -989,17 +1006,23 @@ fn test_u_status_command_ip_replies_to_authorized() {
     test.run_stack(Some(2));
 
     let after = test.dump_sinks();
-    let reply = d_sds_to(&after, 1000001);
+    let texts = sds_texts_to(&after, 1000001);
+    assert_eq!(
+        texts.len(),
+        1,
+        "authorized U-STATUS (action=ip) to 9999 must produce an SDS reply to the requester: {texts:?}"
+    );
     assert!(
-        !reply.is_empty(),
-        "authorized U-STATUS (action=ip) to 9999 must produce an SDS reply to the requester"
+        texts[0].starts_with("LAN IP ") && texts[0].ends_with(" | Public IP unknown"),
+        "{texts:?}"
     );
 }
 
-/// The "info" action answers "FlowStation v0.4.0-<hash> | IP ... | ...C": the version once, with a
-/// single "v" (STACK_VERSION carries its own).
+/// The "info" action answers in three SDS, numbered and each short enough for one SDS: the
+/// station (the version once, with a single "v": STACK_VERSION carries its own), the radio side
+/// and the host.
 #[test]
-fn test_u_status_command_info_names_the_version_once() {
+fn test_u_status_command_info_answers_in_three_parts() {
     debug::setup_logging_verbose();
     let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
     let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
@@ -1017,27 +1040,22 @@ fn test_u_status_command_info_names_the_version_once() {
     test.submit_message(build_u_status_msg(1000001, 9999, 33012));
     test.run_stack(Some(2));
 
-    let after = test.dump_sinks();
-    let texts: Vec<String> = d_sds_to(&after, 1000001)
-        .into_iter()
-        .filter_map(|p| {
-            let mut sdu = p.sdu.clone();
-            sdu.seek(0);
-            match DSdsData::from_bitbuf(&mut sdu).ok()?.user_defined_data {
-                SdsUserData::Type4(_, data) => Some(String::from_utf8_lossy(&data).into_owned()),
-                _ => None,
-            }
-        })
-        .collect();
-    let info = texts
-        .iter()
-        .find(|t| t.contains("FlowStation"))
-        .unwrap_or_else(|| panic!("an info SDS reply, got {texts:?}"));
+    let texts = sds_texts_to(&test.dump_sinks(), 1000001);
+    assert_eq!(texts.len(), 3, "{texts:?}");
     assert!(
-        info.contains(&format!("FlowStation {} | IP ", tetra_core::STACK_VERSION)),
-        "{info:?}"
+        texts[0].starts_with(&format!("1/3 FlowStation {} | Health ", tetra_core::STACK_VERSION)),
+        "{texts:?}"
     );
-    assert!(!info.contains("vv"), "{info:?}");
+    assert!(texts[0].contains(" | Up ") && texts[0].contains(" | MCC "), "{texts:?}");
+    assert!(!texts[0].contains("vv"), "{texts:?}");
+    assert!(texts[1].starts_with("2/3 Radios 1 | Calls 0 | Carriers "), "{texts:?}");
+    assert!(
+        texts[2].starts_with("3/3 LAN ") && texts[2].contains(" | Public unknown"),
+        "{texts:?}"
+    );
+    for text in &texts {
+        assert!(text.len() <= 160, "{} chars: {text}", text.len());
+    }
 }
 
 /// FH-FEAT-014: a U-STATUS from an ISSI that is NOT in authorized_issis must not run any action —

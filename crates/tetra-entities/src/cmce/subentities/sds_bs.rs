@@ -1587,9 +1587,11 @@ impl SdsBsSubentity {
                 self.pending_actions.push(SdsPendingAction::KickAll);
             }
             // ── FH-FEAT-014: query the host and reply to the requester as an SDS ──
+            // Nothing here waits: the public address is the last one a background lookup found.
             "ip" => {
-                let ip = crate::sys_telemetry::primary_ip().unwrap_or_else(|| "n/a".to_string());
-                self.send_text_sds(queue, 9999, source_ssi, &format!("Host IP: {ip}"));
+                let lan = crate::sys_telemetry::primary_ip();
+                let text = super::sds_cmd_reply::ip_text(lan.as_deref(), crate::public_ip::get());
+                self.send_text_sds(queue, 9999, source_ssi, &text);
             }
             "temp" => {
                 let temp = crate::sys_telemetry::cpu_temp_c()
@@ -1597,18 +1599,13 @@ impl SdsBsSubentity {
                     .unwrap_or_else(|| "n/a".to_string());
                 self.send_text_sds(queue, 9999, source_ssi, &format!("Host temp: {temp}"));
             }
+            // Three SDS, "1/3" to "3/3": the station, the radio side and the host. They leave in
+            // this order (the basic link sends one at a time to a radio).
             "info" => {
-                let ip = crate::sys_telemetry::primary_ip().unwrap_or_else(|| "n/a".to_string());
-                let temp = crate::sys_telemetry::cpu_temp_c()
-                    .map(|c| format!("{c:.1}C"))
-                    .unwrap_or_else(|| "n/a".to_string());
-                self.send_text_sds(
-                    queue,
-                    9999,
-                    source_ssi,
-                    // STACK_VERSION already starts with its "v".
-                    &format!("FlowStation {} | IP {} | {}", tetra_core::STACK_VERSION, ip, temp),
-                );
+                let facts = super::sds_cmd_reply::StationFacts::gather(&self.config);
+                for text in super::sds_cmd_reply::info_texts(&facts) {
+                    self.send_text_sds(queue, 9999, source_ssi, &text);
+                }
             }
             other => {
                 tracing::warn!("SDS-CMD: unknown action '{}' for status={}, ignoring", other, status_code);

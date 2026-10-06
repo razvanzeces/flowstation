@@ -368,9 +368,15 @@ voice_service = true
 #   "restart"   — restarts the FlowStation service (equivalent to systemctl restart tetra)
 #   "shutdown"  — stops the FlowStation service (a systemd unit with Restart=always starts it again)
 #   "kick_all"  — deregisters all currently registered terminals; they re-attach immediately
-#   "ip"        — replies (SDS to the requester) with the host's primary IP address
+#   "ip"        — replies (SDS to the requester) with the host's LAN IP and its public IP
 #   "temp"      — replies (SDS to the requester) with the host CPU/SoC temperature
-#   "info"      — replies (SDS to the requester) with version + IP + temperature
+#   "info"      — replies with three SDS, "1/3" to "3/3": version, health, uptimes,
+#                 MCC/MNC/LA/colour code; registered radios, calls, carriers on the air,
+#                 Brew link; LAN and public IP, CPU temperature, load, free RAM and disk
+#
+# With an "ip" or "info" command the station looks its public IP up in the background
+# (api.ipify.org, else checkip.amazonaws.com) at startup and at most every 10 minutes;
+# the reply says "unknown" until the first answer.
 #
 # The "ip"/"temp"/"info" actions answer the requesting radio with a text SDS, so the operator
 # can query a station (e.g. on a hotspot with an unknown IP) straight from the radio menu.

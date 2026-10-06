@@ -26,6 +26,7 @@ pub mod net_telemetry;
 
 pub mod backlight;
 pub mod health;
+pub mod public_ip;
 pub mod sd_watchdog;
 pub mod service_control;
 pub mod sys_telemetry;

@@ -440,6 +440,65 @@ pub fn primary_ip() -> Option<String> {
     Some(ip.to_string())
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Host facts for the SDS `info` reply: cheap reads of /proc and one statvfs
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Seconds since the host booted (`/proc/uptime`).
+pub fn host_uptime_secs() -> Option<u64> {
+    parse_uptime(&fs::read_to_string("/proc/uptime").ok()?)
+}
+
+/// Load average over 1, 5 and 15 minutes (`/proc/loadavg`).
+pub fn load_average() -> Option<[f32; 3]> {
+    parse_loadavg(&fs::read_to_string("/proc/loadavg").ok()?)
+}
+
+/// Memory available for new work and total memory, in MiB (`/proc/meminfo`).
+pub fn memory_mib() -> Option<(u64, u64)> {
+    parse_meminfo(&fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+/// Space left (for a normal user) and size, in GB, of the file system holding `path`.
+#[cfg(unix)]
+pub fn disk_gb(path: &str) -> Option<(f64, f64)> {
+    let path = std::ffi::CString::new(path).ok()?;
+    // SAFETY: a NUL-terminated path and a zeroed struct for the kernel to fill.
+    let st = unsafe {
+        let mut st: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(path.as_ptr(), &mut st) != 0 {
+            return None;
+        }
+        st
+    };
+    let unit = st.f_frsize as f64;
+    Some((st.f_bavail as f64 * unit / 1e9, st.f_blocks as f64 * unit / 1e9))
+}
+
+#[cfg(not(unix))]
+pub fn disk_gb(_path: &str) -> Option<(f64, f64)> {
+    None
+}
+
+fn parse_uptime(text: &str) -> Option<u64> {
+    let secs: f64 = text.split_whitespace().next()?.parse().ok()?;
+    Some(secs as u64)
+}
+
+fn parse_loadavg(text: &str) -> Option<[f32; 3]> {
+    let mut fields = text.split_whitespace().map(|f| f.parse::<f32>().ok());
+    Some([fields.next()??, fields.next()??, fields.next()??])
+}
+
+fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
+    let kib = |key: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(key))
+            .and_then(|rest| rest.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+    };
+    Some((kib("MemAvailable:")? / 1024, kib("MemTotal:")? / 1024))
+}
+
 fn scan_thermal_zones(out: &mut Vec<SysSensor>) {
     let Ok(dir) = fs::read_dir("/sys/class/thermal") else {
         return;
@@ -472,4 +531,25 @@ fn read_string_file(path: &Path) -> Option<String> {
 
 fn read_int_file(path: &Path) -> Option<i64> {
     read_string_file(path)?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proc_files_of_a_pi() {
+        // As read on the .75 (2 GB Raspberry Pi) on 06-10.
+        assert_eq!(parse_uptime("4043.88 15279.44\n"), Some(4043));
+        assert_eq!(parse_loadavg("0.20 0.15 0.16 2/201 14804\n"), Some([0.20, 0.15, 0.16]));
+        let meminfo = "MemTotal:        2059008 kB\nMemFree:         1488176 kB\nMemAvailable:    1702016 kB\n";
+        assert_eq!(parse_meminfo(meminfo), Some((1662, 2010)));
+        assert_eq!(parse_uptime(""), None);
+        assert_eq!(parse_loadavg("0.20 0.15"), None);
+        assert_eq!(
+            parse_meminfo("MemTotal: 2059008 kB\n"),
+            None,
+            "kernels before 3.14 lack MemAvailable"
+        );
+    }
 }

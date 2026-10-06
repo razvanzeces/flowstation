@@ -255,6 +255,17 @@ fn build_bs_stack(
     if let Some(d) = c_d.get(&TetraEntity::Cmce) {
         cmce.set_wx_cmd_sender(d.clone_sender());
     }
+    // The SDS "ip" and "info" replies give the public address: look it up now, in the background,
+    // so that the first reply has it (only when such a command is configured).
+    if cfg
+        .config()
+        .cell
+        .sds_command_control
+        .as_ref()
+        .is_some_and(|ctrl| ctrl.commands.iter().any(|c| c.action == "ip" || c.action == "info"))
+    {
+        tetra_entities::public_ip::enable();
+    }
     // Restart recovery: when enabled, seed MM from the on-disk cache and start the cold-start
     // re-registration sweep. The cache path is the configured override, else
     // `<config-dir>/recovery_cache.json` (the radioid_cache.json convention).

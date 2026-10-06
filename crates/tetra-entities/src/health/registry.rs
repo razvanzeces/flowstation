@@ -87,6 +87,10 @@ pub struct HealthRegistry {
     last_caught_panic_ms: AtomicU64,
     /// Most recent remediation action, human-readable. Written rarely (only when an action fires).
     last_action: Mutex<Option<String>>,
+    /// `[cell_info] secondary_carrier_on_demand`: each carrier other than the main one and its
+    /// last on-the-air state (the `CarrierAirChanged` code: 0 off, 1 warming up, 2 on). Written
+    /// by the UMAC only when a state changes.
+    carrier_air: Mutex<Vec<(u16, u8)>>,
 }
 
 static REGISTRY: OnceLock<HealthRegistry> = OnceLock::new();
@@ -111,6 +115,7 @@ impl HealthRegistry {
             caught_panics: AtomicU64::new(0),
             last_caught_panic_ms: AtomicU64::new(0),
             last_action: Mutex::new(None),
+            carrier_air: Mutex::new(Vec::new()),
         }
     }
 
@@ -163,6 +168,21 @@ impl HealthRegistry {
         if let Ok(mut g) = self.last_action.lock() {
             *g = Some(what);
         }
+    }
+
+    /// A carrier switched on or off on demand (see `carrier_air`). Cold path: on a change only.
+    pub fn set_carrier_air(&self, carrier: u16, state: u8) {
+        if let Ok(mut air) = self.carrier_air.lock() {
+            match air.iter_mut().find(|(c, _)| *c == carrier) {
+                Some(entry) => entry.1 = state,
+                None => air.push((carrier, state)),
+            }
+        }
+    }
+    /// The last on-the-air state of a carrier switched on demand; `None` for any other carrier.
+    pub fn carrier_air(&self, carrier: u16) -> Option<u8> {
+        let air = self.carrier_air.lock().ok()?;
+        air.iter().find(|(c, _)| *c == carrier).map(|(_, state)| *state)
     }
 
     /// Radios last reported as registered (stays 0 while telemetry is off).

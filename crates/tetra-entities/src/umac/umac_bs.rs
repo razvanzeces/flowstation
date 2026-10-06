@@ -243,7 +243,13 @@ impl UmacBs {
                 warmup_slots: u16::from(c.cell.secondary_carrier_warmup_frames) * 4,
                 grace_slots: u32::from(c.cell.secondary_carrier_inactivity_secs.max(1)) * 72,
                 grace_secs: c.cell.secondary_carrier_inactivity_secs,
-                air: others.into_iter().map(|carrier| (carrier, Air::Off)).collect(),
+                air: others
+                    .into_iter()
+                    .map(|carrier| {
+                        crate::health::registry().set_carrier_air(carrier, Air::Off.code());
+                        (carrier, Air::Off)
+                    })
+                    .collect(),
             }
         });
         Self {
@@ -364,13 +370,15 @@ impl UmacBs {
                     Air::Off
                 }
             };
-            if air.code() != was
-                && let Some(sink) = &self.telemetry
-            {
-                sink.send(TelemetryEvent::CarrierAirChanged {
-                    carrier_num: *carrier,
-                    state: air.code(),
-                });
+            if air.code() != was {
+                // For the SDS "info" reply, which has no telemetry to read.
+                crate::health::registry().set_carrier_air(*carrier, air.code());
+                if let Some(sink) = &self.telemetry {
+                    sink.send(TelemetryEvent::CarrierAirChanged {
+                        carrier_num: *carrier,
+                        state: air.code(),
+                    });
+                }
             }
             if matches!(*air, Air::Off | Air::WarmingUp { .. }) {
                 cold.push(*carrier);
