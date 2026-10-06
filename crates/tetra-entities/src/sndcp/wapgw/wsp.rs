@@ -333,6 +333,16 @@ mod tests {
                 referer: Some("http://10.0.0.1/go?u=http%3A%2F%2Ftext.npr.org%2F"),
             }
         );
+        // A weather form sent by the MXP600 (06-10, from the .75's journal): the URI, then only a
+        // Referer, the form page.
+        let madrid = [&[0x40, 0x1b][..], b"http://10.0.0.1/wx?l=Madrid", &[0xa4], b"http://10.0.0.1/wx\0"].concat();
+        assert_eq!(
+            parse_request(&madrid),
+            WspRequest::Get {
+                uri: "http://10.0.0.1/wx?l=Madrid".into(),
+                referer: Some("http://10.0.0.1/wx"),
+            }
+        );
         // Other headers before it, one with a length-prefixed value and one with a text name.
         let mut headers = vec![0x40, 0x01, b'/', 0x83, 0x02, 0x81, 0x82];
         headers.extend_from_slice(b"X-Foo\0bar\0\xa4/go?u=a\0");

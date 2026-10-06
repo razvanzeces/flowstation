@@ -2,6 +2,8 @@
 //! short notice pages used for errors and refusals.
 
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::sndcp::wap_status::{WapStatusSnapshot, compact_uptime, escape_xhtml_text};
 
@@ -40,6 +42,21 @@ pub fn percent_encode(s: &str) -> String {
         }
     }
     out
+}
+
+/// Action of the weather forms: `/wx/N`, with an N no earlier page had. The MXP600 keeps its own
+/// copy of the pages it got before they were sent no-cache, and when a form builds one of those
+/// URLs again ("/wx?l=Murcia") it shows that copy without asking the gateway: no request leaves
+/// the radio. With N in the path every submission is a URL the radio has never seen, whether or
+/// not it sends hidden fields.
+fn wx_form_action() -> String {
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    // From the clock, so a restart does not hand out old values, and never twice the same.
+    let previous = LAST
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| Some(last.max(now) + 1))
+        .unwrap_or_default();
+    format!("/wx/{}", previous.max(now) + 1)
 }
 
 /// Label of a bookmark: its host.
@@ -121,10 +138,13 @@ pub fn wx_page(result: &[String], home: &str, budget: usize) -> String {
         let lines: Vec<String> = result.iter().map(|line| escape_xhtml_text(line)).collect();
         format!("<p>{}</p>", lines.join("<br/>"))
     };
-    let forms = "<form action=\"/wx\" method=\"get\"><p>Lugar <input type=\"text\" name=\"l\" size=\"10\"/>\
+    let action = wx_form_action();
+    let forms = format!(
+        "<form action=\"{action}\" method=\"get\"><p>Lugar <input type=\"text\" name=\"l\" size=\"10\"/>\
          <input type=\"submit\" value=\"Ver\"/></p></form>\
-         <form action=\"/wx\" method=\"get\"><p>METAR <input type=\"text\" name=\"i\" size=\"4\"/>\
-         <input type=\"submit\" value=\"Ver\"/></p></form>";
+         <form action=\"{action}\" method=\"get\"><p>METAR <input type=\"text\" name=\"i\" size=\"4\"/>\
+         <input type=\"submit\" value=\"Ver\"/></p></form>"
+    );
     let link = format!("<p><a href=\"{home}\">Inicio</a></p>");
     let full = document(true, "Tiempo", Some(home), &format!("{result}{forms}{link}"));
     if full.len() <= budget {
@@ -288,6 +308,88 @@ mod tests {
         let small = wx_page(&[], "http://10.0.0.1/", 500);
         assert!(small.len() <= 500 && small.contains("name=\"l\""), "{small}");
         assert_well_formed(&small);
+    }
+
+    /// Actions of the weather forms of a page.
+    fn wx_actions(page: &str) -> Vec<String> {
+        page.split("<form action=\"")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// 06-10, MXP600 on the .75: for "Murcia" and "Alguazas" the radio opened no WTP transaction
+    /// at all (its next GET, of the home page, carried "/wx?l=Murcia" as Referer and the very next
+    /// TID): it showed its own copy of a page with that URL. Every weather form now builds a URL
+    /// that no earlier page could have produced.
+    #[test]
+    fn weather_forms_build_a_new_url_every_time() {
+        let home = "http://10.0.0.1/";
+        let first = wx_page(&[], home, 4096);
+        let second = wx_page(&["Murcia".to_string()], home, 4096);
+        let (a, b) = (wx_actions(&first), wx_actions(&second));
+        // The two forms (place and METAR) of a page go to the same "/wx/N".
+        assert_eq!(a.len(), 2, "{first}");
+        assert_eq!(a[0], a[1]);
+        assert_eq!(b.len(), 2, "{second}");
+        assert_ne!(a[0], b[0], "a new page, a new URL for the same text");
+        let n: u64 = a[0].strip_prefix("/wx/").unwrap().parse().unwrap();
+        assert!(n > 1_700_000_000, "from the clock: {}", a[0]);
+        assert!(!first.contains("type=\"hidden\""), "{first}");
+        assert_well_formed(&first);
+        // The radioid.net form is unchanged: it was never sent cacheable.
+        assert!(rid_page(None, home, 4096).contains("<form action=\"/rid\" method=\"get\">"));
+    }
+
+    const GEO_MADRID: &str = r#"{"results":[{"id":3117735,"name":"Madrid","latitude":40.4165,"longitude":-3.70256,"elevation":665.0,"feature_code":"PPLC","country_code":"ES","admin1_id":3117732,"admin2_id":6355233,"admin3_id":6359304,"timezone":"Europe/Madrid","population":3255944,"postcodes":["28706","28754"],"country_id":2510769,"country":"España","admin1":"Comunidad Autónoma de Madrid","admin2":"Provincia de Madrid","admin3":"Madrid"},{"id":6544494,"name":"Madrid Centro","latitude":40.41831,"longitude":-3.70275,"elevation":673.0,"feature_code":"PPLX","country_code":"ES","admin1_id":3117732,"admin2_id":6355233,"admin3_id":6359304,"admin4_id":11549889,"timezone":"Europe/Madrid","population":149718,"country_id":2510769,"country":"España","admin1":"Comunidad Autónoma de Madrid","admin2":"Provincia de Madrid","admin3":"Madrid","admin4":"Centro"}],"generationtime_ms":0.3234148}"#;
+    const FORECAST_MADRID: &str = r#"{"latitude":40.39599,"longitude":-3.6793447,"generationtime_ms":0.2034902572631836,"utc_offset_seconds":7200,"timezone":"Europe/Madrid","timezone_abbreviation":"GMT+2","elevation":651.0,"current_units":{"time":"iso8601","interval":"seconds","temperature_2m":"°C","relative_humidity_2m":"%","apparent_temperature":"°C","weather_code":"wmo code","wind_speed_10m":"km/h","wind_direction_10m":"°","wind_gusts_10m":"km/h"},"current":{"time":"2026-10-06T21:00","interval":900,"temperature_2m":17.0,"relative_humidity_2m":91,"apparent_temperature":18.0,"weather_code":95,"wind_speed_10m":5.6,"wind_direction_10m":153,"wind_gusts_10m":24.1},"daily_units":{"time":"iso8601","weather_code":"wmo code","temperature_2m_max":"°C","temperature_2m_min":"°C","precipitation_probability_max":"%"},"daily":{"time":["2026-10-06","2026-10-07"],"weather_code":[95,95],"temperature_2m_max":[19.8,22.0],"temperature_2m_min":[16.3,14.3],"precipitation_probability_max":[95,80]}}"#;
+    const GEO_MURCIA: &str = r#"{"results":[{"id":2513416,"name":"Murcia","latitude":37.98704,"longitude":-1.13004,"elevation":53.0,"feature_code":"PPLA","country_code":"ES","admin1_id":2513413,"admin2_id":6355234,"admin3_id":6362997,"timezone":"Europe/Madrid","population":471982,"postcodes":["30005","30010"],"country_id":2510769,"country":"España","admin1":"Región de Murcia","admin2":"Provincia de Murcia","admin3":"Murcia"},{"id":6299341,"name":"Aeropuerto de Murcia-San Javier","latitude":37.77497,"longitude":-0.81239,"elevation":3.0,"feature_code":"AIRP","country_code":"ES","admin1_id":2513413,"admin2_id":6355234,"admin3_id":6359539,"timezone":"Europe/Madrid","country_id":2510769,"country":"España","admin1":"Región de Murcia","admin2":"Provincia de Murcia","admin3":"San Javier"}],"generationtime_ms":0.23126602}"#;
+    const FORECAST_MURCIA: &str = r#"{"latitude":37.991886,"longitude":-1.1586335,"generationtime_ms":0.2796649932861328,"utc_offset_seconds":7200,"timezone":"Europe/Madrid","timezone_abbreviation":"GMT+2","elevation":46.0,"current_units":{"time":"iso8601","interval":"seconds","temperature_2m":"°C","relative_humidity_2m":"%","apparent_temperature":"°C","weather_code":"wmo code","wind_speed_10m":"km/h","wind_direction_10m":"°","wind_gusts_10m":"km/h"},"current":{"time":"2026-10-06T21:00","interval":900,"temperature_2m":24.1,"relative_humidity_2m":74,"apparent_temperature":26.9,"weather_code":3,"wind_speed_10m":4.8,"wind_direction_10m":153,"wind_gusts_10m":15.5},"daily_units":{"time":"iso8601","weather_code":"wmo code","temperature_2m_max":"°C","temperature_2m_min":"°C","precipitation_probability_max":"%"},"daily":{"time":["2026-10-06","2026-10-07"],"weather_code":[61,80],"temperature_2m_max":[28.1,28.5],"temperature_2m_min":[19.8,20.0],"precipitation_probability_max":[30,23]}}"#;
+    const GEO_ALGUAZAS: &str = r#"{"results":[{"id":2522000,"name":"Alguazas","latitude":38.05356,"longitude":-1.25051,"elevation":100.0,"feature_code":"PPLA3","country_code":"ES","admin1_id":2513413,"admin2_id":6355234,"admin3_id":6359512,"timezone":"Europe/Madrid","population":7725,"postcodes":["30560","30561"],"country_id":2510769,"country":"España","admin1":"Región de Murcia","admin2":"Provincia de Murcia","admin3":"Alguazas"}],"generationtime_ms":0.6401539}"#;
+    const FORECAST_ALGUAZAS: &str = r#"{"latitude":38.05062,"longitude":-1.2699038,"generationtime_ms":0.5398988723754883,"utc_offset_seconds":7200,"timezone":"Europe/Madrid","timezone_abbreviation":"GMT+2","elevation":101.0,"current_units":{"time":"iso8601","interval":"seconds","temperature_2m":"°C","relative_humidity_2m":"%","apparent_temperature":"°C","weather_code":"wmo code","wind_speed_10m":"km/h","wind_direction_10m":"°","wind_gusts_10m":"km/h"},"current":{"time":"2026-10-06T21:00","interval":900,"temperature_2m":23.8,"relative_humidity_2m":71,"apparent_temperature":26.1,"weather_code":3,"wind_speed_10m":5.2,"wind_direction_10m":164,"wind_gusts_10m":13.0},"daily_units":{"time":"iso8601","weather_code":"wmo code","temperature_2m_max":"°C","temperature_2m_min":"°C","precipitation_probability_max":"%"},"daily":{"time":["2026-10-06","2026-10-07"],"weather_code":[61,45],"temperature_2m_max":[26.7,28.1],"temperature_2m_min":[20.0,19.7],"precipitation_probability_max":[33,23]}}"#;
+
+    /// The three places of the field test of 06-10 (the radio showed Madrid; Murcia and Alguazas
+    /// never left it), from the real replies of that evening (postcodes cut): the same kind of
+    /// page for the three, complete, with every line, only Latin-1 text and well within two SAR
+    /// packets, like the pages the radio shows.
+    #[test]
+    fn weather_pages_of_the_field_test() {
+        use crate::net_dashboard::wx_service::{forecast_lines_es, place_from_body};
+        let home = "http://10.0.0.1/";
+        // The .75: Client-SDU 8192, minus the largest Reply header.
+        let budget = 8192 - super::super::wsp::REPLY_OVERHEAD_MAX;
+        for (asked, geo, forecast, label) in [
+            ("Madrid", GEO_MADRID, FORECAST_MADRID, "Madrid"),
+            ("Murcia", GEO_MURCIA, FORECAST_MURCIA, "Murcia"),
+            ("Alguazas", GEO_ALGUAZAS, FORECAST_ALGUAZAS, "Alguazas (Murcia)"),
+        ] {
+            let place = place_from_body(geo, asked, true, None).unwrap().unwrap();
+            assert_eq!(place.label, label);
+            let lines = forecast_lines_es(&place, forecast).unwrap();
+            assert_eq!(lines.len(), 7, "{asked}: {lines:?}");
+            let page = wx_page(&lines, home, budget);
+            assert_well_formed(&page);
+            assert!(page.starts_with(PROLOG), "{asked}: the full page");
+            assert!(page.contains(&format!("<body><p>{label}<br/>")), "{page}");
+            assert!(page.contains("(hora local)</p><form action=\"/wx/"), "{page}");
+            assert!(page.ends_with("<a href=\"http://10.0.0.1/\">Inicio</a></p></body></html>"));
+            assert!(page.len() <= HOME_MAX_BYTES, "{asked}: {} bytes", page.len());
+            assert!(page.chars().all(|c| u32::from(c) < 0x100), "{asked}: {page}");
+            assert_eq!(wx_actions(&page).len(), 2, "{page}");
+        }
+        let murcia = place_from_body(GEO_MURCIA, "Murcia", true, None).unwrap().unwrap();
+        assert_eq!(
+            forecast_lines_es(&murcia, FORECAST_MURCIA).unwrap(),
+            [
+                "Murcia",
+                "Cubierto, 24 °C",
+                "Sensación 27 °C, humedad 74 %",
+                "Viento SE 5 km/h, rachas 16 km/h",
+                "Hoy: lluvia débil, 20 a 28 °C, lluvia 30 %",
+                "Mañana: chubascos débiles, 20 a 29 °C, lluvia 23 %",
+                "Dato de las 21:00 (hora local)",
+            ]
+        );
     }
 
     #[test]

@@ -556,6 +556,64 @@ fn latin1_uri_gets_a_page_not_an_abort() {
     assert_eq!(&result(&out[0]).5[..2], &[0x04, status::BAD_REQUEST]);
 }
 
+/// A WTP Invoke (class 2, U/P) carrying a WSP Get with a Referer, byte for byte as the MXP600
+/// sends it (the .75's journal, 06-10).
+fn mxp600_get(tid: u16, uri: &str, referer: &str) -> Vec<u8> {
+    let [hi, lo] = tid.to_be_bytes();
+    let mut datagram = vec![0x0a, hi, lo, 0x12, 0x40];
+    write_uintvar(uri.len(), &mut datagram);
+    datagram.extend_from_slice(uri.as_bytes());
+    datagram.push(0xa4);
+    datagram.extend_from_slice(referer.as_bytes());
+    datagram.push(0);
+    datagram
+}
+
+/// 06-10 on the .75: the radio asked for the weather of Madrid (twice) and of LELC, but for
+/// "Murcia" and "Alguazas" it sent nothing at all and showed its own copy of "/wx?l=Murcia" and
+/// "/wx?l=Alguazas", pages it got before they were sent no-cache. The forms of every weather page
+/// now go to a "/wx/N" no earlier page had, and what the radio builds from them reaches the
+/// download pool.
+#[test]
+fn weather_forms_from_the_mxp600_build_new_urls_that_are_fetched() {
+    let t0 = Instant::now();
+    let (fetcher, budgets) = PageFetcher::boxed(40, false);
+    let mut gw = gateway_with(cfg(), fetcher);
+    // The radio's own request for the form page (TID 0x0d6b at 20:18:09).
+    let mut actions = Vec::new();
+    for tid in [0x0d6b_u16, 0x0d6e] {
+        let first = send(&mut gw, mxp600_get(tid, "http://10.0.0.1/wx", "http://10.0.0.1/"), t0);
+        let message = receive_all(&mut gw, tid, first, t0);
+        assert_eq!(&message[..2], &[0x04, status::OK]);
+        let body = String::from_utf8(message[9..].to_vec()).unwrap();
+        let action = body
+            .split("<form action=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or_else(|| panic!("a weather form: {body}"))
+            .to_string();
+        assert!(action.starts_with("/wx/"), "{action}");
+        actions.push(action);
+    }
+    assert_ne!(actions[0], actions[1], "a new URL on every page");
+    assert!(budgets.lock().unwrap().is_empty(), "the forms are local");
+    // What the radio builds from those forms goes out, the old URL too.
+    for (tid, uri) in [
+        (0x0d70_u16, format!("http://10.0.0.1{}?l=Murcia", actions[0])),
+        (0x0d71, format!("http://10.0.0.1{}?l=Alguazas", actions[1])),
+        (0x0d72, format!("http://10.0.0.1{}?i=Lelc", actions[1])),
+        (0x0d73, "http://10.0.0.1/wx?l=Madrid".to_string()),
+    ] {
+        let sent = budgets.lock().unwrap().len();
+        let first = send(&mut gw, mxp600_get(tid, &uri, "http://10.0.0.1/wx"), t0);
+        let first = if first.is_empty() { collect(gw.poll(t0)) } else { first };
+        let message = receive_all(&mut gw, tid, first, t0);
+        assert_eq!(budgets.lock().unwrap().len(), sent + 1, "{uri}: one download");
+        assert_eq!(&message[..2], &[0x04, status::OK], "{uri}");
+        assert!(message.ends_with(b"0123456789"), "{uri}: the downloaded page");
+    }
+}
+
 #[test]
 fn other_wtp_version_is_aborted() {
     let mut gw = gateway();

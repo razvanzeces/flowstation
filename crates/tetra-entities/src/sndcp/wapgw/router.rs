@@ -4,9 +4,9 @@
 //! - `/`: home page;
 //! - `/status.xhtml` (also `/status`, `/status.html`) and `/status.wml`, with `?s=N` for a
 //!   section: station status (Nexus-BS renderers);
-//! - `/go?u=URL`, `/s?q=QUERY`, `/p/...`, `/l/...`, `/wx?i=ICAO` / `/wx?l=PLACE` and
-//!   `/rid?q=CALLSIGN-OR-ID`: Internet side, only for the radios allowed to browse (`/wx` and
-//!   `/rid` alone are the local forms).
+//! - `/go?u=URL`, `/s?q=QUERY`, `/p/...`, `/l/...`, `/wx?i=ICAO` / `/wx?l=PLACE` (also under
+//!   `/wx/N`, where the weather forms go) and `/rid?q=CALLSIGN-OR-ID`: Internet side, only for
+//!   the radios allowed to browse (`/wx` and `/rid` alone are the local forms).
 //!
 //! Any other host is a page the terminal asks for through the gateway (WSP proxy): Internet side
 //! as well, with the same permission.
@@ -223,8 +223,9 @@ pub fn route(uri: &str, ctx: &RouteCtx<'_>) -> Route {
             };
             ctx.fetch(FetchTarget::Doc(doc))
         }
-        // Weather: the forms are local, the answer comes from the Internet side.
-        "/wx" => {
+        // Weather: the forms are local, the answer comes from the Internet side. The forms go to
+        // "/wx/N" (see `home::wx_page`): N only makes the URL new for the radio.
+        path if path == "/wx" || path.starts_with("/wx/") => {
             let asked = ["i", "l"]
                 .iter()
                 .any(|k| query_param(parts.query, k).is_some_and(|v| !v.trim().is_empty()));
@@ -368,6 +369,38 @@ mod tests {
         );
         assert_eq!(page(route_for("/wx", &allowed, 2, 900)).status, status::FORBIDDEN);
         assert_eq!(page(route_for("/wx?l=Madrid", &allowed, 2, 900)).status, status::FORBIDDEN);
+    }
+
+    /// The weather requests as the MXP600 sends them (06-10, decoded from the .75's journal): an
+    /// absolute URI on the gateway's address with the text as typed, to the form's "/wx" before,
+    /// to its "/wx/N" now; N takes no part in the answer.
+    #[test]
+    fn weather_requests_as_the_mxp600_sends_them() {
+        let allowed = cfg(true, &[1]);
+        for (uri, doc) in [
+            ("http://10.0.0.1/wx?l=Madrid", "/wx?l=Madrid"),
+            ("http://10.0.0.1/wx?i=Lelc", "/wx?i=Lelc"),
+            ("http://10.0.0.1/wx/1791312000?l=Murcia", "/wx?l=Murcia"),
+            ("http://10.0.0.1/wx/1791312001?l=Alguazas", "/wx?l=Alguazas"),
+            ("http://10.0.0.1/wx/1791312002?l=San+Javier", "/wx?l=San+Javier"),
+            ("http://10.0.0.1/wx/1791312003?l=A+Coru%F1a", "/wx?l=A+Coru%F1a"),
+            ("http://10.0.0.1/wx/1791312004?i=Lelc", "/wx?i=Lelc"),
+        ] {
+            assert_eq!(
+                route_for(uri, &allowed, 1, 900),
+                Route::Fetch(FetchTarget::Doc(doc.to_string())),
+                "{uri}"
+            );
+        }
+        // Nothing typed: the forms again, without going out.
+        let form = page(route_for("http://10.0.0.1/wx/1791312000?l=", &allowed, 1, 900));
+        assert_eq!(form.status, status::OK);
+        assert!(String::from_utf8(form.body).unwrap().contains("name=\"l\""));
+        // Not for the radios that may not browse.
+        assert_eq!(
+            page(route_for("http://10.0.0.1/wx/1791312000?l=Murcia", &allowed, 2, 900)).status,
+            status::FORBIDDEN
+        );
     }
 
     #[test]
