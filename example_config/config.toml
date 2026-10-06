@@ -375,8 +375,9 @@ voice_service = true
 #                 Brew link; LAN and public IP, CPU temperature, load, free RAM and disk
 #
 # With an "ip" or "info" command the station looks its public IP up in the background
-# (api.ipify.org, else checkip.amazonaws.com) at startup and at most every 10 minutes;
-# the reply says "unknown" until the first answer.
+# (api.ipify.org, else checkip.amazonaws.com) at startup and then every 10 minutes
+# (every minute while the lookups fail); the reply says "unknown" until the first answer,
+# and "(old)" after an address no lookup has confirmed for 20 minutes.
 #
 # The "ip"/"temp"/"info" actions answer the requesting radio with a text SDS, so the operator
 # can query a station (e.g. on a hotspot with an unknown IP) straight from the radio menu.

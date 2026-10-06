@@ -9,6 +9,7 @@
 
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
+use std::time::Duration;
 
 use tetra_config::bluestation::SharedConfig;
 
@@ -55,7 +56,8 @@ pub struct StationFacts {
     /// `None` without a `[brew]` section, else whether the backhaul is connected.
     pub brew: Option<bool>,
     pub lan_ip: Option<String>,
-    pub public_ip: Option<Ipv4Addr>,
+    /// The last public address found and how long ago (see `public_ip::get`).
+    pub public_ip: Option<(Ipv4Addr, Duration)>,
     pub cpu_temp_c: Option<f32>,
     pub load: Option<[f32; 3]>,
     /// Available and total, MiB.
@@ -123,13 +125,14 @@ impl StationFacts {
     }
 }
 
-fn public_text(ip: Option<Ipv4Addr>) -> String {
-    ip.map_or_else(|| "unknown".to_string(), |ip| ip.to_string())
-}
-
-/// The `ip` reply: the LAN address and the public one.
-pub fn ip_text(lan_ip: Option<&str>, public_ip: Option<Ipv4Addr>) -> String {
-    format!("LAN IP {} | Public IP {}", lan_ip.unwrap_or("n/a"), public_text(public_ip))
+/// The `ip` reply: the LAN address and the public one ("(old)" when the lookups have been
+/// failing for a while).
+pub fn ip_text(lan_ip: Option<&str>, public_ip: Option<(Ipv4Addr, Duration)>) -> String {
+    format!(
+        "LAN IP {} | Public IP {}",
+        lan_ip.unwrap_or("n/a"),
+        crate::public_ip::text(public_ip)
+    )
 }
 
 /// The `info` reply, one text per SDS: the station, the radio side, the host.
@@ -156,7 +159,7 @@ pub fn info_texts(f: &StationFacts) -> Vec<String> {
 
     let mut host = vec![
         format!("LAN {}", f.lan_ip.as_deref().unwrap_or("n/a")),
-        format!("Public {}", public_text(f.public_ip)),
+        format!("Public {}", crate::public_ip::text(f.public_ip)),
     ];
     host.extend(f.cpu_temp_c.map(|t| format!("CPU {t:.1}C")));
     host.extend(f.load.map(|[a, b, c]| format!("Load {a:.2} {b:.2} {c:.2}")));
@@ -197,7 +200,7 @@ mod tests {
             carriers: vec![(1528, Air::On), (1530, Air::On), (1533, Air::Off)],
             brew: Some(true),
             lan_ip: Some("10.33.1.75".to_string()),
-            public_ip: Some(Ipv4Addr::new(84, 127, 123, 185)),
+            public_ip: Some((Ipv4Addr::new(84, 127, 123, 185), Duration::from_secs(240))),
             cpu_temp_c: Some(47.2),
             load: Some([0.20, 0.15, 0.16]),
             memory_mib: Some((1662, 2010)),
@@ -208,8 +211,16 @@ mod tests {
     #[test]
     fn ip_reply_gives_lan_and_public() {
         assert_eq!(
-            ip_text(Some("10.33.1.75"), Some(Ipv4Addr::new(84, 127, 123, 185))),
+            ip_text(
+                Some("10.33.1.75"),
+                Some((Ipv4Addr::new(84, 127, 123, 185), Duration::from_secs(240)))
+            ),
             "LAN IP 10.33.1.75 | Public IP 84.127.123.185"
+        );
+        // Found long ago and not confirmed since (the lookups failing): said so.
+        assert_eq!(
+            ip_text(Some("10.33.1.75"), Some((Ipv4Addr::new(84, 127, 123, 185), crate::public_ip::OLD))),
+            "LAN IP 10.33.1.75 | Public IP 84.127.123.185 (old)"
         );
         // Not known yet (first lookup still running, or no Internet): said so.
         assert_eq!(ip_text(Some("10.33.1.75"), None), "LAN IP 10.33.1.75 | Public IP unknown");
@@ -269,7 +280,7 @@ mod tests {
             carriers: (0..6).map(|i| (3000 + i, Air::WarmingUp)).collect(),
             brew: Some(false),
             lan_ip: Some("192.168.100.200".to_string()),
-            public_ip: Some(Ipv4Addr::new(255, 255, 255, 255)),
+            public_ip: Some((Ipv4Addr::new(255, 255, 255, 255), Duration::MAX)),
             cpu_temp_c: Some(-12.5),
             load: Some([123.45, 100.0, 99.99]),
             memory_mib: Some((65_536, 65_536)),

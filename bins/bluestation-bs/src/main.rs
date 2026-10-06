@@ -255,8 +255,8 @@ fn build_bs_stack(
     if let Some(d) = c_d.get(&TetraEntity::Cmce) {
         cmce.set_wx_cmd_sender(d.clone_sender());
     }
-    // The SDS "ip" and "info" replies give the public address: look it up now, in the background,
-    // so that the first reply has it (only when such a command is configured).
+    // The SDS "ip" and "info" replies give the public address: look it up now and every 10
+    // minutes, in the background, so that a reply has it (only when such a command is configured).
     if cfg
         .config()
         .cell
