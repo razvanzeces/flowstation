@@ -493,6 +493,74 @@ fn fold(s: &str) -> String {
         .collect()
 }
 
+/// Spanish provinces, communities and islands whose name is not that of a town in Spain: the
+/// geocoder has no regions, so "Navarra" would be a village in Mexico and "Bizkaia" nothing.
+/// Their names (folded), the capital looked for instead and, when it is not the capital's own,
+/// the name of the region in the label of the page ("Pamplona (Navarra)").
+const REGIONS: &[(&[&str], &str, Option<&str>)] = &[
+    (&["asturias"], "Oviedo", Some("Asturias")),
+    (&["navarra", "nafarroa"], "Pamplona", Some("Navarra")),
+    (&["cantabria"], "Santander", Some("Cantabria")),
+    (&["la rioja"], "Logroño", Some("La Rioja")),
+    (&["vizcaya", "bizkaia"], "Bilbao", Some("Vizcaya")),
+    (&["guipuzcoa", "gipuzkoa"], "San Sebastián", Some("Guipúzcoa")),
+    (&["alava", "araba"], "Vitoria", Some("Álava")),
+    (&["baleares", "islas baleares", "illes balears"], "Palma", Some("Baleares")),
+    (&["tenerife"], "Santa Cruz de Tenerife", None),
+    (&["gran canaria"], "Las Palmas de Gran Canaria", None),
+    (&["gerona"], "Girona", None),
+    (&["lerida"], "Lleida", None),
+    (&["orense"], "Ourense", None),
+    (&["andalucia"], "Sevilla", Some("Andalucía")),
+    (&["aragon"], "Zaragoza", Some("Aragón")),
+    (&["canarias", "islas canarias"], "Las Palmas de Gran Canaria", Some("Canarias")),
+    (&["castilla y leon"], "Valladolid", Some("Castilla y León")),
+    (&["castilla-la mancha", "castilla la mancha"], "Toledo", Some("Castilla-La Mancha")),
+    (&["cataluna", "catalunya"], "Barcelona", Some("Cataluña")),
+    (
+        &["comunidad valenciana", "comunitat valenciana"],
+        "Valencia",
+        Some("Comunidad Valenciana"),
+    ),
+    (&["extremadura"], "Mérida", Some("Extremadura")),
+    (&["galicia"], "Santiago de Compostela", Some("Galicia")),
+    (&["pais vasco", "euskadi"], "Vitoria", Some("País Vasco")),
+];
+
+/// Words in front of a region's name that the geocoder does not know (folded).
+const REGION_PREFIXES: [&str; 6] = [
+    "provincia de",
+    "region de",
+    "comunidad de",
+    "comunidad autonoma de",
+    "comunidad foral de",
+    "principado de",
+];
+
+/// What to look the asked place up as: the name without "Provincia de", "Región de"... in front
+/// and, for a Spanish province, community or island that is not also a town ([`REGIONS`]), its
+/// capital, with the label the page then shows. Any other name as it is, with no label.
+pub fn place_query(asked: &str) -> (String, Option<String>) {
+    let asked = asked.trim();
+    let name = REGION_PREFIXES
+        .iter()
+        .find_map(|prefix| {
+            let mut rest = asked.chars();
+            let head: String = rest.by_ref().take(prefix.chars().count()).collect();
+            (fold(&head) == *prefix && rest.clone().next().is_some_and(char::is_whitespace)).then(|| rest.as_str().trim())
+        })
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(asked);
+    let folded = fold(name);
+    match REGIONS.iter().find(|(names, _, _)| names.contains(&folded.as_str())) {
+        Some((_, capital, region)) => (
+            capital.to_string(),
+            Some(region.map_or_else(|| capital.to_string(), |region| format!("{capital} ({region})"))),
+        ),
+        None => (name.to_string(), None),
+    }
+}
+
 /// The place in a geocoding reply, `None` when there is none that fits. In the Spain-only pass
 /// only towns count (feature code PPL...: otherwise "Paris" is a park in Madrid), and not a town
 /// whose name only starts like the `asked` one (the geocoder matches by prefix: otherwise "Lima"
@@ -1023,6 +1091,90 @@ mod tests {
             place_from_body(santiago, "Santiago", true, None).unwrap().unwrap().label,
             "Santiago de Compostela (La Coruña)"
         );
+    }
+
+    #[test]
+    fn a_spanish_region_is_looked_up_as_its_capital() {
+        // The geocoder of 06-10 gave these from Mexico, the Philippines, Argentina... or nothing.
+        let capital = |asked: &str| {
+            let (name, label) = place_query(asked);
+            (name, label.unwrap_or_default())
+        };
+        for (asked, name, label) in [
+            ("Asturias", "Oviedo", "Oviedo (Asturias)"),
+            ("Navarra", "Pamplona", "Pamplona (Navarra)"),
+            ("Nafarroa", "Pamplona", "Pamplona (Navarra)"),
+            ("Cantabria", "Santander", "Santander (Cantabria)"),
+            ("La Rioja", "Logroño", "Logroño (La Rioja)"),
+            ("Vizcaya", "Bilbao", "Bilbao (Vizcaya)"),
+            ("Bizkaia", "Bilbao", "Bilbao (Vizcaya)"),
+            ("Guipúzcoa", "San Sebastián", "San Sebastián (Guipúzcoa)"),
+            ("Gipuzkoa", "San Sebastián", "San Sebastián (Guipúzcoa)"),
+            ("Álava", "Vitoria", "Vitoria (Álava)"),
+            ("Araba", "Vitoria", "Vitoria (Álava)"),
+            ("Baleares", "Palma", "Palma (Baleares)"),
+            ("Islas Baleares", "Palma", "Palma (Baleares)"),
+            ("Illes Balears", "Palma", "Palma (Baleares)"),
+            ("Tenerife", "Santa Cruz de Tenerife", "Santa Cruz de Tenerife"),
+            ("Gran Canaria", "Las Palmas de Gran Canaria", "Las Palmas de Gran Canaria"),
+            ("Gerona", "Girona", "Girona"),
+            ("Lérida", "Lleida", "Lleida"),
+            ("Orense", "Ourense", "Ourense"),
+            ("Andalucía", "Sevilla", "Sevilla (Andalucía)"),
+            ("Aragón", "Zaragoza", "Zaragoza (Aragón)"),
+            ("Canarias", "Las Palmas de Gran Canaria", "Las Palmas de Gran Canaria (Canarias)"),
+            (
+                "Islas Canarias",
+                "Las Palmas de Gran Canaria",
+                "Las Palmas de Gran Canaria (Canarias)",
+            ),
+            ("Castilla y León", "Valladolid", "Valladolid (Castilla y León)"),
+            ("Castilla-La Mancha", "Toledo", "Toledo (Castilla-La Mancha)"),
+            ("Castilla La Mancha", "Toledo", "Toledo (Castilla-La Mancha)"),
+            ("Cataluña", "Barcelona", "Barcelona (Cataluña)"),
+            ("Catalunya", "Barcelona", "Barcelona (Cataluña)"),
+            ("Comunidad Valenciana", "Valencia", "Valencia (Comunidad Valenciana)"),
+            ("Comunitat Valenciana", "Valencia", "Valencia (Comunidad Valenciana)"),
+            ("Extremadura", "Mérida", "Mérida (Extremadura)"),
+            ("Galicia", "Santiago de Compostela", "Santiago de Compostela (Galicia)"),
+            ("País Vasco", "Vitoria", "Vitoria (País Vasco)"),
+            ("Euskadi", "Vitoria", "Vitoria (País Vasco)"),
+            // As typed on a radio: any case, no accents, spaces around.
+            ("  ASTURIAS ", "Oviedo", "Oviedo (Asturias)"),
+            ("alava", "Vitoria", "Vitoria (Álava)"),
+            ("guipuzcoa", "San Sebastián", "San Sebastián (Guipúzcoa)"),
+            // With the words the geocoder does not know in front.
+            ("Principado de Asturias", "Oviedo", "Oviedo (Asturias)"),
+            ("Comunidad Foral de Navarra", "Pamplona", "Pamplona (Navarra)"),
+            ("Provincia de La Rioja", "Logroño", "Logroño (La Rioja)"),
+            (
+                "Comunidad Autónoma de Canarias",
+                "Las Palmas de Gran Canaria",
+                "Las Palmas de Gran Canaria (Canarias)",
+            ),
+        ] {
+            assert_eq!(capital(asked), (name.to_string(), label.to_string()), "{asked:?}");
+        }
+    }
+
+    #[test]
+    fn a_town_or_a_province_named_as_its_capital_is_looked_up_as_it_is() {
+        for asked in ["Murcia", "Alguazas", "Madrid", "Valencia", "Alicante", "Rioja", "Palma", "Lima"] {
+            assert_eq!(place_query(asked), (asked.to_string(), None), "{asked:?}");
+        }
+        // Only the words in front go: the province is then a town.
+        for (asked, name) in [
+            ("Región de Murcia", "Murcia"),
+            ("region de murcia", "murcia"),
+            ("Comunidad de Madrid", "Madrid"),
+            ("Provincia de Alicante", "Alicante"),
+        ] {
+            assert_eq!(place_query(asked), (name.to_string(), None), "{asked:?}");
+        }
+        // Nothing after them, or a name that only starts alike: as it is.
+        for asked in ["Provincia de", "Regiones", "Provinciano"] {
+            assert_eq!(place_query(asked), (asked.to_string(), None), "{asked:?}");
+        }
     }
 
     #[test]

@@ -671,6 +671,13 @@ impl Worker {
             Some((name, hint)) => (name.trim(), Some(hint.trim())),
             None => (place, None),
         };
+        // Without a hint, a Spanish province or community the geocoder has no town for is its
+        // capital ("Navarra" is Pamplona, not a village in Mexico).
+        let (name, label) = match hint {
+            None => wx_service::place_query(name),
+            Some(_) => (name.to_string(), None),
+        };
+        let name = name.as_str();
         if name.is_empty() {
             return vec![NOT_FOUND.to_string()];
         }
@@ -692,9 +699,12 @@ impl Worker {
                 }
             }
         }
-        let Some(found) = found else {
+        let Some(mut found) = found else {
             return vec![NOT_FOUND.to_string()];
         };
+        if let Some(label) = label {
+            found.label = label;
+        }
         let body = match self.api_text(req, &wx_service::forecast_url(&found), deadline, "El servicio del tiempo") {
             Ok(body) => body,
             Err(sentence) => return vec![sentence],
