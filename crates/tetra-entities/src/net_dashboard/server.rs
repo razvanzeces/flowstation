@@ -2778,7 +2778,9 @@ fn handle_ws_command(
             // Encode text for SDS-TL TRANSFER:
             //   - If all characters are in ISO-8859-1 range → coding scheme 0x01 (LATIN), 1 byte/char
             //   - Otherwise → coding scheme 0x02 (UTF-16BE), 2 bytes/char (handles CJK, Arabic, etc.)
-            // First byte of payload is the text coding scheme identifier per ETSI EN 300 392-2.
+            // The scheme goes in the SDS-TL header field (see rx_sds_from_control) — it must NOT
+            // be prepended to the payload, or terminals display it as a leading control
+            // character (#55).
             let all_latin = msg_text.chars().all(|c| c as u32 <= 0xFF);
             let (coding_scheme, text_bytes): (u8, Vec<u8>) = if all_latin {
                 let bytes: Vec<u8> = msg_text.chars().map(|c| c as u8).collect();
@@ -2788,8 +2790,7 @@ fn handle_ws_command(
                 let bytes: Vec<u8> = msg_text.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
                 (0x02, bytes)
             };
-            let mut payload = vec![coding_scheme];
-            payload.extend_from_slice(&text_bytes);
+            let payload = text_bytes;
             let len_bits = (payload.len() * 8) as u16;
 
             send_cmd(ControlCommand::SendSds {
@@ -2799,6 +2800,7 @@ fn handle_ws_command(
                 dest_is_group: false,
                 len_bits,
                 payload,
+                text_coding_scheme: coding_scheme,
             });
             let mut s = state.write().unwrap();
             s.push_log("INFO", format!("SDS sent to {}: {}", dest, msg_text));

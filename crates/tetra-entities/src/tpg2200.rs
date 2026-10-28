@@ -75,8 +75,10 @@ pub fn build_tpg2200_callout_payload(incident: u16, message: &str) -> Vec<u8> {
 }
 
 /// Build the bare text payload expected by `ControlCommand::SendSds`. CMCE wraps this in the
-/// SDS-TL header and message reference before sending it over RF.
-pub fn build_sds_text_payload(text: &str) -> (u16, Vec<u8>) {
+/// SDS-TL header and message reference before sending it over RF. The returned coding scheme
+/// goes in the header's Text Coding Scheme field — it must NOT be prepended to the payload,
+/// or terminals display it as a leading control character (#55).
+pub fn build_sds_text_payload(text: &str) -> (u16, Vec<u8>, u8) {
     let all_latin = text.chars().all(|c| c as u32 <= 0xFF);
     let (coding_scheme, text_bytes): (u8, Vec<u8>) = if all_latin {
         let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
@@ -85,9 +87,7 @@ pub fn build_sds_text_payload(text: &str) -> (u16, Vec<u8>) {
         let bytes: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
         (0x02, bytes)
     };
-    let mut payload = vec![coding_scheme];
-    payload.extend_from_slice(&text_bytes);
-    ((payload.len() * 8) as u16, payload)
+    ((text_bytes.len() * 8) as u16, text_bytes, coding_scheme)
 }
 
 #[cfg(test)]
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn sds_text_payload_selects_latin_or_utf16() {
-        assert_eq!(build_sds_text_payload("abc"), (32, vec![0x01, b'a', b'b', b'c']));
-        assert_eq!(build_sds_text_payload("日"), (24, vec![0x02, 0x65, 0xE5]));
+        assert_eq!(build_sds_text_payload("abc"), (24, vec![b'a', b'b', b'c'], 0x01));
+        assert_eq!(build_sds_text_payload("日"), (16, vec![0x65, 0xE5], 0x02));
     }
 }

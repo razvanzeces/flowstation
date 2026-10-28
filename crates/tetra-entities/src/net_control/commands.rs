@@ -8,6 +8,13 @@
 use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
+/// Default SDS-TL Text Coding Scheme for `SendSds` (0x01 = ISO-8859-1/LATIN).
+/// Keeps older control clients that omit the field decoding: they keep the
+/// previous header behaviour.
+fn default_sds_text_coding_scheme() -> u8 {
+    0x01
+}
+
 /// Command received from the remote command server.
 #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
 pub enum ControlCommand {
@@ -19,6 +26,12 @@ pub enum ControlCommand {
         dest_is_group: bool,
         len_bits: u16,
         payload: Vec<u8>,
+        /// SDS-TL Text Coding Scheme for the simple-text header
+        /// (0x01 = ISO-8859-1/LATIN, 0x02 = UTF-16BE). The payload itself
+        /// is bare text: the scheme byte must NOT be prepended to it, or
+        /// terminals display it as a leading control character (#55).
+        #[serde(default = "default_sds_text_coding_scheme")]
+        text_coding_scheme: u8,
     },
 
     /// Send an already-built SDS Type-4 payload for local delivery.

@@ -227,6 +227,8 @@ fn parse_sendsds(args: &str) -> Option<ControlCommand> {
         dest_is_group,
         len_bits,
         payload,
+        // Operator-supplied hex is treated as LATIN text, as before.
+        text_coding_scheme: 0x01,
     })
 }
 

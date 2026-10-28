@@ -425,7 +425,7 @@ impl DapnetWorker {
             return Err("CMCE control sender unavailable".to_string());
         };
         let text = format_plain_message(&msg.callsign, &msg.text);
-        let (len_bits, payload) = build_sds_text_payload(&text);
+        let (len_bits, payload, text_coding_scheme) = build_sds_text_payload(&text);
         tracing::debug!(
             "DAPNET: SDS route id={} {} dest={} group={}",
             msg.id,
@@ -440,6 +440,7 @@ impl DapnetWorker {
             dest_is_group,
             len_bits,
             payload,
+            text_coding_scheme,
         })
         .map_err(|e| format!("send to CMCE failed: {}", e))
     }

@@ -367,7 +367,7 @@ impl GeoAlarmWorker {
             return Err("CMCE control sender unavailable".to_string());
         };
         let text = prefixed_text("GeoAlarm:", body);
-        let (len_bits, payload) = build_sds_text_payload(&text);
+        let (len_bits, payload, text_coding_scheme) = build_sds_text_payload(&text);
         tx.send(ControlCommand::SendSds {
             handle: 0,
             source_ssi: geoalarm.sds_source_issi,
@@ -375,6 +375,7 @@ impl GeoAlarmWorker {
             dest_is_group: geoalarm.sds_dest_is_group,
             len_bits,
             payload,
+            text_coding_scheme,
         })
         .map_err(|e| format!("send to CMCE failed: {}", e))
     }

@@ -533,6 +533,7 @@ impl SdsBsSubentity {
             dest_is_group,
             len_bits,
             payload,
+            text_coding_scheme,
         } = message
         else {
             tracing::error!("SDS: rx_sds_from_control expected SendSds command, got unexpected command type");
@@ -556,7 +557,10 @@ impl SdsBsSubentity {
         //   Byte 0: 0x82  — Protocol Identifier (SDS-TL text messaging)
         //   Byte 1: 0x04  — Message Type (Simple Text, cu TL-ACK request)
         //   Byte 2: MR    — Message Reference (1..255, incrementat)
-        //   Byte 3: 0x01  — Encoding (ISO-8859-1 / ASCII)
+        //   Byte 3: Text Coding Scheme — from the SendSds command (0x01 =
+        //             ISO-8859-1/LATIN, 0x02 = UTF-16BE). It lives HERE, in
+        //             the header: senders must send bare text, never prepend
+        //             the scheme byte to the payload (#55).
         //   Bytes 4+: text payload
         static SDS_MR: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
         let mr = {
@@ -569,7 +573,7 @@ impl SdsBsSubentity {
             }
         };
         let wrapped_payload: Vec<u8> = {
-            let mut v = vec![0x82u8, 0x04u8, mr, 0x01u8];
+            let mut v = vec![0x82u8, 0x04u8, mr, text_coding_scheme];
             v.extend_from_slice(&payload);
             v
         };
@@ -1100,6 +1104,8 @@ impl SdsBsSubentity {
             dest_is_group: false,
             len_bits,
             payload,
+            // Bare ASCII/LATIN text — same as the header's previous hardcode.
+            text_coding_scheme: 0x01,
         };
         if tx.send(cmd).is_err() {
             tracing::warn!("WX: failed to enqueue reply to ISSI {}", dest_issi);
@@ -1148,6 +1154,8 @@ impl SdsBsSubentity {
                     dest_is_group: is_group,
                     len_bits,
                     payload,
+                    // Bare ASCII/LATIN text — same as the header's previous hardcode.
+                    text_coding_scheme: 0x01,
                 };
                 let _ = tx.send(cmd);
             })
