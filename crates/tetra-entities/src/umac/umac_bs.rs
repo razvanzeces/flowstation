@@ -367,6 +367,19 @@ impl UmacBs {
         }
     }
 
+    /// The timeslot a channel allocation assigns as a packet data channel, if it is one. A traffic
+    /// allocation always carries a usage marker; the one SNDCP attaches to an SN-DATA TRANSMIT
+    /// RESPONSE has none, replaces the current channel and names a slot on the main carrier.
+    fn pdch_timeslot(&self, chan_alloc: &CmceChanAllocReq) -> Option<u8> {
+        if chan_alloc.usage.is_some() || chan_alloc.alloc_type != ChanAllocType::Replace {
+            return None;
+        }
+        if chan_alloc.carrier.is_some_and(|c| c != self.main_carrier()) {
+            return None;
+        }
+        chan_alloc.timeslots.iter().position(|&set| set).map(|i| i as u8 + 1)
+    }
+
     fn validate_chan_alloc(&self, chan_alloc: &CmceChanAllocReq, carrier_num: u16) -> bool {
         if chan_alloc.alloc_type == ChanAllocType::ReplaceWithCarrierSignalling {
             tracing::warn!(
@@ -1721,7 +1734,26 @@ impl UmacBs {
         }
 
         let encryption_mode = self.dl_encryption_mode(prim.main_address);
-        if let Some(chan_alloc) = &prim.chan_alloc {
+        // Packet data: SNDCP moves an MS to a packet data channel with an allocation that carries no
+        // usage marker. Any other allocation sent to that MS (SNDCP's end-of-data QuitAndGo, or a
+        // traffic channel for a call) takes it off again.
+        let pdch_ts = prim.chan_alloc.as_ref().and_then(|ca| self.pdch_timeslot(ca));
+        let leaves_pdch = pdch_ts.is_none() && prim.chan_alloc.is_some() && prim.main_address.ssi_type != SsiType::Gssi;
+        if let Some(ts) = pdch_ts {
+            // If a call holds the slot, withhold the move rather than send the MS into traffic: it
+            // stays where it is and asks again.
+            if !self.channel_scheduler.pdch_available(ts) {
+                tracing::info!(
+                    "rx_ul_tma_unitdata_req: packet data channel on ts {} unavailable for {}, withholding allocation",
+                    ts,
+                    prim.main_address
+                );
+                if let Some(tx_reporter) = prim.tx_reporter {
+                    tx_reporter.mark_discarded();
+                }
+                return;
+            }
+        } else if let Some(chan_alloc) = &prim.chan_alloc {
             self.note_traffic_encryption(chan_alloc, encryption_mode != 0);
         }
         let (usage_marker, mac_chan_alloc) = if let Some(chan_alloc) = prim.chan_alloc {
@@ -1760,6 +1792,14 @@ impl UmacBs {
         // and drops D-CONNECT/D-SETUP for cross-carrier calls.
         self.channel_scheduler
             .dl_enqueue_tma_for_link(prim.link_id, pdu, sdu, prim.tx_reporter);
+
+        // The allocation itself was queued on the channel the MS is on now. From here on the MS is
+        // on (or off) the packet data channel, and the scheduler routes and advertises accordingly.
+        if let Some(ts) = pdch_ts {
+            self.channel_scheduler.pdch_join(ts, prim.main_address.ssi);
+        } else if leaves_pdch {
+            self.channel_scheduler.pdch_leave(prim.main_address.ssi);
+        }
     }
 
     fn rx_tma_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
