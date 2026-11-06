@@ -100,6 +100,24 @@ error; read the message on the dashboard Config page.)
 Confirm the browser homepage host/port exactly match `address`/`port`, and that
 the radio has an active packet-data (PDP) context.
 
+**The page loads only sometimes, or stops when a call starts**
+Packet data uses timeslot 4 of the main carrier while a radio is browsing, and
+voice always has priority: a call that needs that slot (the third simultaneous
+call on the carrier) ends the data session, and a radio cannot start one while
+the slot carries a call. The radio retries by itself once the slot is free.
+
+## How it uses the air interface
+
+- A radio asks for packet data on the control channel and is moved to the packet
+  data channel on **timeslot 4**. The other traffic slots stay free for voice,
+  which is allocated from timeslot 2 upwards.
+- While it is there, calls and text messages addressed to that radio are sent
+  to it on the packet data channel, so it does not miss them. Group calls are
+  announced on the main control channel only; the radio picks them up when it
+  returns, at most about 10 seconds after its last page request.
+- A radio that moves to another cell of a multi-cell station mid-session carries
+  on there without activating a new context.
+
 See also: [install-and-setup.md](install-and-setup.md).
 
 ---

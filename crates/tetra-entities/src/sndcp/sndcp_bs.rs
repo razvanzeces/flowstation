@@ -25,6 +25,7 @@ const SN_PDU_DATA: u8 = 5;
 const SN_PDU_DATA_TRANSMIT_REQUEST: u8 = 6;
 const SN_PDU_DATA_TRANSMIT_RESPONSE: u64 = 7;
 const SN_PDU_END_OF_DATA: u8 = 8;
+const SN_PDU_RECONNECT: u8 = 9;
 
 // WAP gateway endpoint defaults (spec §3). Overridable from `[cell_info.wap_ip]` once configured.
 const WAP_DEFAULT_ADDRESS: [u8; 4] = [10, 0, 0, 1];
@@ -34,9 +35,11 @@ const WAP_DEFAULT_RESPONSE_TTL: u8 = 32;
 /// header; `serve_wsp_path` clamps further to the Openwave browser caps.
 const WAP_WSP_STATUS_MAX_BYTES: usize = 541;
 
-// PDCH timeslot policy (spec §5.3): a single SCCH/PDCH on TS2, releasing clears every slot. TS1
-// (the MCCH) is never assigned.
-const SNDCP_PDCH_SINGLE_ASSIGNED_SCCH_TIMESLOT: [bool; 4] = [false, true, false, false];
+// PDCH timeslot policy (spec §5.3): a single SCCH/PDCH, releasing clears every slot. TS1 (the MCCH)
+// is never assigned. The PDCH sits on TS4 because voice circuits are handed out first-fit from TS2
+// upwards and always win a slot from packet data: on the last slot the two only meet once the cell
+// is full. The MS follows whichever slot the allocation names.
+const SNDCP_PDCH_SINGLE_ASSIGNED_SCCH_TIMESLOT: [bool; 4] = [false, false, false, true];
 const SNDCP_PDCH_RELEASE_TIMESLOTS: [bool; 4] = [false, false, false, false];
 
 // SN-ACTIVATE PDP CONTEXT ACCEPT mandatory field values (clause 28.4.5.*).
@@ -258,7 +261,7 @@ impl Sndcp {
     }
 
     /// Grant (or release) the packet-data channel: emit an SN-DATA TRANSMIT RESPONSE and attach the
-    /// PDCH channel allocation. A new/refresh grant assigns TS2; an end-of-data release quits the
+    /// PDCH channel allocation. A new/refresh grant assigns the PDCH slot; an end-of-data release quits the
     /// channel back to common control (spec §5.3).
     fn send_pdch_grant(&self, queue: &mut MessageQueue, ind: &LtpdMleUnitdataInd, alloc: CmceChanAllocReq, label: &str) {
         if !self.wap_enabled() {
@@ -374,12 +377,12 @@ fn normalize_pdch_timeslots_to_single(ts: [bool; 4]) -> [bool; 4] {
 }
 
 /// The timeslots assigned for a resource request. The MS's own resource request is ignored; the BS
-/// always assigns the single SCCH/PDCH timeslot on TS2 (spec §5.3).
+/// always assigns the single SCCH/PDCH timeslot (spec §5.3).
 fn assigned_scch_pdch_timeslots_for_resource_request() -> [bool; 4] {
     SNDCP_PDCH_SINGLE_ASSIGNED_SCCH_TIMESLOT
 }
 
-/// Channel allocation for an SN-DATA TRANSMIT RESPONSE: assign the PDCH on TS2, replacing any
+/// Channel allocation for an SN-DATA TRANSMIT RESPONSE: assign the PDCH slot, replacing any
 /// existing allocation, bidirectional (spec §5.3).
 fn pdch_allocation_for_data_transmit_response() -> CmceChanAllocReq {
     CmceChanAllocReq {
@@ -503,7 +506,13 @@ impl TetraEntityTrait for Sndcp {
         match sn_type {
             Some(t) if t == SN_PDU_ACTIVATE_PDP_CONTEXT as u8 => self.send_pdp_accept(queue, ind, pdu),
             Some(SN_PDU_DATA_TRANSMIT_REQUEST) => {
-                self.send_pdch_grant(queue, ind, pdch_allocation_for_data_transmit_response(), "assign PDCH TS2");
+                self.send_pdch_grant(queue, ind, pdch_allocation_for_data_transmit_response(), "assign PDCH");
+            }
+            Some(SN_PDU_RECONNECT) => {
+                // The MS changed cell with data outstanding and asks to carry on here (clause
+                // 28.3.4). Contexts are not tied to a cell, so the answer is the same as for a
+                // fresh transmit request: accept and assign this cell's PDCH.
+                self.send_pdch_grant(queue, ind, pdch_allocation_for_data_transmit_response(), "reconnect, assign PDCH");
             }
             Some(SN_PDU_END_OF_DATA) => {
                 self.send_pdch_grant(queue, ind, pdch_allocation_for_end_of_data(), "release PDCH");
@@ -576,9 +585,9 @@ mod tests {
     // ---- §5.3 PDCH channel allocation ----
 
     #[test]
-    fn pdch_grant_assigns_single_ts2_slot() {
+    fn pdch_grant_assigns_single_slot_clear_of_voice() {
         let a = pdch_allocation_for_data_transmit_response();
-        assert_eq!(a.timeslots, [false, true, false, false]); // TS2 only
+        assert_eq!(a.timeslots, [false, false, false, true]); // TS4 only: the last slot voice takes
         assert_eq!(a.alloc_type, ChanAllocType::Replace);
         assert_eq!(a.ul_dl_assigned, UlDlAssignment::Both);
         assert!(a.usage.is_none() && a.carrier.is_none());

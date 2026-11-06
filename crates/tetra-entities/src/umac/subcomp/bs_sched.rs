@@ -49,6 +49,23 @@ pub const TCH_S_CAP: usize = 274;
 /// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
 pub const NUM_TIMESLOTS: usize = 4;
 
+/// How long an MS is taken to be on a packet data channel after it was last heard there, in TDMA
+/// frames (~56.67 ms each): 12 s. It must outlast the SNDCP READY timer handed to the MS (10 s),
+/// because until that timer expires the MS stays on the channel and expects it to remain assigned.
+pub const PDCH_HOLD_FRAMES: u32 = 212;
+
+/// For this long after an MS is sent to a packet data channel (~1 s), an uplink from it elsewhere
+/// is taken to be a transmission that crossed with the allocation, not proof that it has left.
+const PDCH_MOVE_GRACE_FRAMES: u32 = 18;
+
+/// An MS that SNDCP has moved to a packet data channel (PDCH).
+#[derive(Debug, Clone, Copy)]
+struct PdchMs {
+    ssi: u32,
+    ts: u8,
+    frames_left: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CarrierDownlinkMode {
     PrimaryMcch,
@@ -140,6 +157,12 @@ pub struct BsChannelScheduler {
     /// allocation is sent, cleared when the circuit closes).
     tch_encrypted: [bool; 4],
 
+    /// The MSs currently on a packet data channel. A PDCH is an assigned control channel with no
+    /// circuit behind it, so nothing else tells the scheduler the slot is in use: while an MS is
+    /// listed here its slot is advertised as assigned control in the AACH, and everything addressed
+    /// to that MS goes out there instead of on the MCCH, which it is no longer listening to.
+    pdch_ms: Vec<PdchMs>,
+
     /// Per-timeslot rotating cursor for allocating usage markers to multi-slot
     /// uplink reservations. Wraps in the valid range [4, 62] (0 = unallocated,
     /// 1-3 reserved, 63 = common linearisation; per ETSI TS 100 392-2 §23.5.1).
@@ -217,6 +240,7 @@ impl BsChannelScheduler {
             mcch_chan_alloc_sent_this_frame: false,
             cipher: None,
             tch_encrypted: [false; 4],
+            pdch_ms: Vec::new(),
             // Start each timeslot's marker cursor at 4 (first valid value).
             next_usage_marker: [4, 4, 4, 4],
         }
@@ -260,6 +284,84 @@ impl BsChannelScheduler {
 
     pub fn allow_common_control_aach(&self) -> bool {
         self.downlink_mode.allow_common_control_aach()
+    }
+
+    /// True if the timeslot can serve as a packet data channel right now: never TS1 (the MCCH),
+    /// never on a carrier without an MCCH, and never a slot that carries a circuit.
+    pub fn pdch_available(&self, ts: u8) -> bool {
+        (2..=4).contains(&ts)
+            && self.allow_mcch()
+            && !self.circuits.is_active(Direction::Dl, self.carrier_num, ts)
+            && !self.circuits.is_active(Direction::Ul, self.carrier_num, ts)
+    }
+
+    /// Record that an MS has been sent to the packet data channel on `ts`, or restart its hold.
+    pub fn pdch_join(&mut self, ts: u8, ssi: u32) {
+        if !(2..=4).contains(&ts) {
+            tracing::warn!("BsChannelScheduler::pdch_join: invalid ts {}", ts);
+            return;
+        }
+        self.pdch_ms.retain(|m| m.ssi != ssi);
+        self.pdch_ms.push(PdchMs {
+            ssi,
+            ts,
+            frames_left: PDCH_HOLD_FRAMES,
+        });
+        tracing::info!("BsChannelScheduler: ISSI {} on packet data channel ts {}", ssi, ts);
+    }
+
+    /// Record that an MS has left its packet data channel.
+    pub fn pdch_leave(&mut self, ssi: u32) {
+        let before = self.pdch_ms.len();
+        self.pdch_ms.retain(|m| m.ssi != ssi);
+        if self.pdch_ms.len() != before {
+            tracing::info!("BsChannelScheduler: ISSI {} left its packet data channel", ssi);
+        }
+    }
+
+    /// The packet data channel timeslot an MS is on, if any.
+    pub fn pdch_of(&self, ssi: u32) -> Option<u8> {
+        self.pdch_ms.iter().find(|m| m.ssi == ssi).map(|m| m.ts)
+    }
+
+    /// True while at least one MS is on a packet data channel on this timeslot.
+    pub fn is_pdch(&self, ts: u8) -> bool {
+        self.pdch_ms.iter().any(|m| m.ts == ts)
+    }
+
+    /// An uplink transmission from `ssi` was received on `ts`. Hearing an MS on its packet data
+    /// channel restarts its hold; hearing it anywhere else means it has gone back to common control.
+    fn pdch_note_uplink(&mut self, ts: u8, ssi: u32) {
+        match self.pdch_of(ssi) {
+            Some(pdch_ts) if pdch_ts == ts => {
+                if let Some(m) = self.pdch_ms.iter_mut().find(|m| m.ssi == ssi) {
+                    m.frames_left = PDCH_HOLD_FRAMES;
+                }
+            }
+            Some(_) => {
+                let settled = self
+                    .pdch_ms
+                    .iter()
+                    .any(|m| m.ssi == ssi && m.frames_left + PDCH_MOVE_GRACE_FRAMES <= PDCH_HOLD_FRAMES);
+                if settled {
+                    self.pdch_leave(ssi);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Age the packet data channel holds by one frame, dropping MSs that have gone quiet.
+    fn pdch_age_one_frame(&mut self) {
+        for m in self.pdch_ms.iter_mut() {
+            m.frames_left = m.frames_left.saturating_sub(1);
+        }
+        self.pdch_ms.retain(|m| {
+            if m.frames_left == 0 {
+                tracing::info!("BsChannelScheduler: ISSI {} packet data channel ts {} lapsed (idle)", m.ssi, m.ts);
+            }
+            m.frames_left > 0
+        });
     }
 
     /// Enter/leave hangtime for an assigned traffic timeslot.
@@ -682,6 +784,7 @@ impl BsChannelScheduler {
             addr,
             usage_marker
         );
+        self.pdch_note_uplink(ts, addr.ssi);
         let elem = DlSchedElem::Grant(addr, grant, usage_marker);
         self.dltx_queues[ts as usize - 1].push(elem);
     }
@@ -701,6 +804,7 @@ impl BsChannelScheduler {
             ts,
             addr
         );
+        self.pdch_note_uplink(ts, addr.ssi);
         let elem = DlSchedElem::RandomAccessAck(addr);
         self.dltx_queues[ts as usize - 1].push(elem);
     }
@@ -710,6 +814,14 @@ impl BsChannelScheduler {
             tracing::warn!("identify_timeslots_for_ssi: MAC-RESOURCE has no address, dropping");
             return [0, 0, 0, 0];
         };
+
+        // An MS on a packet data channel is not listening to the MCCH: everything addressed to it
+        // individually goes out on that channel, whichever link the request names.
+        if addr.ssi_type != SsiType::Gssi
+            && let Some(pdch_ts) = self.pdch_of(addr.ssi)
+        {
+            return [pdch_ts, 0, 0, 0];
+        }
 
         if addr.ssi_type == SsiType::Gssi || link_id == 0 {
             if self.allow_mcch() {
@@ -950,9 +1062,12 @@ impl BsChannelScheduler {
             );
             return;
         }
-        // New/updated circuit implies traffic mode.
+        // New/updated circuit implies traffic mode. Voice also takes the slot from packet data: the
+        // AACH then carries the call's usage marker, which sends an MS on the PDCH back to the MCCH.
         if (1..=4).contains(&circuit.ts) {
             self.hangtime[circuit.ts as usize - 1] = false;
+            let ts = circuit.ts;
+            self.pdch_ms.retain(|m| m.ts != ts);
         }
         self.circuits.create_circuit(dir, circuit);
     }
@@ -1423,6 +1538,10 @@ impl BsChannelScheduler {
         if self.cur_dltime.add_timeslots(MACSCHED_TX_AHEAD as i32).t == 1 && self.allow_mcch() {
             self.mcch_chan_alloc_sent_this_frame = false;
         }
+        // TS1 comes round once per frame: age the packet data channel holds.
+        if self.cur_dltime.add_timeslots(MACSCHED_TX_AHEAD as i32).t == 1 && !self.pdch_ms.is_empty() {
+            self.pdch_age_one_frame();
+        }
 
         // We finalize a FUTURE slot: cur_ts plus some number of timeslots
         let ts = self.cur_dltime.add_timeslots(MACSCHED_TX_AHEAD as i32);
@@ -1704,8 +1823,11 @@ impl BsChannelScheduler {
                     // The timeslot may still be in traffic mode (for STCH delivery) but
                     // the AACH reflects the new channel state.
                     let in_hangtime = (2..=4).contains(&ts.t) && self.hangtime[ts.t as usize - 1];
+                    // Packet data channel: an assigned control channel with no circuit behind it.
+                    // A circuit on the slot always takes precedence.
+                    let is_pdch = self.is_pdch(ts.t) && dl_traffic_usage.is_none() && ul_traffic_usage.is_none();
 
-                    if in_hangtime && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
+                    if is_pdch || (in_hangtime && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some())) {
                         aach.dl_usage = AccessAssignDlUsage::AssignedControl;
                         // AssignedOnly (Header 2) allows random access for MSs on
                         // the assigned channel while blocking common control MSs.
@@ -2509,5 +2631,126 @@ mod tests {
         sched.dump_dl_queue();
 
         assert!(sched.dltx_queues[ts.t as usize - 1].len() == 1);
+    }
+
+    // ---- Packet data channel (PDCH) ----
+
+    const PDCH_MS: TetraAddress = TetraAddress {
+        ssi_type: SsiType::Issi,
+        ssi: 2200699,
+    };
+
+    /// The AACH the scheduler emits for timeslot `ts` of the frame after the given multiframe time.
+    fn aach_for_ts(sched: &mut BsChannelScheduler, ts: u8) -> AccessAssign {
+        // The scheduler finalizes one slot ahead of the downlink time.
+        let prev = if ts == 1 { 4 } else { ts - 1 };
+        sched.set_dl_time(TdmaTime { t: prev, f: 2, m: 1, h: 0 });
+        let slot = sched.finalize_ts_for_tick();
+        assert_eq!(slot.ts.t, ts);
+        let mut bbk = slot.bbk.expect("bbk").mac_block;
+        AccessAssign::from_bitbuf(&mut bbk).expect("AACH should parse")
+    }
+
+    #[test]
+    fn test_pdch_slot_is_advertised_as_assigned_control() {
+        let mut sched = get_testing_slotter();
+
+        let idle = aach_for_ts(&mut sched, 4);
+        assert_eq!(idle.dl_usage, AccessAssignDlUsage::Unallocated);
+        assert_eq!(idle.ul_usage, AccessAssignUlUsage::Unallocated);
+
+        sched.pdch_join(4, PDCH_MS.ssi);
+        let pdch = aach_for_ts(&mut sched, 4);
+        assert_eq!(pdch.dl_usage, AccessAssignDlUsage::AssignedControl, "the MS must see its channel as assigned");
+        assert_eq!(pdch.ul_usage, AccessAssignUlUsage::AssignedOnly, "the MS must be able to random-access on it");
+
+        let other = aach_for_ts(&mut sched, 3);
+        assert_eq!(other.dl_usage, AccessAssignDlUsage::Unallocated, "only the PDCH slot changes");
+    }
+
+    #[test]
+    fn test_signalling_follows_an_ms_onto_its_pdch() {
+        let mut sched = get_testing_slotter();
+        let pdu = || BsChannelScheduler::dl_make_minimal_resource(&PDCH_MS, None, false);
+
+        // Not on a PDCH: linkless signalling goes out on the MCCH.
+        sched.dl_enqueue_tma_for_link(0, pdu(), BitBuffer::new(0), None);
+        assert_eq!(sched.dltx_queues[0].len(), 1);
+
+        // On the PDCH: the same request, and one naming the MCCH link, both go to TS4.
+        sched.pdch_join(4, PDCH_MS.ssi);
+        sched.dl_enqueue_tma_for_link(0, pdu(), BitBuffer::new(0), None);
+        sched.dl_enqueue_tma_for_link(1, pdu(), BitBuffer::new(0), None);
+        assert_eq!(sched.dltx_queues[0].len(), 1, "nothing more on the MCCH");
+        assert_eq!(sched.dltx_queues[3].len(), 2);
+
+        // Another MS is unaffected.
+        let other = TetraAddress {
+            ssi_type: SsiType::Issi,
+            ssi: 2200700,
+        };
+        sched.dl_enqueue_tma_for_link(0, BsChannelScheduler::dl_make_minimal_resource(&other, None, false), BitBuffer::new(0), None);
+        assert_eq!(sched.dltx_queues[0].len(), 2);
+
+        // Group signalling stays on the MCCH.
+        let group = TetraAddress {
+            ssi_type: SsiType::Gssi,
+            ssi: PDCH_MS.ssi,
+        };
+        sched.dl_enqueue_tma_for_link(0, BsChannelScheduler::dl_make_minimal_resource(&group, None, false), BitBuffer::new(0), None);
+        assert_eq!(sched.dltx_queues[0].len(), 3);
+    }
+
+    #[test]
+    fn test_pdch_lapses_when_the_ms_goes_quiet_and_uplink_keeps_it() {
+        let mut sched = get_testing_slotter();
+        sched.pdch_join(4, PDCH_MS.ssi);
+
+        for _ in 0..PDCH_HOLD_FRAMES - 1 {
+            sched.pdch_age_one_frame();
+        }
+        assert_eq!(sched.pdch_of(PDCH_MS.ssi), Some(4), "still held one frame before the limit");
+
+        // Heard on the PDCH: the hold starts again.
+        sched.dl_enqueue_random_access_ack(4, PDCH_MS);
+        for _ in 0..PDCH_HOLD_FRAMES - 1 {
+            sched.pdch_age_one_frame();
+        }
+        assert_eq!(sched.pdch_of(PDCH_MS.ssi), Some(4));
+
+        sched.pdch_age_one_frame();
+        assert_eq!(sched.pdch_of(PDCH_MS.ssi), None, "lapsed after a full hold with no uplink");
+        assert!(!sched.is_pdch(4));
+    }
+
+    #[test]
+    fn test_ms_heard_on_the_mcch_has_left_its_pdch() {
+        let mut sched = get_testing_slotter();
+        sched.pdch_join(4, PDCH_MS.ssi);
+
+        // Straight after the move, an MCCH uplink is one that crossed with the allocation.
+        sched.dl_enqueue_random_access_ack(1, PDCH_MS);
+        assert_eq!(sched.pdch_of(PDCH_MS.ssi), Some(4));
+
+        for _ in 0..PDCH_MOVE_GRACE_FRAMES {
+            sched.pdch_age_one_frame();
+        }
+        sched.dl_enqueue_random_access_ack(1, PDCH_MS);
+        assert_eq!(sched.pdch_of(PDCH_MS.ssi), None, "once settled, an MCCH uplink means it went back");
+    }
+
+    #[test]
+    fn test_voice_takes_the_slot_from_packet_data() {
+        let mut sched = get_testing_slotter();
+        assert!(sched.pdch_available(4));
+        assert!(!sched.pdch_available(1), "the MCCH is never a PDCH");
+
+        sched.pdch_join(4, PDCH_MS.ssi);
+        sched.create_circuit(Direction::Dl, test_circuit(Direction::Dl, 4));
+
+        assert_eq!(sched.pdch_of(PDCH_MS.ssi), None, "the call pre-empts the PDCH");
+        assert!(!sched.pdch_available(4), "and no MS is sent there while the call lasts");
+        let aach = aach_for_ts(&mut sched, 4);
+        assert_eq!(aach.dl_usage, AccessAssignDlUsage::Traffic(4));
     }
 }

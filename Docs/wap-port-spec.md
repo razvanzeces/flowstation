@@ -289,6 +289,16 @@ Attached for **SN-DATA TRANSMIT RESPONSE** (not the UNITDATA status path), built
 
 `assigned_scch_pdch_timeslots_for_resource_request` **ignores the MS's resource request** and always returns `[F,T,F,F]` (`pdch.rs:883-885`); `normalize_pdch_timeslots_to_single` collapses any multi-slot policy to one slot (prefers first set slot at idx>0). TS1 (MCCH) never assigned. `active_circuit_mode_service && !parallel_voice_data_permitted` ⇒ `CircuitModeConflict`.
 
+**FlowStation deviation — the PDCH is on TS4, not TS2.** The reference assigns `[F,T,F,F]`. FlowStation assigns `[F,F,F,T]`: its voice circuits are handed out first-fit from TS2 upwards and always take a slot from packet data, so on TS2 the first call would end every data session, and no session could start while a call was up. On the last slot the two only meet when the cell is full. The MS follows whichever slot the allocation names; everything else in this section is unchanged.
+
+**What the MAC must do for the PDCH (not covered by the reference vectors).** A PDCH is an assigned control channel with no circuit behind it, so the scheduler has to be told the slot is in use:
+
+- **AACH.** While an MS is on the PDCH the slot is advertised as DL *assigned control* / UL *assigned only* with an access field, so the MS can stay and random-access there. Advertised as unallocated, the MS can neither transmit nor keep the channel.
+- **Downlink routing.** An MS on the PDCH is not listening to the MCCH. Everything addressed to it individually — the WAP response, LLC acknowledgements, and any call set-up or SDS that arrives meanwhile — goes out on the PDCH slot. The allocation itself goes out on the channel the MS is on when it asks.
+- **Lifetime.** The MS is taken to be on the PDCH from the allocation until it is heard on the MCCH again, an end-of-data release is sent, or 12 s pass without hearing it there (the 10 s READY timer plus margin).
+- **Voice wins.** A circuit opened on the slot ends packet data on it at once, and no MS is sent to a slot that carries a circuit: the allocation is withheld and the MS asks again.
+- **Cell change.** **SN-RECONNECT** (SN type 9) is answered like a transmit request, with an accepting SN-DATA TRANSMIT RESPONSE and this cell's PDCH. Contexts are not tied to a cell, so a session carries on after reselection or handover.
+
 ---
 
 ## 6. Enablement
