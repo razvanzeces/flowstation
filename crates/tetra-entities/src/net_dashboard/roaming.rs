@@ -135,6 +135,46 @@ fn apply_networks(table: &mut Table, list: &JsonValue) -> Result<(), String> {
                 }
             }
         }
+        if let Some(b) = n.get("brew").filter(|b| !b.is_null()) {
+            apply_network_brew(entry, b, &name)?;
+        }
+    }
+    Ok(())
+}
+
+/// A network's own Brew server from the page (`"brew": {"host", "port", "tls", "username",
+/// "password"}`) as `[networks.<name>.brew]`. Keys the page does not edit stay as they are; an
+/// empty password keeps the saved one.
+fn apply_network_brew(entry: &mut Table, b: &JsonValue, name: &str) -> Result<(), String> {
+    let what = format!("networks.{name}.brew");
+    if entry.contains_key("via") {
+        return Err(format!("networks.{name}: give either its own Brew server or via, not both"));
+    }
+    let obj = b.as_object().ok_or_else(|| format!("{what} must be an object"))?;
+    let host = obj.get("host").and_then(|v| v.as_str()).map(str::trim).unwrap_or_default();
+    if host.is_empty() || host.contains(char::is_whitespace) {
+        return Err(format!("{what}.host: a host name or address is required"));
+    }
+    let port = match obj.get("port") {
+        None | Some(JsonValue::Null) => 443,
+        Some(v) => int_in(v, &format!("{what}.port"), 1, 65535)?,
+    };
+    let tls = match obj.get("tls") {
+        None | Some(JsonValue::Null) => true,
+        Some(v) => v.as_bool().ok_or_else(|| format!("{what}.tls must be true or false"))?,
+    };
+    let username = int_in(obj.get("username").unwrap_or(&JsonValue::Null), &format!("{what}.username"), 0, u32::MAX as i64)?;
+    let password = obj.get("password").and_then(|v| v.as_str()).unwrap_or_default();
+    let brew = table_mut(entry, "brew")?;
+    if password.is_empty() && !brew.get("password").is_some_and(|p| p.is_str()) {
+        return Err(format!("{what}.password is required"));
+    }
+    brew.insert("host".into(), TomlValue::String(host.to_string()));
+    brew.insert("port".into(), TomlValue::Integer(port));
+    brew.insert("tls".into(), TomlValue::Boolean(tls));
+    brew.insert("username".into(), TomlValue::Integer(username));
+    if !password.is_empty() {
+        brew.insert("password".into(), TomlValue::String(password.to_string()));
     }
     Ok(())
 }
@@ -368,9 +408,9 @@ fn server_check(
 ///
 /// Body: `{"reselect": {4 × dB}, "rxlev_access_min_dbm": N|null, "migration": bool,
 /// "presence_check_secs": N, "cells": [{"id": N, "location_area": N|null, "neighbours": [..]|null}]}`.
-/// `"networks": [{"name": s, "mcc": N, "mnc": N, "via": s|null, "remove": bool}]` adds, changes
-/// or removes networks (`[networks.<name>]`; a network's own `[brew]` is kept and edited in the
-/// file), and a cell's `"network": s` binds it (cell 0: the root `network` key). The first
+/// `"networks": [{"name": s, "mcc": N, "mnc": N, "via": s|null, "brew": {..}|null, "remove": bool}]`
+/// adds, changes or removes networks (`[networks.<name>]`; `brew` = the network's own Brew server:
+/// host, port, tls, username, password, an empty password keeps the saved one), and a cell's `"network": s` binds it (cell 0: the root `network` key). The first
 /// network added to a classic config turns it into `[networks]`: `[net_info]` and `[brew]` become
 /// the network `home`. `"multi_network_enabled": bool` sets `[multi_network] enabled` (the switch
 /// on the Networks card), leaving the rest of the section as it is.
@@ -771,6 +811,42 @@ main_carrier = 1525
             json!({"cells": [{"id": 1, "network": "nowhere"}]}),
             json!({"networks": [{"name": "tp", "mcc": 901, "mnc": 1638, "via": "nowhere"}]}),
             json!({"networks": [{"name": "tp", "mcc": 901, "mnc": 9999}], "cells": [{"id": 1, "network": "tp"}]}),
+        ] {
+            assert!(apply_roaming(BASE, &bad).is_err(), "{bad}");
+        }
+    }
+
+    /// A network with its own Brew server (PR #38's `[networks.<name>.brew]`) can be added on
+    /// the page too; an empty password on a later save keeps the saved one.
+    #[test]
+    fn a_network_with_its_own_brew_server_is_added() {
+        let brew = json!({"host": "core.example.org", "port": 443, "tls": true, "username": 1000002, "password": "pw"});
+        let body = json!({
+            "networks": [{"name": "lab", "mcc": 901, "mnc": 1234, "via": null, "brew": brew}],
+            "cells": [{"id": 0, "network": "default"}, {"id": 1, "network": "lab"}],
+        });
+        let text = apply_roaming(BASE, &body).unwrap();
+        let cfg = parsing::from_toml_str(&text).unwrap();
+        let lab = cfg.network("lab").unwrap();
+        let b = lab.brew.as_ref().expect("own brew link");
+        assert_eq!((b.host.as_str(), b.port, b.tls, lab.via.as_deref()), ("core.example.org", 443, true, None));
+        assert_eq!(b.username.as_deref(), Some("1000002"));
+        assert_eq!(cfg.network("home").unwrap().brew.as_ref().unwrap().host, "brew.example", "home keeps its link");
+        let f = write(&text);
+        let v = roaming_json(f.str(), None).unwrap();
+        assert_eq!(v["networks"].as_array().unwrap().iter().find(|n| n["name"] == "lab").unwrap()["mode"], "core");
+
+        // Changed again with an empty password: the saved one stays.
+        let again = json!({"networks": [{"name": "lab", "mcc": 901, "mnc": 1234, "brew": {"host": "core2.example.org", "port": 3000, "tls": false, "username": 1000002, "password": ""}}]});
+        let text = apply_roaming(&text, &again).unwrap();
+        assert!(text.contains("core2.example.org") && text.contains("password = \"pw\""), "{text}");
+
+        for bad in [
+            json!({"networks": [{"name": "lab", "mcc": 901, "mnc": 1234, "via": "home", "brew": brew}]}),
+            json!({"networks": [{"name": "lab", "mcc": 901, "mnc": 1234, "brew": {"host": "", "username": 1, "password": "x"}}]}),
+            json!({"networks": [{"name": "lab", "mcc": 901, "mnc": 1234, "brew": {"host": "h", "port": 0, "username": 1, "password": "x"}}]}),
+            json!({"networks": [{"name": "lab", "mcc": 901, "mnc": 1234, "brew": {"host": "h", "username": 1, "password": ""}}]}),
+            json!({"networks": [{"name": "lab", "mcc": 901, "mnc": 1234, "brew": {"host": "h", "password": "x"}}]}),
         ] {
             assert!(apply_roaming(BASE, &bad).is_err(), "{bad}");
         }
