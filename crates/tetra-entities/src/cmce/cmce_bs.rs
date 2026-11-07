@@ -234,6 +234,7 @@ impl TetraEntityTrait for CmceBs {
         self.cc.publish_active_call_ts();
         self.sds.tick_start(queue, ts);
         self.sds.tick_periodic_wx();
+        self.sds.tick_periodic_aprs_wx();
 
         // Process incoming control commands, if the main control link is enabled (request/response).
         if let Some(cep) = &self.control {
