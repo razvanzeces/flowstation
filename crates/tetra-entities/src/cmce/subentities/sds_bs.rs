@@ -130,6 +130,8 @@ pub struct SdsBsSubentity {
     wx_cmd_tx: Option<crossbeam_channel::Sender<ControlCommand>>,
     /// Monotonic timestamp of the last periodic WX auto-send, to rate-limit the broadcast.
     last_periodic_wx: Option<std::time::Instant>,
+    /// Monotonic timestamp of the last periodic APRS-weather auto-send (`[aprs_wx]`).
+    last_periodic_aprs_wx: Option<std::time::Instant>,
     /// Active status-based emergency sessions, keyed by source ISSI. Populated when a radio sends
     /// an emergency status (U-STATUS pre-coded status Emergency); refreshed on re-sends; removed on
     /// a non-Emergency status, clear-timeout (tick), or operator clear. Non-empty means at least one
@@ -154,6 +156,7 @@ impl SdsBsSubentity {
             last_dltime: TdmaTime::default(),
             wx_cmd_tx: None,
             last_periodic_wx: None,
+            last_periodic_aprs_wx: None,
             emergency_sessions: std::collections::HashMap::new(),
             recent_commands: std::collections::HashMap::new(),
         }
@@ -1225,7 +1228,7 @@ impl SdsBsSubentity {
         };
         let service_issi = self.config.effective_wx_service().service_issi;
 
-        // Only two commands exist: METAR (aviationweather) and WX (wttr.in). Anything else is
+        // Commands: METAR (aviationweather), WX (wttr.in) and APRSWX (aprs.fi). Anything else is
         // not a command and gets no reply. Both do blocking network I/O, so each runs on a
         // worker thread and re-injects its reply via the control channel.
         let Some(request) = wx_service::parse_wx_request(&text) else {
@@ -1236,6 +1239,8 @@ impl SdsBsSubentity {
             );
             return;
         };
+
+        let aprs = self.config.config().aprs_wx.clone();
 
         std::thread::Builder::new()
             .name("wx-fetch".into())
@@ -1257,6 +1262,28 @@ impl SdsBsSubentity {
                             format!("{loc}: unavailable")
                         }
                     },
+                    WxRequest::Aprs(call) => {
+                        let call = if call.is_empty() { aprs.default_call.clone() } else { call };
+                        if call.is_empty() {
+                            "APRSWX: usage APRSWX <CALL>, e.g. APRSWX DN9CHO-13".to_string()
+                        } else if !aprs.has_apikey() {
+                            tracing::warn!("WX: APRS request for {} but [aprs_wx].apikey is not set", call);
+                            format!("{call}: APRS WX not configured")
+                        } else {
+                            match wx_service::fetch_aprs_wx(&call, &aprs.apikey.val, aprs.max_age_secs) {
+                                Ok(decoded) if !decoded.is_empty() => decoded,
+                                Ok(_) => format!("{call}: no WX data"),
+                                Err(e) => {
+                                    tracing::warn!("WX: aprs.fi fetch {} failed: {}", call, e);
+                                    if e == "no WX data" {
+                                        format!("{call}: no WX data")
+                                    } else {
+                                        format!("{call}: unavailable")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 };
                 Self::queue_wx_reply(&tx, service_issi, requester_issi, &reply);
             })
@@ -1325,6 +1352,71 @@ impl SdsBsSubentity {
                 let reply = match wx_service::fetch_metar_decoded(&icao) {
                     Ok(d) if !d.is_empty() => d,
                     _ => return, // skip this cycle on failure; try again next interval
+                };
+                let payload: Vec<u8> = reply.bytes().take(220).collect();
+                let len_bits = (payload.len() * 8) as u16;
+                let cmd = ControlCommand::SendSds {
+                    handle: 0,
+                    source_ssi: source_issi,
+                    dest_ssi: dest,
+                    dest_is_group: is_group,
+                    len_bits,
+                    payload,
+                };
+                let _ = tx.send(cmd);
+            })
+            .ok();
+    }
+
+    /// Called every tick. When `[aprs_wx].periodic_enabled` is set and the interval has elapsed,
+    /// fetch the configured APRS station's weather from aprs.fi and send it to `periodic_dest`
+    /// (source = WX service ISSI). Independent of the METAR periodic send.
+    pub fn tick_periodic_aprs_wx(&mut self) {
+        let cfg = self.config.config();
+        let aprs = &cfg.aprs_wx;
+        if !aprs.periodic_enabled || aprs.periodic_dest == 0 || !aprs.has_apikey() {
+            return;
+        }
+        let call = aprs.effective_periodic_call();
+        if call.is_empty() {
+            return;
+        }
+        let interval = std::time::Duration::from_secs(aprs.effective_interval_secs());
+        let due = match self.last_periodic_aprs_wx {
+            None => true,
+            Some(t) => t.elapsed() >= interval,
+        };
+        if !due {
+            return;
+        }
+        self.last_periodic_aprs_wx = Some(std::time::Instant::now());
+
+        // Multi-cell: same rule as the METAR periodic — group targets are served by every cell,
+        // an ISSI target only by the cell it is registered on.
+        if cfg.is_multi_cell() && !aprs.periodic_is_group && !self.config.state_read().subscribers.is_registered(aprs.periodic_dest) {
+            return;
+        }
+
+        let Some(tx) = self.wx_cmd_tx.clone() else {
+            return;
+        };
+        let dest = aprs.periodic_dest;
+        let is_group = aprs.periodic_is_group;
+        let apikey = aprs.apikey.val.clone();
+        let max_age = aprs.max_age_secs;
+        let source_issi = self.config.effective_wx_service().service_issi;
+
+        std::thread::Builder::new()
+            .name("aprs-wx-periodic".into())
+            .spawn(move || {
+                use crate::net_dashboard::wx_service;
+                let reply = match wx_service::fetch_aprs_wx(&call, &apikey, max_age) {
+                    Ok(d) if !d.is_empty() => d,
+                    Ok(_) => return,
+                    Err(e) => {
+                        tracing::warn!("WX: periodic aprs.fi fetch {} failed: {}", call, e);
+                        return; // skip this cycle; try again next interval
+                    }
                 };
                 let payload: Vec<u8> = reply.bytes().take(220).collect();
                 let len_bits = (payload.len() * 8) as u16;

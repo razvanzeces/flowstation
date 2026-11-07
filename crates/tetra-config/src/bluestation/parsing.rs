@@ -10,6 +10,7 @@ use crate::bluestation::sec_cell::{CfgNeighborCellCa, SdsCommandControlDto};
 use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
 
 use super::config::{StackConfig, StackMode};
+use super::sec_aprs_wx::{CfgAprsWxDto, apply_aprs_wx_patch};
 use super::sec_asterisk::{CfgAsteriskDto, apply_asterisk_patch};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
 use super::sec_cells::parse_extra_cells;
@@ -272,6 +273,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         control: None,
         security: apply_security_patch(root.security.unwrap_or_default())?,
         wx_service: apply_wx_service_patch(root.wx_service.unwrap_or_default()),
+        aprs_wx: apply_aprs_wx_patch(root.aprs_wx.unwrap_or_default()),
         recovery: apply_recovery_patch(root.recovery.unwrap_or_default()),
         telegram: None,
         health: apply_health_patch(root.health.unwrap_or_default()),
@@ -413,6 +415,8 @@ struct TomlConfigRoot {
     security: Option<CfgSecurityDto>,
     #[serde(rename = "wx_service")]
     wx_service: Option<CfgWxServiceDto>,
+    #[serde(rename = "aprs_wx")]
+    aprs_wx: Option<CfgAprsWxDto>,
     recovery: Option<CfgRecoveryDto>,
     #[serde(rename = "telegram_alerts")]
     telegram_alerts: Option<CfgTelegramDto>,
@@ -870,6 +874,40 @@ alert_critical_logs = false
         // … while unspecified toggles default to on.
         assert!(tg.alert_disconnect);
         assert!(tg.is_deliverable());
+    }
+
+    #[test]
+    fn aprs_wx_section_parses() {
+        let toml = minimal_toml("")
+            + r#"
+[aprs_wx]
+apikey = " 123456.abcdef "
+default_call = "dn9cho-13"
+periodic_enabled = true
+periodic_dest = 1001
+periodic_interval_secs = 60
+"#;
+        let cfg = from_toml_str(&toml).expect("aprs_wx must parse");
+        let a = cfg.aprs_wx;
+        assert!(a.has_apikey());
+        assert_eq!(a.apikey.val, "123456.abcdef");
+        assert_eq!(a.default_call, "DN9CHO-13");
+        assert_eq!(a.effective_periodic_call(), "DN9CHO-13");
+        assert_eq!(a.max_age_secs, 3600);
+        assert_eq!(a.effective_interval_secs(), 300);
+    }
+
+    #[test]
+    fn aprs_wx_absent_is_disabled() {
+        let cfg = from_toml_str(&minimal_toml("")).expect("parse");
+        assert!(!cfg.aprs_wx.has_apikey());
+        assert!(!cfg.aprs_wx.periodic_enabled);
+    }
+
+    #[test]
+    fn aprs_wx_unknown_field_rejected() {
+        let toml = minimal_toml("") + "\n[aprs_wx]\napi_key = \"x\"\n";
+        assert!(from_toml_str(&toml).is_err(), "should reject unknown aprs_wx field");
     }
 
     #[test]

@@ -250,13 +250,16 @@ pub fn decode_metar(raw: &str) -> String {
     parts.join(" | ")
 }
 
-/// A recognised weather request. Only two commands exist: METAR (aviationweather, by ICAO)
-/// and WX (wttr.in, by free-text location). Anything else is not a command and gets no reply.
+/// A recognised weather request: METAR (aviationweather, by ICAO), WX (wttr.in, by free-text
+/// location) and APRSWX (aprs.fi weather station, by callsign). Anything else gets no reply.
 pub enum WxRequest {
     /// `METAR <ICAO>` — decoded aviationweather METAR for the station.
     Metar(String),
     /// `WX <location>` — wttr.in current conditions for the location.
     Wx(String),
+    /// `APRSWX <CALL>` — latest aprs.fi weather report of an APRS station. An empty string
+    /// means a bare `APRSWX`; the caller substitutes `[aprs_wx].default_call`.
+    Aprs(String),
 }
 
 /// Parse an SDS text payload into a weather request. Recognises exactly two commands,
@@ -269,6 +272,19 @@ pub fn parse_wx_request(text: &str) -> Option<WxRequest> {
         let icao = sanitize_icao(rest);
         if icao.len() >= 3 {
             return Some(WxRequest::Metar(icao));
+        }
+        return None;
+    }
+    if trimmed.eq_ignore_ascii_case("APRSWX") {
+        return Some(WxRequest::Aprs(String::new()));
+    }
+    if let Some(rest) = strip_prefix_ci(trimmed, "APRSWX ") {
+        let call = sanitize_callsign(rest);
+        if call.is_empty() {
+            return Some(WxRequest::Aprs(String::new()));
+        }
+        if call.len() >= 3 {
+            return Some(WxRequest::Aprs(call));
         }
         return None;
     }
@@ -331,6 +347,168 @@ pub fn fetch_wx(location: &str) -> Result<String, String> {
     Ok(format!(
         "WX {loc}: {condition} Temp: {temp}C Feels: {feels}C Hum: {humidity}% Wind: {wind}. A TetraFlow Project."
     ))
+}
+
+// ───────────────────────────── APRS weather (aprs.fi) ─────────────────────────────
+
+const APRSFI_API: &str = "https://api.aprs.fi/api/get";
+/// aprs.fi asks API clients to identify themselves with a descriptive User-Agent.
+const APRSFI_USER_AGENT: &str = "FlowStation-APRS-WX (+https://github.com/Aitorrio/bost-flowstation)";
+
+/// Uppercase an APRS callsign/object name and keep only the characters aprs.fi accepts
+/// in a station name (letters, digits, '-'), max 9 chars (e.g. "dn9cho-13" -> "DN9CHO-13").
+pub fn sanitize_callsign(s: &str) -> String {
+    s.split_whitespace()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(9)
+        .collect::<String>()
+        .to_uppercase()
+}
+
+/// Fetch the latest weather report of an APRS station from aprs.fi and format it as a
+/// compact, ASCII-only, SDS-safe line. `max_age_secs` > 0 marks older reports with "OLD".
+/// Blocking HTTP; always call from a worker thread.
+pub fn fetch_aprs_wx(call: &str, apikey: &str, max_age_secs: u64) -> Result<String, String> {
+    let call = sanitize_callsign(call);
+    if call.is_empty() {
+        return Err("empty callsign".to_string());
+    }
+    if apikey.trim().is_empty() {
+        return Err("no aprs.fi API key configured".to_string());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent(APRSFI_USER_AGENT)
+        .build()
+        .map_err(|e| format!("client build failed: {e}"))?;
+    let resp: serde_json::Value = client
+        .get(APRSFI_API)
+        .query(&[
+            ("name", call.as_str()),
+            ("what", "wx"),
+            ("apikey", apikey.trim()),
+            ("format", "json"),
+        ])
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("request failed: {}", e.without_url()))?
+        .json()
+        .map_err(|e| format!("bad JSON: {e}"))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    format_aprs_wx(&call, &resp, now, max_age_secs)
+}
+
+/// Turn an aprs.fi `what=wx` response into the SDS line. Pure function (unit-tested).
+///
+/// aprs.fi units: temp °C, pressure mbar(=hPa), humidity %, wind_direction °, wind_speed and
+/// wind_gust m/s, rain_1h/rain_24h/rain_mn mm, luminosity W/m². All values arrive as strings.
+/// Output example:
+/// `DN9CHO-13 14:05Z | 12.3C | 78% | 1016.4hPa | Wind SW 11km/h gust 25 | Rain 1h 0.2 today 3.1mm`
+pub fn format_aprs_wx(call: &str, resp: &serde_json::Value, now_unix: i64, max_age_secs: u64) -> Result<String, String> {
+    if resp.get("result").and_then(|v| v.as_str()) != Some("ok") {
+        let desc = resp.get("description").and_then(|v| v.as_str()).unwrap_or("aprs.fi error");
+        return Err(desc.to_string());
+    }
+    let entry = resp
+        .get("entries")
+        .and_then(|e| e.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| "no WX data".to_string())?;
+
+    // aprs.fi returns numbers as strings; accept real numbers too.
+    let num = |k: &str| -> Option<f64> {
+        let v = entry.get(k)?;
+        match v {
+            serde_json::Value::Number(n) => n.as_f64(),
+            serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+    };
+
+    let name = entry
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| call.to_string());
+    let mut parts: Vec<String> = Vec::new();
+
+    let mut head = name;
+    if let Some(ts) = num("time").map(|t| t as i64) {
+        let secs = ts.rem_euclid(86_400);
+        head.push_str(&format!(" {:02}:{:02}Z", secs / 3600, (secs % 3600) / 60));
+        if max_age_secs > 0 && now_unix > 0 && now_unix - ts > max_age_secs as i64 {
+            head.push_str(" OLD");
+        }
+    }
+    parts.push(head);
+
+    if let Some(t) = num("temp") {
+        parts.push(format!("{t:.1}C"));
+    }
+    if let Some(h) = num("humidity") {
+        parts.push(format!("{h:.0}%"));
+    }
+    if let Some(p) = num("pressure") {
+        parts.push(format!("{p:.1}hPa"));
+    }
+    if let Some(ws) = num("wind_speed") {
+        let kmh = ws * 3.6;
+        let mut w = if kmh < 0.5 {
+            "Wind calm".to_string()
+        } else {
+            match num("wind_direction") {
+                Some(d) => format!("Wind {} {:.0}km/h", compass16(d), kmh),
+                None => format!("Wind {:.0}km/h", kmh),
+            }
+        };
+        if let Some(g) = num("wind_gust") {
+            let gk = g * 3.6;
+            if gk >= 0.5 && gk > kmh {
+                w.push_str(&format!(" gust {gk:.0}"));
+            }
+        }
+        parts.push(w);
+    }
+    let r1 = num("rain_1h");
+    let rmn = num("rain_mn");
+    let r24 = num("rain_24h");
+    if r1.is_some() || rmn.is_some() || r24.is_some() {
+        let mut r = String::from("Rain");
+        if let Some(v) = r1 {
+            r.push_str(&format!(" 1h {v:.1}"));
+        }
+        if let Some(v) = rmn {
+            r.push_str(&format!(" today {v:.1}"));
+        } else if let Some(v) = r24 {
+            r.push_str(&format!(" 24h {v:.1}"));
+        }
+        r.push_str("mm");
+        parts.push(r);
+    }
+    if let Some(l) = num("luminosity") {
+        parts.push(format!("Sun {l:.0}W/m2"));
+    }
+
+    if parts.len() == 1 {
+        return Err("no WX data".to_string());
+    }
+    Ok(ascii_only(&parts.join(" | ")))
+}
+
+/// Wind direction in degrees -> 16-point compass (N, NNE, NE, ...).
+fn compass16(deg: f64) -> &'static str {
+    const P: [&str; 16] = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+    ];
+    let idx = ((deg.rem_euclid(360.0) / 22.5) + 0.5).floor() as usize % 16;
+    P[idx]
 }
 
 /// Keep only digits and sign from a temperature string, e.g. "+18°C" -> "+18".
@@ -476,6 +654,61 @@ mod tests {
     fn request_wx_prefix() {
         assert!(matches!(parse_wx_request("WX Bucharest"), Some(WxRequest::Wx(ref s)) if s == "Bucharest"));
         assert!(matches!(parse_wx_request("wx Cluj Napoca"), Some(WxRequest::Wx(ref s)) if s == "Cluj Napoca"));
+    }
+
+    #[test]
+    fn request_aprs() {
+        assert!(matches!(parse_wx_request("APRSWX DN9CHO-13"), Some(WxRequest::Aprs(ref s)) if s == "DN9CHO-13"));
+        assert!(matches!(parse_wx_request("aprswx dn9cho-13 bitte"), Some(WxRequest::Aprs(ref s)) if s == "DN9CHO-13"));
+        assert!(matches!(parse_wx_request("AprsWx"), Some(WxRequest::Aprs(ref s)) if s.is_empty()));
+        assert!(matches!(parse_wx_request(" APRSWX "), Some(WxRequest::Aprs(ref s)) if s.is_empty()));
+        assert!(parse_wx_request("APRSWX AB").is_none());
+        // Plain "APRS" stays free (e.g. for a future position query) and is not a WX command.
+        assert!(parse_wx_request("APRS").is_none());
+        assert!(parse_wx_request("APRS DN9CHO-13").is_none());
+        assert!(parse_wx_request("APRSWXX").is_none());
+    }
+
+    #[test]
+    fn aprs_format_full() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"command":"get","result":"ok","found":1,"what":"wx","entries":[{"name":"DN9CHO-13","time":"1762524300",
+            "temp":"12.3","pressure":"1016.4","humidity":"78","wind_direction":"225","wind_speed":"3.1","wind_gust":"6.9",
+            "rain_1h":"0.2","rain_24h":"4.0","rain_mn":"3.1","luminosity":"120"}]}"#,
+        )
+        .unwrap();
+        let out = format_aprs_wx("DN9CHO-13", &v, 1762524300 + 60, 3600).unwrap();
+        assert_eq!(
+            out,
+            "DN9CHO-13 14:05Z | 12.3C | 78% | 1016.4hPa | Wind SW 11km/h gust 25 | Rain 1h 0.2 today 3.1mm | Sun 120W/m2"
+        );
+        assert!(out.len() <= 220);
+    }
+
+    #[test]
+    fn aprs_format_partial_old_calm() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"result":"ok","entries":[{"name":"DL0ABC-13","time":"1000","temp":"-2.5","wind_speed":"0","wind_direction":"0"}]}"#,
+        )
+        .unwrap();
+        let out = format_aprs_wx("DL0ABC-13", &v, 1000 + 7200, 3600).unwrap();
+        assert_eq!(out, "DL0ABC-13 00:16Z OLD | -2.5C | Wind calm");
+    }
+
+    #[test]
+    fn aprs_format_errors() {
+        let fail: serde_json::Value = serde_json::from_str(r#"{"result":"fail","description":"authentication failed"}"#).unwrap();
+        assert_eq!(format_aprs_wx("X", &fail, 0, 0).unwrap_err(), "authentication failed");
+        let empty: serde_json::Value = serde_json::from_str(r#"{"result":"ok","found":0,"entries":[]}"#).unwrap();
+        assert!(format_aprs_wx("X", &empty, 0, 0).is_err());
+    }
+
+    #[test]
+    fn compass() {
+        assert_eq!(compass16(0.0), "N");
+        assert_eq!(compass16(359.0), "N");
+        assert_eq!(compass16(225.0), "SW");
+        assert_eq!(compass16(100.0), "E");
     }
 
     #[test]

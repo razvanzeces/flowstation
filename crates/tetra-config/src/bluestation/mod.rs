@@ -61,6 +61,9 @@ pub use sec_security::*;
 pub mod sec_wx;
 pub use sec_wx::*;
 
+pub mod sec_aprs_wx;
+pub use sec_aprs_wx::*;
+
 pub mod sec_telegram;
 pub use sec_telegram::*;
 

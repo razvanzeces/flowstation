@@ -574,6 +574,27 @@ voice_service = true
 
 ###############################################################################
 
+# OPTIONAL: APRS weather station via aprs.fi (extension of the WX service above)
+#
+# Radios send an SDS "APRSWX <CALL>" (e.g. "APRSWX DN9CHO-13") — or just "APRSWX" for
+# default_call — to the WX service_issi and get the station's latest weather back:
+#   DN9CHO-13 14:05Z | 12.3C | 78% | 1016.4hPa | Wind SW 11km/h gust 25 | Rain 1h 0.2 today 3.1mm
+# Works for any APRS/CWOP weather station on aprs.fi.
+# Requires [wx_service] enabled = true (same service ISSI) and an aprs.fi API key
+# (free: log in at aprs.fi -> My account -> API keys). Config file only, not in the dashboard.
+#
+# [aprs_wx]
+# apikey = "123456.abcdefgh"     # aprs.fi API key; empty = feature off
+# default_call = "DN9CHO-13"     # station for a bare "APRSWX" and for the periodic send
+# max_age_secs = 3600            # mark reports older than this "OLD" (0 = never)
+# periodic_enabled = false       # auto-send default_call / periodic_call periodically
+# periodic_call = ""             # optional other station for the periodic send
+# periodic_dest = 1001           # destination ISSI (or GSSI if periodic_is_group)
+# periodic_is_group = false
+# periodic_interval_secs = 1800  # >= 300
+
+###############################################################################
+
 # OPTIONAL: Telegram alerts — push notifications to the BTS owner (FlowStation)
 #
 # Sends professionally-formatted messages to one or more Telegram chats when notable
