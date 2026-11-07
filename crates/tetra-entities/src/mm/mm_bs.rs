@@ -2,13 +2,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use crate::mm::components::recovery_cache::{RecoveryCache, TerminalRecord};
+use crate::mm::components::visitors::{GroupForm, Visitors};
 use crate::net_control::{ControlCommand, ControlEndpoint};
 use crate::net_telemetry::channel::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait, net_brew};
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::bluestation::{Mni, SharedConfig};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, TdmaTime, TetraAddress, unimplemented_log};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
+use tetra_saps::control::call_control::CallControl;
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
@@ -30,6 +32,7 @@ use tetra_pdus::mm::pdus::d_attach_detach_group_identity::DAttachDetachGroupIden
 use tetra_pdus::mm::pdus::d_attach_detach_group_identity_acknowledgement::DAttachDetachGroupIdentityAcknowledgement;
 use tetra_pdus::mm::pdus::d_location_update_accept::DLocationUpdateAccept;
 use tetra_pdus::mm::pdus::d_location_update_command::DLocationUpdateCommand;
+use tetra_pdus::mm::pdus::d_location_update_proceeding::DLocationUpdateProceeding;
 use tetra_pdus::mm::pdus::d_location_update_reject::DLocationUpdateReject;
 use tetra_pdus::mm::pdus::d_mm_status::DMmStatus;
 use tetra_pdus::mm::pdus::u_attach_detach_group_identity::UAttachDetachGroupIdentity;
@@ -51,6 +54,9 @@ use tetra_pdus::mm::pdus::otar_sck::{self, DOtarSckProvide, DOtarSckReject, Otar
 use tetra_security::auth::{MsChallenge, answer_ms_challenge, derive_dck, random_nonce};
 use tetra_security::keys::AuthKey;
 use tetra_security::taa1::{ta41, ta51};
+
+/// Group identity detachment downlink "Temporary 1 detachment" (TS 100 392-2 table 16.52).
+const GROUP_DETACHMENT_TEMPORARY_1: u8 = 1;
 
 /// A challenge in flight (EN 300 392-7 clause 4.1.2).
 struct PendingAuth {
@@ -122,6 +128,20 @@ pub struct MmBs {
     /// we fall back to a SwMI D-ATTACH of the remainder (MXP600 often re-sends the full list
     /// in a PDU that exceeds the uplink and fails to parse).
     attach_overflow_remainder: HashMap<u32, Vec<GroupIdentityUplink>>,
+    /// Radios of other networks registered here by migration, keyed by their (V)ASSI
+    /// (Multi Network, clause 16.4.1.1 b)).
+    visitors: Visitors,
+}
+
+/// How a migrating location update (clause 16.4.1.1 b) or c)) is handled.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Migration {
+    /// Multi Network off, `[cell_info] migration` off, no MNI, or a network not accepted here.
+    Refused,
+    /// Case c): a radio of this network coming back.
+    Home,
+    /// Case b): a radio of another accepted network.
+    Visitor(Mni),
 }
 
 /// Safety cap on `reactive_recovery_cooldown` so a churn of distinct unknown ISSIs can't grow it
@@ -135,6 +155,7 @@ const GROUP_REPORT_REQUEST_COOLDOWN: std::time::Duration = std::time::Duration::
 impl MmBs {
     pub fn new(config: SharedConfig, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
         let mut client_mgr = MmClientMgr::new(telemetry.clone());
+        let cell_id = config.config().cell_id.0;
         {
             let cfg = config.config();
             let sec = &cfg.security;
@@ -174,6 +195,7 @@ impl MmBs {
             reactive_recovery_cooldown: HashMap::new(),
             group_report_requested_at: HashMap::new(),
             attach_overflow_remainder: HashMap::new(),
+            visitors: Visitors::new(cell_id),
         }
     }
 
@@ -325,6 +347,8 @@ impl MmBs {
             self.client_mgr
                 .snapshot_for_recovery()
                 .into_iter()
+                // A (V)ASSI is gone with the process: the radio has to migrate again.
+                .filter(|(issi, _, _)| !self.visitors.is_visitor(*issi))
                 .map(|(issi, groups, esm)| TerminalRecord {
                     issi,
                     groups,
@@ -355,6 +379,11 @@ impl MmBs {
         // subscriber registry and Brew advertise it as reachable again.
         let known = self.client_mgr.client_is_known(issi);
         if known && self.config.state_read().subscribers.is_registered(issi) {
+            return;
+        }
+        // A (V)ASSI is never one of this network's ISSIs: a radio on an unknown one has to
+        // migrate again (clause 16.4.1.1 b)), not be commanded to re-register on it.
+        if self.visitors.is_visitor(issi) || self.config.config().multi_network.is_vassi(issi) {
             return;
         }
         // Let the proactive boot sweep own any ISSI it is already replaying, to avoid double-keying.
@@ -404,6 +433,30 @@ impl MmBs {
         } else {
             Self::send_d_location_update_command(queue, issi, 0);
         }
+    }
+
+    /// Finish a "detach all currently attached group identities and attach group identities
+    /// defined in the group identity uplink element" (TS 100 392-2 table 16.49): only the
+    /// groups the MS had before and does not hold after the attach are deaffiliated. A group
+    /// it re-attaches stays affiliated throughout, so a running call to it is not released
+    /// (a group report re-attaches every group this way, clauses 16.4.3 and 16.8.3).
+    fn deaffiliate_groups_left_after_detach_all(&mut self, queue: &mut MessageQueue, issi: u32, prior_groups: Vec<u32>) {
+        let attached: HashSet<u32> = self
+            .client_mgr
+            .get_client_by_issi(issi)
+            .map(|client| client.groups.iter().copied().collect())
+            .unwrap_or_default();
+        let left: Vec<u32> = prior_groups.into_iter().filter(|gssi| !attached.contains(gssi)).collect();
+        if left.is_empty() {
+            return;
+        }
+        {
+            let mut state = self.config.state_write();
+            for &gssi in &left {
+                state.subscribers.deaffiliate(issi, gssi);
+            }
+        }
+        self.emit_subscriber_update(queue, issi, left, BrewSubscriberAction::Deaffiliate);
     }
 
     fn emit_subscriber_update(&self, queue: &mut MessageQueue, issi: u32, groups: Vec<u32>, action: BrewSubscriberAction) {
@@ -467,6 +520,10 @@ impl MmBs {
     /// `whitelist_mode` governs how whichever list is effective is read — in particular whether an
     /// empty list means "open network" or "deny all".
     fn issi_allowed(&self, issi: u32) -> bool {
+        // A visitor's (V)ASSI: its home ISSI passed this gate at the first location update.
+        if self.visitors.is_visitor(issi) {
+            return true;
+        }
         let state = self.config.state_read();
         self.config.config().security.allows(issi, state.issi_whitelist_override.as_deref())
     }
@@ -555,6 +612,11 @@ impl MmBs {
             tracing::warn!("Received UItsiDetach for unknown client with SSI: {}", ssi);
             // return;
         };
+        // Deregistration ends the (V)ASSI (clause 16.4.7.2).
+        if let Some(v) = self.visitors.remove(ssi) {
+            self.config.state_write().multi_network.visitors.remove(&ssi);
+            tracing::info!("MM: visitor {}:{} detached, (V)ASSI {} released", v.mni, v.issi, ssi);
+        }
         self.group_report_requested_at.remove(&ssi);
         self.attach_overflow_remainder.remove(&ssi);
         self.recovery_mark_dirty();
@@ -609,12 +671,88 @@ impl MmBs {
         // isn't replayed to forever. No-op when recovery is disabled / ISSI not pending.
         self.recovery_confirm(issi);
 
-        // Migration not supported: ETSI 16.4.1.1 case b) requires identity exchange via
-        // D-LOCATION-UPDATE-PROCEEDING which we don't implement. Reject with cause
-        // "Migration not supported" (12, Table 16.81) so the MS can act on it.
-        if pdu.location_update_type == LocationUpdateType::MigratingLocationUpdating
-            || pdu.location_update_type == LocationUpdateType::ServiceRestorationMigratingLocationUpdating
-        {
+        // Migrating location update (clause 16.4.1.1): case b) a radio of another network that
+        // Multi Network accepts gets a (V)ASSI by identity exchange, case c) a radio of this
+        // network coming back registers as usual. Everything else keeps the old answer:
+        // "Migration not supported" (12, table 16.81) so the MS can act on it.
+        let migrating = matches!(
+            pdu.location_update_type,
+            LocationUpdateType::MigratingLocationUpdating | LocationUpdateType::ServiceRestorationMigratingLocationUpdating
+        );
+        let migration = if migrating { self.migration_case(pdu.address_extension) } else { Migration::Refused };
+        if let Migration::Visitor(mni) = migration {
+            self.start_identity_exchange(queue, prim.received_address, handle, &pdu, mni);
+            return;
+        }
+        // The second U-LOCATION UPDATE DEMAND of case b) (and every later one) comes on the
+        // visitor's (V)ASSI and names its ITSI again: MNI in the address extension, ISSI in the
+        // SSI element.
+        if let Some(visitor) = self.visitors.get(issi).cloned() {
+            let mni_ok = pdu.address_extension.is_none_or(|ext| Mni::from_address_extension(ext) == visitor.mni);
+            let issi_ok = pdu.ssi.is_none_or(|ssi| ssi as u32 == visitor.issi);
+            if !mni_ok || !issi_ok {
+                tracing::warn!(
+                    "MM: (V)ASSI {} belongs to {}:{}, location update names {:?}:{:?} — rejecting",
+                    issi,
+                    visitor.mni,
+                    visitor.issi,
+                    pdu.address_extension.map(Mni::from_address_extension),
+                    pdu.ssi
+                );
+                self.visitors.remove(issi);
+                self.config.state_write().multi_network.visitors.remove(&issi);
+                Self::send_d_location_update_reject_cause(
+                    queue,
+                    issi,
+                    handle,
+                    pdu.location_update_type,
+                    pdu.address_extension,
+                    RejectCause::ItsiAtsiUnknown,
+                );
+                return;
+            }
+            // Visible to the Brew worker before anything of this radio goes to the network:
+            // there it is the home ISSI (extension `mni`).
+            self.config.state_write().multi_network.visitors.insert(issi, (visitor.mni, visitor.issi));
+        } else if !migrating && self.config.config().multi_network.is_vassi(issi) {
+            // A (V)ASSI this station did not give (another station or cell, or before a restart):
+            // never a radio of this network. "ITSI/ATSI unknown" makes it invalid in the MS
+            // (clause 16.4.7.3), so it has to register again with its own ITSI.
+            tracing::info!("MM: unknown (V)ASSI {} — rejecting with ITSI/ATSI unknown", issi);
+            Self::send_d_location_update_reject_cause(
+                queue,
+                issi,
+                handle,
+                pdu.location_update_type,
+                pdu.address_extension,
+                RejectCause::ItsiAtsiUnknown,
+            );
+            return;
+        } else if !migrating && self.names_other_network(pdu.address_extension) {
+            // An ITSI of another network that is not migrating: it holds no valid registration
+            // here, so case b) of clause 16.4.1.1 applies (identity exchange), never a
+            // registration under its bare ISSI, which here is a radio of this network. A radio
+            // does this when it answers a D-LOCATION UPDATE COMMAND after its home changed.
+            // "ITSI/ATSI unknown" makes the registration invalid in the MS (clause 16.4.7.3), so
+            // it registers again, as a migrating radio.
+            tracing::info!(
+                "MM: ISSI {} of network {} sent a {:?} — not registered here, rejecting with ITSI/ATSI unknown",
+                issi,
+                pdu.address_extension.map(Mni::from_address_extension).map(|m| m.to_string()).unwrap_or_default(),
+                pdu.location_update_type
+            );
+            Self::send_d_location_update_reject_to(
+                queue,
+                prim.received_address,
+                handle,
+                pdu.location_update_type,
+                pdu.address_extension,
+                RejectCause::ItsiAtsiUnknown,
+                None,
+            );
+            return;
+        }
+        if migrating && migration == Migration::Refused {
             // Terminal wants to migrate to another network (e.g. SmartConnect).
             // We don't implement D-LOCATION-UPDATE-PROCEEDING identity exchange (ETSI Â§16.4.1.1 case b),
             // so we can't accept migration formally. But we MUST release the terminal from Brew
@@ -638,7 +776,16 @@ impl MmBs {
                 }
                 self.recovery_mark_dirty();
             }
-            Self::send_d_location_update_reject_migration(queue, issi, handle, pdu.location_update_type, pdu.address_extension);
+            // Layer 2 answers on the address the request came on: the USSI (clause 16.4.1.1 b)).
+            Self::send_d_location_update_reject_to(
+                queue,
+                prim.received_address,
+                handle,
+                pdu.location_update_type,
+                pdu.address_extension,
+                RejectCause::MigrationNotSupported,
+                None,
+            );
             return;
         }
 
@@ -791,7 +938,8 @@ impl MmBs {
         // happens at first expiry, so Brew still holds the subscriber â€” re-registering would be a
         // needless REGISTER every interval (the Brew flap this avoids).
         let is_itsi_attach = pdu.location_update_type == LocationUpdateType::ItsiAttach;
-        let needs_brew_register = is_new || (!is_new && is_itsi_attach) || was_dropped;
+        // Case c) (a radio of this network back from another one) is a fresh registration too.
+        let needs_brew_register = is_new || (!is_new && is_itsi_attach) || was_dropped || migration == Migration::Home;
 
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
@@ -846,12 +994,25 @@ impl MmBs {
         // Process optional GroupIdentityLocationDemand field
         let _has_groups = pdu.group_identity_location_demand.is_some();
         let gila = if let Some(mut gild) = pdu.group_identity_location_demand {
+            let mut forms = HashMap::new();
+            if let Some(giu) = gild.group_identity_uplink.take() {
+                let (local, f) = self.localize_group_uplink(issi, giu);
+                forms = f;
+                gild.group_identity_uplink = Some(local);
+            }
             gild.group_identity_uplink = gild
                 .group_identity_uplink
                 .map(|giu| self.aie_filter_group_attach(issi, ciphering.is_some(), giu));
+            let mut refused_gid = Vec::new();
+            if let Some(giu) = gild.group_identity_uplink.take() {
+                let (admitted, refused) = self.group_access_split(issi, giu);
+                gild.group_identity_uplink = Some(admitted);
+                refused_gid = refused;
+            }
             // ETSI Table 16.49 (clause 16.10.17): mode=1 means "detach all currently
             // attached group identities and attach group identities defined in the
             // group identity uplink element."
+            let mut detached_prior = Vec::new();
             if gild.group_identity_attach_detach_mode == 1 {
                 let prior_groups: Vec<u32> = self
                     .client_mgr
@@ -860,25 +1021,29 @@ impl MmBs {
                     .unwrap_or_default();
                 if let Err(e) = self.client_mgr.client_detach_all_groups(issi) {
                     tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
-                } else if !prior_groups.is_empty() {
-                    {
-                        let mut state = self.config.state_write();
-                        for &gssi in &prior_groups {
-                            state.subscribers.deaffiliate(issi, gssi);
-                        }
-                    }
-                    self.emit_subscriber_update(queue, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                } else {
+                    detached_prior = prior_groups;
                 }
             }
 
             // Try to attach to requested groups, then build GroupIdentityLocationAccept element
-            let accepted_groups = if let Some(giu) = &gild.group_identity_uplink {
+            let mut accepted_groups = if let Some(giu) = &gild.group_identity_uplink {
                 Some(self.try_attach_detach_groups(queue, issi, &giu))
             } else {
                 None
             };
+            self.deaffiliate_groups_left_after_detach_all(queue, issi, detached_prior);
+            // Refused by the group-access rules: listed with their reason (clauses 16.8.2, 16.10.23).
+            let any_refused = !refused_gid.is_empty();
+            if let Some(list) = accepted_groups.as_mut() {
+                self.address_groups_for(issi, list, &forms, true);
+            }
+            self.address_groups_for(issi, &mut refused_gid, &forms, false);
+            if any_refused {
+                accepted_groups.get_or_insert_with(Vec::new).extend(refused_gid);
+            }
             let gila = GroupIdentityLocationAccept {
-                group_identity_accept_reject: 0, // Accept
+                group_identity_accept_reject: u8::from(any_refused),
                 group_identity_downlink: accepted_groups,
             };
 
@@ -962,25 +1127,27 @@ impl MmBs {
         // Registration / affiliation / EE state changed â€” persist for restart recovery (debounced).
         self.recovery_mark_dirty();
 
-        // Preserve the accepted location update type (EN 300 392-2 cl. 16.9.2.2): some radios key
-        // attach-completion off the accept type, so answering an ItsiAttach with
-        // PeriodicLocationUpdating leaves them believing the attach never completed. The periodic
-        // interval is not carried in D-LOCATION-UPDATE-ACCEPT anyway â€” it is signalled by the
-        // broadcast timers, and this stack re-attracts radios with an explicit
-        // D-LOCATION-UPDATE-COMMAND at T351 expiry (see tick_start), which is what the terminals
-        // in the field actually respond to.
-        let periodic_secs = self.config.config().cell.periodic_registration_secs;
-        let accept_type = if periodic_secs > 0 && pdu.location_update_type != LocationUpdateType::ItsiAttach {
-            LocationUpdateType::PeriodicLocationUpdating
+        // The location update accept type "shall indicate the type of registration" (TS 100 392-2
+        // clause 16.10.35a, table 16.68), so the accept names the registration the MS asked for.
+        // Tables 16.67 and 16.68 differ only in the migrating values: 001 is "temporary
+        // registration" in the accept, and 101 stands for both migrating requests (case c) here).
+        // Some radios key attach-completion off the accept type. The periodic interval is not
+        // carried in D-LOCATION-UPDATE-ACCEPT; this stack re-attracts radios with an explicit
+        // D-LOCATION-UPDATE-COMMAND at T351 expiry (see tick_start).
+        let accept_type = if migrating {
+            LocationUpdateType::ServiceRestorationMigratingLocationUpdating
         } else {
             pdu.location_update_type
         };
+        // A visitor's accept carries its MNI (clause 16.4.1.1: the MS checks it against its ITSI)
+        // and its (V)ASSI.
+        let visitor_mni = self.visitors.get(issi).map(|v| v.mni);
 
         // Build D-LOCATION UPDATE ACCEPT pdu
         let pdu_response = DLocationUpdateAccept {
             location_update_accept_type: accept_type,
             ssi: Some(issi as u64),
-            address_extension: None,
+            address_extension: visitor_mni.map(|m| m.address_extension() as u64),
             subscriber_class: None,
             energy_saving_information: esi,
             scch_information_and_distribution_on_18th_frame: scch_info,
@@ -1019,6 +1186,33 @@ impl MmBs {
             }),
         };
         queue.push_back(msg);
+
+        if let Some(mni) = visitor_mni {
+            if let Some(v) = self.visitors.get(issi)
+                && !v.registered
+            {
+                tracing::info!("MM: visitor {}:{} registered on (V)ASSI {}", mni, v.issi, issi);
+            }
+            self.visitors.confirm(issi);
+        } else if migration == Migration::Home {
+            tracing::info!("MM: ISSI {} back from another network (migration case c)", issi);
+        }
+
+        // A plain roaming registration: an MS with a circuit mode call would have asked for
+        // service restoration roaming (clause 16.4 a)), so an individual call that moved here
+        // with it on the network will not be restored. Demand location updating (an answer to
+        // our COMMAND) says nothing about calls and is not reported.
+        if pdu.location_update_type == LocationUpdateType::RoamingLocationUpdating
+            && (net_brew::is_site_linked(&self.config)
+                || (net_brew::is_active(&self.config) && net_brew::is_brew_issi_routable(&self.config, issi)))
+        {
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Mm,
+                dest: TetraEntity::Brew,
+                msg: SapMsgInner::CmceCallControl(CallControl::RegisteredWithoutCall { issi }),
+            });
+        }
 
         // Send D-LOCATION-UPDATE-COMMAND to prompt a full re-registration (TEI + group
         // identity report) ONLY for a genuinely new (unknown) radio that didn't ITSI-attach
@@ -1292,6 +1486,142 @@ impl MmBs {
             .collect()
     }
 
+    /// Who may attach which group (Brew server rules, `group-access`): splits the requested
+    /// attachments into the admitted ones (and every detachment) and, for each group the radio
+    /// may not attach, a refusal entry for the acknowledgement. ETSI TS 100 392-2 clause 16.8.2:
+    /// the acknowledgement "shall indicate those group identities which were not accepted with a
+    /// rejection reason in the group identity detachment downlink"; the reason is "Temporary 1
+    /// detachment" (table 16.52, values network dependent), not "Permanent": the rules can change
+    /// and an MS should not retry a permanently detached group.
+    fn group_access_split(&self, issi: u32, giu: Vec<GroupIdentityUplink>) -> (Vec<GroupIdentityUplink>, Vec<GroupIdentityDownlink>) {
+        let state = self.config.state_read();
+        // A visitor from the server's own network is named by its home ISSI in the server's
+        // rules; during its registration it is not yet in the shared visitor table.
+        let server = state.multi_network.server.as_ref().map(|(this, _)| *this);
+        let rule_issi = match self.visitors.get(issi) {
+            Some(v) if Some(v.mni) == server => v.issi,
+            _ => issi,
+        };
+        let mut refused = Vec::new();
+        let admitted = giu
+            .into_iter()
+            .filter(|g| {
+                let Some(gssi) = g.gssi else { return true };
+                if g.group_identity_detachment_uplink.is_some() || state.group_may_join(gssi, rule_issi) {
+                    return true;
+                }
+                tracing::info!("MM: ISSI {} may not attach GSSI {} (group-access), refused", issi, gssi);
+                refused.push(GroupIdentityDownlink {
+                    group_identity_attachment: None,
+                    group_identity_detachment_uplink: Some(GROUP_DETACHMENT_TEMPORARY_1),
+                    gssi: Some(gssi),
+                    address_extension: None,
+                    vgssi: None,
+                });
+                false
+            })
+            .collect();
+        (admitted, refused)
+    }
+
+    /// A visitor's group identity uplink (clause 16.8.7) in this station's group ids: a group
+    /// of this network keeps its GSSI (GIAT 0, or GIAT 1 with this network's MNI); a group of
+    /// the visitor's home network named by GSSI + address extension (GIAT 1) gets a (V)GSSI
+    /// (allocated on attachment); a (V)GSSI (GIAT 2) stands for itself. The map remembers how
+    /// each group was named so the downlink answers in the form the clause asks for. Groups of
+    /// a third network and unknown (V)GSSIs are left out (logged). Radios of this network are
+    /// passed through unchanged.
+    fn localize_group_uplink(
+        &mut self,
+        issi: u32,
+        giu: Vec<GroupIdentityUplink>,
+    ) -> (Vec<GroupIdentityUplink>, HashMap<u32, GroupForm>) {
+        let mut forms = HashMap::new();
+        let Some(home) = self.visitors.get(issi).map(|v| v.mni) else {
+            return (giu, forms);
+        };
+        let cfg = self.config.config();
+        let own = Mni { mcc: cfg.net.mcc, mnc: cfg.net.mnc };
+        let mut out = Vec::with_capacity(giu.len());
+        for mut g in giu {
+            let detach = g.group_identity_detachment_uplink.is_some();
+            match (g.gssi, g.address_extension, g.vgssi) {
+                (Some(_), None, None) => {}
+                (Some(gssi), Some(ext), None) => {
+                    let mni = Mni::from_address_extension(ext as u64);
+                    if mni == own {
+                        g.address_extension = None;
+                    } else if mni == home {
+                        let vgssi = if detach {
+                            self.visitors.known_vgssi(mni, gssi)
+                        } else {
+                            let client_mgr = &self.client_mgr;
+                            self.visitors
+                                .vgssi_for(&cfg.multi_network, mni, gssi, |v| client_mgr.client_is_known(v))
+                        };
+                        let Some(vgssi) = vgssi else {
+                            tracing::warn!("MM: visitor {} group {}:{} has no (V)GSSI — skipped", issi, mni, gssi);
+                            continue;
+                        };
+                        self.config.state_write().multi_network.groups.insert(vgssi, (mni, gssi));
+                        forms.insert(vgssi, GroupForm::Home { mni, gssi });
+                        g.gssi = Some(vgssi);
+                        g.address_extension = None;
+                    } else {
+                        tracing::info!("MM: visitor {} names group {}:{} of a third network — skipped", issi, mni, gssi);
+                        continue;
+                    }
+                }
+                (None, None, Some(vgssi)) => {
+                    if self.visitors.home_group(vgssi).is_none() {
+                        tracing::info!("MM: visitor {} names unknown (V)GSSI {} — skipped", issi, vgssi);
+                        continue;
+                    }
+                    forms.insert(vgssi, GroupForm::Vgssi);
+                    g.gssi = Some(vgssi);
+                    g.vgssi = None;
+                }
+                _ => {
+                    tracing::info!("MM: visitor {} sent a group identity uplink without a valid address — skipped", issi);
+                    continue;
+                }
+            }
+            out.push(g);
+        }
+        (out, forms)
+    }
+
+    /// Puts a visitor's home groups back into the address form of clause 16.8.7 in a group
+    /// identity downlink: (V)GSSI alone (GIAT 2) when the uplink named it so, GSSI + address
+    /// extension (GIAT 1) for a refused GIAT 1 attachment, else GSSI + address extension +
+    /// (V)GSSI (GIAT 3). Groups of this network stay GIAT 0.
+    fn address_groups_for(&self, issi: u32, gids: &mut [GroupIdentityDownlink], forms: &HashMap<u32, GroupForm>, accepted: bool) {
+        if !self.visitors.is_visitor(issi) {
+            return;
+        }
+        for gid in gids.iter_mut() {
+            let Some(local) = gid.gssi else { continue };
+            let Some((mni, gssi)) = self.visitors.home_group(local) else { continue };
+            match forms.get(&local) {
+                Some(GroupForm::Vgssi) => {
+                    gid.gssi = None;
+                    gid.address_extension = None;
+                    gid.vgssi = Some(local);
+                }
+                Some(GroupForm::Home { .. }) if !accepted => {
+                    gid.gssi = Some(gssi);
+                    gid.address_extension = Some(mni.address_extension());
+                    gid.vgssi = None;
+                }
+                _ => {
+                    gid.gssi = Some(gssi);
+                    gid.address_extension = Some(mni.address_extension());
+                    gid.vgssi = Some(local);
+                }
+            }
+        }
+    }
+
     fn rx_u_attach_detach_group_identity(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_attach_detach_group_identity");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
@@ -1361,6 +1691,7 @@ impl MmBs {
         }
 
         // If group_identity_attach_detach_mode == 1, we first detach all groups
+        let mut detached_prior = Vec::new();
         if pdu.group_identity_attach_detach_mode == true {
             if !self.client_mgr.client_is_known(issi) {
                 // Client unknown (e.g. never registered via location update).
@@ -1386,17 +1717,7 @@ impl MmBs {
                     .map(|client| client.groups.iter().copied().collect())
                     .unwrap_or_default();
                 match self.client_mgr.client_detach_all_groups(issi) {
-                    Ok(_) => {
-                        if !prior_groups.is_empty() {
-                            {
-                                let mut state = self.config.state_write();
-                                for &gssi in &prior_groups {
-                                    state.subscribers.deaffiliate(issi, gssi);
-                                }
-                            }
-                            self.emit_subscriber_update(queue, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
-                        }
-                    }
+                    Ok(_) => detached_prior = prior_groups,
                     Err(e) => {
                         tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
                         return;
@@ -1432,8 +1753,10 @@ impl MmBs {
             tracing::warn!("rx_u_attach_detach_group_identity: group_identity_uplink missing after feature_check; ignoring");
             return;
         };
+        let (giu, forms) = self.localize_group_uplink(issi, giu);
         let encrypted = self.config.state_read().subscribers.encrypted(issi).unwrap_or(false);
         let giu = self.aie_filter_group_attach(issi, encrypted, giu);
+        let (giu, mut refused_gid) = self.group_access_split(issi, giu);
         let requested_n = giu.len();
         let (giu_clamped, dropped_giu) = if requested_n > MAX_GROUPS_PER_ATTACH {
             let (head, tail) = giu.split_at(MAX_GROUPS_PER_ATTACH);
@@ -1486,14 +1809,21 @@ impl MmBs {
         }
 
         // Try to attach to requested groups, and retrieve list of accepted GroupIdentityDownlink elements
-        let accepted_gid = self.try_attach_detach_groups(queue, issi, &giu_clamped);
+        let mut accepted_gid = self.try_attach_detach_groups(queue, issi, &giu_clamped);
+        self.deaffiliate_groups_left_after_detach_all(queue, issi, detached_prior);
+        // Groups refused by the group-access rules: listed with their reason (clause 16.8.2) and
+        // "at least one attachment/detachment rejected" (table 16.44).
+        let any_refused = !refused_gid.is_empty();
+        self.address_groups_for(issi, &mut accepted_gid, &forms, true);
+        self.address_groups_for(issi, &mut refused_gid, &forms, false);
+        accepted_gid.extend(refused_gid);
 
         // Group affiliations changed — persist for restart recovery (debounced).
         self.recovery_mark_dirty();
 
         // Build reply PDU
         let pdu_response = DAttachDetachGroupIdentityAcknowledgement {
-            group_identity_accept_reject: 0, // Accept
+            group_identity_accept_reject: u8::from(any_refused),
             reserved: false,                 // TODO FIXME Guessed proper value of reserved field
             proprietary: None,
             group_identity_downlink: Some(accepted_gid),
@@ -1625,7 +1955,8 @@ impl MmBs {
             gssis
         );
 
-        let accepted = self.try_attach_detach_groups(queue, issi, &attach_tail);
+        let mut accepted = self.try_attach_detach_groups(queue, issi, &attach_tail);
+        self.address_groups_for(issi, &mut accepted, &HashMap::new(), true);
         self.recovery_mark_dirty();
         if accepted.is_empty() {
             tracing::warn!("ISSI {} SwMI remainder attach produced no accepted groups", issi);
@@ -1909,7 +2240,7 @@ impl MmBs {
     fn send_d_attach_detach_ack(&self, queue: &mut MessageQueue, issi: u32, handle: u32, groups: &[u32]) {
         use tetra_pdus::mm::fields::group_identity_attachment::GroupIdentityAttachment;
         use tetra_pdus::mm::fields::group_identity_downlink::GroupIdentityDownlink;
-        let gid: Vec<GroupIdentityDownlink> = groups
+        let mut gid: Vec<GroupIdentityDownlink> = groups
             .iter()
             .map(|&gssi| GroupIdentityDownlink {
                 group_identity_attachment: Some(GroupIdentityAttachment {
@@ -1926,6 +2257,7 @@ impl MmBs {
                 vgssi: None,
             })
             .collect();
+        self.address_groups_for(issi, &mut gid, &HashMap::new(), true);
         let ack = DAttachDetachGroupIdentityAcknowledgement {
             group_identity_accept_reject: 0,
             reserved: false,
@@ -2147,7 +2479,7 @@ impl MmBs {
     /// `issi`, requesting an acknowledgement. `attach == true` carries a (persistent) group identity
     /// attachment; `false` carries a detachment. Used by [`Self::do_dgna`].
     fn send_d_attach_detach_group_identity(&self, queue: &mut MessageQueue, issi: u32, gssi: u32, attach: bool) {
-        let gid = GroupIdentityDownlink {
+        let mut gid = GroupIdentityDownlink {
             group_identity_attachment: attach.then_some(GroupIdentityAttachment {
                 // 0 = "attachment not needed" â†’ persistent on the MS until an explicit detach.
                 // Matches the affiliation-ACK path; see try_attach_detach_groups for why lifetime=0
@@ -2162,6 +2494,7 @@ impl MmBs {
             address_extension: None,
             vgssi: None,
         };
+        self.address_groups_for(issi, std::slice::from_mut(&mut gid), &HashMap::new(), true);
         let pdu = DAttachDetachGroupIdentity {
             group_identity_report: false,
             group_identity_acknowledgement_request: true,
@@ -2304,25 +2637,131 @@ impl MmBs {
         queue.push_back(msg);
     }
 
-    /// Sends a D-LOCATION UPDATE REJECT PDU (ETSI clause 16.9.2.9) with cause "Migration not
-    /// supported". Only for the genuine migration path â€” an access-control refusal must carry an
-    /// access-control cause instead (see `send_d_location_update_reject_cause`), or a barred radio
-    /// is told to go find another network.
-    fn send_d_location_update_reject_migration(
+    /// Which case of clause 16.4.1.1 a migrating location update is. Migration needs Multi
+    /// Network on and the cell broadcasting "migration supported" (`[cell_info] migration`,
+    /// clause 18.5.2.1); the request has to carry the MNI of the MS (cases b) and c)).
+    /// Whether a location update names an ITSI of another network (address extension, clause
+    /// 16.10.1). Only with Multi Network on; off keeps the old handling.
+    fn names_other_network(&self, address_extension: Option<u64>) -> bool {
+        let cfg = self.config.config();
+        if !cfg.multi_network.enabled {
+            return false;
+        }
+        address_extension.is_some_and(|ext| {
+            let mni = Mni::from_address_extension(ext);
+            mni.mcc != cfg.net.mcc || mni.mnc != cfg.net.mnc
+        })
+    }
+
+    fn migration_case(&self, address_extension: Option<u64>) -> Migration {
+        let cfg = self.config.config();
+        let mn = &cfg.multi_network;
+        if !mn.enabled || !cfg.migration_supported() {
+            return Migration::Refused;
+        }
+        let Some(ext) = address_extension else {
+            return Migration::Refused;
+        };
+        let mni = Mni::from_address_extension(ext);
+        if mni.mcc == cfg.net.mcc && mni.mnc == cfg.net.mnc {
+            return Migration::Home;
+        }
+        // With a Brew server that offers `mni` the network has to be the server's own (a cell of
+        // another network reached `via` it, whose radios come from the server's network) or one
+        // it reaches and that is up (its `SERVICE_NETWORKS`), and, when `networks` is set, also
+        // in that list. Without such a server only `networks` counts and visitors stay inside
+        // this station.
+        let server_ok = match &self.config.state_read().multi_network.server {
+            Some((this, list)) => *this == mni || list.iter().any(|n| n.mni == mni && n.up),
+            None => !mn.networks.is_empty(),
+        };
+        let listed = mn.networks.is_empty() || mn.networks.contains(&mni);
+        if server_ok && listed {
+            Migration::Visitor(mni)
+        } else {
+            tracing::info!("MM: migration from network {} refused: not a network this station accepts now", mni);
+            Migration::Refused
+        }
+    }
+
+    /// First step of case b) (clause 16.4.1.1): allocate a (V)ASSI and send it in a D-LOCATION
+    /// UPDATE PROCEEDING with the MNI of the MS, on the USSI the request came on (clause
+    /// 23.4.1.2.5). Nothing else changes: the radio registers with its second U-LOCATION UPDATE
+    /// DEMAND on the (V)ASSI. No (V)ASSI left: D-LOCATION UPDATE REJECT with the MNI.
+    fn start_identity_exchange(
+        &mut self,
         queue: &mut MessageQueue,
-        issi: u32,
+        address: TetraAddress,
         handle: u32,
-        location_update_type: LocationUpdateType,
-        address_extension: Option<u64>,
+        pdu: &ULocationUpdateDemand,
+        mni: Mni,
     ) {
-        Self::send_d_location_update_reject_cause(
-            queue,
-            issi,
-            handle,
-            location_update_type,
-            address_extension,
-            RejectCause::MigrationNotSupported,
-        )
+        // "The USSI shall be equal to the ISSI used by the MS in its home network" (23.4.1.2.5);
+        // the optional SSI element holds the same ISSI.
+        let home_issi = pdu.ssi.map(|s| s as u32).unwrap_or(address.ssi);
+        let cfg = self.config.config();
+        let client_mgr = &self.client_mgr;
+        let allocated = self.visitors.allocate(&cfg.multi_network, mni, home_issi, Instant::now(), |v| {
+            client_mgr.client_is_known(v)
+        });
+        let Some((vassi, previous)) = allocated else {
+            tracing::warn!("MM: no free (V)ASSI for visitor {}:{} — rejecting with Congestion", mni, home_issi);
+            Self::send_d_location_update_reject_to(
+                queue,
+                address,
+                handle,
+                pdu.location_update_type,
+                Some(mni.address_extension() as u64),
+                RejectCause::Congestion,
+                None,
+            );
+            return;
+        };
+        // The old (V)ASSI became invalid (clause 16.4.7.1): forget the registration on it.
+        if let Some(old) = previous {
+            self.config.state_write().multi_network.visitors.remove(&old);
+            if let Some(client) = self.client_mgr.remove_client(old) {
+                self.config.state_write().subscribers.deregister(old);
+                if !client.groups.is_empty() {
+                    let groups: Vec<u32> = client.groups.iter().copied().collect();
+                    self.emit_subscriber_update(queue, old, groups, BrewSubscriberAction::Deaffiliate);
+                }
+                self.emit_subscriber_update(queue, old, Vec::new(), BrewSubscriberAction::Deregister);
+                self.recovery_mark_dirty();
+            }
+        }
+        tracing::info!(
+            "MM: visitor {}:{} migrating ({:?}) — (V)ASSI {} in D-LOCATION UPDATE PROCEEDING",
+            mni,
+            home_issi,
+            pdu.location_update_type,
+            vassi
+        );
+        let response = DLocationUpdateProceeding {
+            ssi: vassi,
+            address_extension: mni.address_extension(),
+            proprietary: None,
+        };
+        let mut sdu = BitBuffer::new_autoexpand(56);
+        response.to_bitbuf(&mut sdu).unwrap();
+        sdu.seek(0);
+        tracing::debug!("-> {:?} sdu {}", response, sdu.dump_bin());
+        queue.push_back(SapMsg {
+            sap: Sap::LmmSap,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
+                sdu,
+                handle,
+                address,
+                layer2service: Layer2Service::Acknowledged,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                encryption_flag: false,
+                is_null_pdu: false,
+                tx_reporter: None,
+            }),
+        });
     }
 
     fn send_d_location_update_reject_cause(
@@ -2341,6 +2780,28 @@ impl MmBs {
     fn send_d_location_update_reject_ciphering(
         queue: &mut MessageQueue,
         issi: u32,
+        handle: u32,
+        location_update_type: LocationUpdateType,
+        address_extension: Option<u64>,
+        reject_cause: RejectCause,
+        preferred: Option<tetra_pdus::mm::fields::ciphering_parameters::CipheringParameters>,
+    ) {
+        Self::send_d_location_update_reject_to(
+            queue,
+            TetraAddress::issi(issi),
+            handle,
+            location_update_type,
+            address_extension,
+            reject_cause,
+            preferred,
+        );
+    }
+
+    /// D-LOCATION UPDATE REJECT on a given layer 2 address (the USSI for a migrating radio,
+    /// clause 16.4.1.1 b)).
+    fn send_d_location_update_reject_to(
+        queue: &mut MessageQueue,
+        address: TetraAddress,
         handle: u32,
         location_update_type: LocationUpdateType,
         address_extension: Option<u64>,
@@ -2369,7 +2830,7 @@ impl MmBs {
             msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
                 sdu,
                 handle,
-                address: TetraAddress::issi(issi),
+                address,
                 layer2service: Layer2Service::Acknowledged,
                 stealing_permission: false,
                 stealing_repeats_flag: false,
@@ -2452,9 +2913,9 @@ impl MmBs {
 
     fn feature_check_u_location_update_demand(pdu: &ULocationUpdateDemand) -> bool {
         let mut supported = true;
-        if pdu.location_update_type == LocationUpdateType::MigratingLocationUpdating
-            || pdu.location_update_type == LocationUpdateType::DisabledMsUpdating
-        {
+        // Migrating requests only get here as case c) of clause 16.4.1.1 (a radio of this network
+        // coming back): refused ones and case b) are answered before this check.
+        if pdu.location_update_type == LocationUpdateType::DisabledMsUpdating {
             unimplemented_log!("Unsupported {}", pdu.location_update_type);
             supported = false;
         }
@@ -2646,6 +3107,17 @@ impl MmBs {
                 .client_mgr
                 .should_send_registration_command_now(issi, ts, interval_secs, presence_secs, EE_WINDOW_WAIT_SECS, now)
             {
+                if net_brew::is_site_linked(&self.config) {
+                    // Multi-cell: within its location area the radio may have changed cell
+                    // without registering (TS 100 392-2 clause 18.3.4.7.1a); the site switch
+                    // has the area's other cells ask too.
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Mm,
+                        dest: TetraEntity::Brew,
+                        msg: SapMsgInner::CmceCallControl(CallControl::SitePresenceProbe { issi }),
+                    });
+                }
                 if let Some(receipt) = self.send_registration_check(queue, issi, presence_secs != 0) {
                     self.client_mgr.queue_registration_command(issi, now);
                     self.registration_probe_receipts.insert(issi, receipt);
@@ -2951,7 +3423,10 @@ impl MmBs {
     ) -> bool {
         let (mode, k) = {
             let cfg = self.config.config();
-            (cfg.security.authentication, cfg.security.subscriber_k(issi).copied())
+            // A visitor's K lives in its home network (authentication at migration is not
+            // implemented): it is a radio without a key here.
+            let k = if self.visitors.is_visitor(issi) { None } else { cfg.security.subscriber_k(issi).copied() };
+            (cfg.security.authentication, k)
         };
         if mode == AuthenticationMode::Off {
             return false;
@@ -3337,10 +3812,15 @@ mod presence_tests {
     use crate::net_telemetry::{TelemetryEvent, channel::telemetry_channel};
 
     fn station() -> (MmBs, crate::net_telemetry::channel::TelemetrySource) {
+        station_linked(false)
+    }
+
+    fn station_linked(site_linked: bool) -> (MmBs, crate::net_telemetry::channel::TelemetrySource) {
         let mut cfg = tetra_config::bluestation::from_toml_str(include_str!("../../../../example_config/config.toml")).unwrap();
         cfg.cell.periodic_registration_secs = 3600;
         cfg.cell.presence_check_secs = 30;
         cfg.cell.presence_response_secs = 60;
+        cfg.site_linked = site_linked;
         let shared = SharedConfig::from_parts(cfg, None);
         let (sink, events) = telemetry_channel();
         let mut mm = MmBs::new(shared, Some(sink), None);
@@ -3475,6 +3955,30 @@ mod presence_tests {
         mm.drive_registration_checks(&mut queue, next, now, true);
         assert!(queue.pop_front().is_some());
         assert!(queue.pop_front().is_none());
+    }
+
+    fn probes(queue: &mut MessageQueue) -> Vec<u32> {
+        std::iter::from_fn(|| queue.pop_front())
+            .filter_map(|m| match m.msg {
+                SapMsgInner::CmceCallControl(CallControl::SitePresenceProbe { issi }) if m.dest == TetraEntity::Brew => Some(issi),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_site_linked_cell_has_its_location_area_siblings_check_presence_too() {
+        let now = Instant::now() + Duration::from_secs(31);
+        let ts = TdmaTime { t: 1, f: 1, m: 1, h: 0 };
+        for linked in [false, true] {
+            let (mut mm, _) = station_linked(linked);
+            radio(&mut mm, 100);
+            mm.registration_check_last_tick = Some(now - Duration::from_secs(1));
+            let mut queue = MessageQueue::new();
+            mm.drive_registration_checks(&mut queue, ts, now, true);
+            let expected: Vec<u32> = if linked { vec![100] } else { vec![] };
+            assert_eq!(probes(&mut queue), expected, "linked = {linked}");
+        }
     }
 
     #[test]

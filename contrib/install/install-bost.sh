@@ -178,7 +178,9 @@ if [[ -d "$SRC_ROOT/.git" ]]; then
   fi
   git_fetch_branch "$SRC_ROOT" "$BRANCH" \
     || die "git fetch origin/$BRANCH failed after retries (network/TLS). Re-run the installer."
-  git -C "$SRC_ROOT" checkout -B "$BRANCH" "origin/$BRANCH"
+  # -f: local changes (e.g. a mode bit the installer set) must not block the update; reset --hard
+  # below discards them anyway.
+  git -C "$SRC_ROOT" checkout -f -B "$BRANCH" "origin/$BRANCH"
   git -C "$SRC_ROOT" reset --hard "origin/$BRANCH"
   log "Source at $(git -C "$SRC_ROOT" rev-parse --short HEAD) ($(git -C "$SRC_ROOT" rev-parse --abbrev-ref HEAD))"
 elif [[ -e "$SRC_ROOT" ]]; then
@@ -199,8 +201,9 @@ CODEC_SCRIPT="$SRC_ROOT/contrib/install/install-tetra-codec.sh"
 WITH_ASTERISK_FEATURE=0
 if [[ "${BOST_SKIP_TETRA_CODEC:-0}" == "1" ]]; then
   warn "BOST_SKIP_TETRA_CODEC=1 — LST voice encode/decode will be unavailable"
-elif [[ -x "$CODEC_SCRIPT" ]] || [[ -f "$CODEC_SCRIPT" ]]; then
-  chmod +x "$CODEC_SCRIPT" || true
+elif [[ -f "$CODEC_SCRIPT" ]]; then
+  # Run through bash, no chmod: an executable bit set here is a local change to the checkout,
+  # which marks every build "-modified" and makes git refuse the next checkout.
   log "Installing tetra-codec (libtetra-codec) for LST voice"
   if bash "$CODEC_SCRIPT"; then
     WITH_ASTERISK_FEATURE=1

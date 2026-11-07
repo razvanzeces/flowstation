@@ -513,6 +513,7 @@ const CELL_VISUAL_OPTIONAL: &[&str] = &[
     "periodic_registration_secs",
     "secondary_carrier",
     "dual_carrier_enabled",
+    "rxlev_access_min_dbm",
 ];
 
 fn prune_cell_info_visual_optional(table: &mut toml::Table, incoming_cell: &JsonValue) {
@@ -1159,6 +1160,48 @@ password = "secret"
             !txt.contains("tx_gain_pad"),
             "apply must drop omitted pad: {txt}"
         );
+    }
+
+    #[test]
+    fn write_visual_sets_and_clears_rxlev_access_min_and_migration() {
+        let dir = tempfile_dir();
+        let cfg = dir.join("config.toml");
+        fs::write(&cfg, minimal_toml()).unwrap();
+        let visual = |cell_extra: serde_json::Value| {
+            let mut cell = serde_json::json!({
+                "freq_band": 4,
+                "main_carrier": 1521,
+                "duplex_spacing": 4,
+                "freq_offset": 0,
+                "reverse_operation": false,
+                "colour_code": 1,
+                "location_area": 2,
+                "system_wide_services": true,
+                "late_entry_supported": true,
+                "voice_service": true
+            });
+            for (k, v) in cell_extra.as_object().unwrap() {
+                cell[k] = v.clone();
+            }
+            serde_json::json!({
+                "phy_io": {
+                    "backend": "SoapySdr",
+                    "soapysdr": { "tx_freq": 438_025_000.0, "rx_freq": 433_025_000.0, "ppm_err": 0 }
+                },
+                "net_info": { "mcc": 204, "mnc": 1337 },
+                "cell_info": cell
+            })
+        };
+        write_visual_config(cfg.to_str().unwrap(), &visual(serde_json::json!({ "rxlev_access_min_dbm": -100, "migration": true }))).unwrap();
+        let txt = fs::read_to_string(&cfg).unwrap();
+        assert!(txt.contains("rxlev_access_min_dbm = -100"), "rxlev must be written: {txt}");
+        assert!(txt.contains("migration = true"), "migration must be written: {txt}");
+
+        // Default selected (key omitted) and migration unticked: back to -110 / off.
+        write_visual_config(cfg.to_str().unwrap(), &visual(serde_json::json!({ "migration": false }))).unwrap();
+        let txt = fs::read_to_string(&cfg).unwrap();
+        assert!(!txt.contains("rxlev_access_min_dbm"), "omitted rxlev must be pruned: {txt}");
+        assert!(txt.contains("migration = false"), "migration off must be written: {txt}");
     }
 
     #[test]

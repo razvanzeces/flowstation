@@ -9,6 +9,7 @@ pub mod geoalarm;
 pub mod html;
 pub mod ota_channel;
 pub mod profiles;
+pub mod roaming;
 pub mod radioid;
 pub mod sds_commands;
 pub mod security;

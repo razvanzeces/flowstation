@@ -73,6 +73,11 @@ impl CircuitMgr {
         Some(self.ul_only.remove(index))
     }
 
+    /// The circuit open on the given carrier/timeslot, if any.
+    pub fn circuit_slot(&self, carrier_num: u16, ts: u8) -> Option<&CmceCircuit> {
+        self.find_dl(carrier_num, ts).or_else(|| self.find_ul_only(carrier_num, ts))
+    }
+
     /// Checks if a circuit is active on the given carrier/timeslot.
     /// Returns (dl_active, ul_active).
     pub fn is_active_slot(&self, carrier_num: u16, ts: u8) -> (bool, bool) {

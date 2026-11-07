@@ -84,8 +84,8 @@ pub struct CfgCellReselect {
 }
 
 impl Default for CfgCellReselect {
-    /// Conservative values: a radio looks around once its serving cell is 20 dB (slow) / 10 dB
-    /// (fast) above the access minimum, and only moves to a clearly better neighbour, avoiding
+    /// Conservative values: a radio looks around once its serving cell is 30 dB (slow, 20 dB
+    /// above fast, clause 18.5.4) / 10 dB (fast) above the access minimum, and only moves to a clearly better neighbour, avoiding
     /// ping-pong between the station's own cells.
     fn default() -> Self {
         Self {
@@ -243,6 +243,11 @@ pub struct CfgCellInfo {
 
     pub ms_txpwr_max_cell: u8,
 
+    /// RXLEV_ACCESS_MIN broadcast in SYSINFO, in dBm (TS 100 392-2 table 21.65: -125 to -50 dBm
+    /// in 5 dB steps). It is the minimum level an MS needs to access the cell and the reference of
+    /// its path loss parameter C1 (clause 23.7.1.1), which drives cell reselection (18.3.4.5).
+    pub rxlev_access_min_dbm: i16,
+
     pub local_ssi_ranges: SortedDisjointSsiRanges,
 
     /// IANA timezone name (e.g. "Europe/Amsterdam"). When set, enables D-NWRK-BROADCAST
@@ -327,7 +332,27 @@ pub struct CfgCellInfo {
     pub dgna_attachment_mode: u8,
 }
 
+/// RXLEV_ACCESS_MIN when `[cell_info] rxlev_access_min_dbm` is absent: -110 dBm (permissive).
+pub const DEFAULT_RXLEV_ACCESS_MIN_DBM: i16 = -110;
+
+/// The 4-bit RXLEV_ACCESS_MIN / minimum RX access level code for a level in dBm
+/// (TS 100 392-2 table 21.65 and table 18.56: 0 = -125 dBm, 5 dB steps, 15 = -50 dBm).
+/// None if the level is not one of the 16 coded values.
+pub fn rxlev_access_min_code(dbm: i16) -> Option<u8> {
+    if !(-125..=-50).contains(&dbm) || (dbm + 125) % 5 != 0 {
+        return None;
+    }
+    Some(((dbm + 125) / 5) as u8)
+}
+
 impl CfgCellInfo {
+    /// The SYSINFO RXLEV_ACCESS_MIN code of this cell (table 21.65). The level is checked in
+    /// validate(); an unchecked bad value falls back to the -110 dBm default.
+    pub fn rxlev_access_min(&self) -> u8 {
+        rxlev_access_min_code(self.rxlev_access_min_dbm)
+            .unwrap_or_else(|| rxlev_access_min_code(DEFAULT_RXLEV_ACCESS_MIN_DBM).unwrap())
+    }
+
     /// Whether the WAP/SNDCP packet-data gateway is active. This is the single source of truth:
     /// the runtime gateway and the SNDCP/advanced-link SYSINFO advertisement all derive from it,
     /// so `[cell_info.wap_ip].enabled` is the one master switch — toggling it can never leave the
@@ -376,6 +401,9 @@ pub struct CellInfoDto {
     pub frame_18_ext: Option<bool>,
 
     pub ms_txpwr_max_cell: Option<u8>,
+
+    /// RXLEV_ACCESS_MIN in dBm. Absent = -110 dBm.
+    pub rxlev_access_min_dbm: Option<i16>,
 
     pub local_ssi_ranges: Option<Vec<(u32, u32)>>,
 
@@ -473,6 +501,7 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         u_plane_dtx: ci.u_plane_dtx.unwrap_or(false),
         frame_18_ext: ci.frame_18_ext.unwrap_or(false),
         ms_txpwr_max_cell: ci.ms_txpwr_max_cell.unwrap_or(4), // 30 dBm (1W), Table 18.57
+        rxlev_access_min_dbm: ci.rxlev_access_min_dbm.unwrap_or(DEFAULT_RXLEV_ACCESS_MIN_DBM),
         local_ssi_ranges: ci
             .local_ssi_ranges
             .map(SortedDisjointSsiRanges::from_vec_tuple)

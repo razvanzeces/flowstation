@@ -147,6 +147,7 @@ fn test_stealing_bl_udata_fallback_uses_unlinked_llc_context() {
         req_handle: 0,
         graceful_degradation: None,
         chan_alloc: None,
+        stealing_slot: None,
         tx_reporter: None,
     };
 

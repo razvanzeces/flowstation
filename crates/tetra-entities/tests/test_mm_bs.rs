@@ -10,6 +10,8 @@ use tetra_pdus::cmce::ss_dgna::ss_dgna_pdu::SsDgnaPdu;
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
 use tetra_pdus::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
 use tetra_pdus::mm::pdus::d_attach_detach_group_identity::DAttachDetachGroupIdentity;
+use tetra_pdus::mm::pdus::d_attach_detach_group_identity_acknowledgement::DAttachDetachGroupIdentityAcknowledgement;
+use tetra_pdus::mm::pdus::d_location_update_accept::DLocationUpdateAccept;
 use tetra_pdus::mm::pdus::d_mm_status::DMmStatus;
 use tetra_pdus::mm::pdus::u_itsi_detach::UItsiDetach;
 use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
@@ -542,14 +544,9 @@ fn test_registration_rate_limit_drops_repeat_flood_from_one_issi() {
     );
 }
 
-/// ETSI EN 300 392-2 cl. 16.9.2.2: the accept must preserve the accepted location update type.
-/// Answering an ItsiAttach with PeriodicLocationUpdating leaves radios that key attach-completion
-/// off the accept type believing the attach never completed.
-#[test]
-fn test_itsi_attach_accept_preserves_accept_type() {
-    debug::setup_logging_verbose();
-    const ATTACHER: u32 = 2260812;
-
+/// Location update accept type MM answers a registration of `lu_type` with, on a cell with
+/// periodic registration configured.
+fn accept_type_for(issi: u32, lu_type: LocationUpdateType) -> Option<u64> {
     let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
     config.cell.periodic_registration_secs = 300;
     let mut test = ComponentTest::from_config(config, Some(TdmaTime::default()));
@@ -557,11 +554,11 @@ fn test_itsi_attach_accept_preserves_accept_type() {
     let mm = MmBs::new(test.get_shared_config(), None, None);
     test.register_entity(mm);
 
-    submit_location_update(&mut test, ATTACHER, 0, LocationUpdateType::ItsiAttach);
+    submit_location_update(&mut test, issi, 0, lu_type);
     let msgs = test.dump_sinks();
 
     let want = MmPduTypeDl::DLocationUpdateAccept.into_raw();
-    let accept_type = msgs.iter().find_map(|m| {
+    msgs.iter().find_map(|m| {
         let SapMsgInner::LmmMleUnitdataReq(ref req) = m.msg else {
             return None;
         };
@@ -570,12 +567,35 @@ fn test_itsi_attach_accept_preserves_accept_type() {
             return None;
         }
         sdu.read_field(3, "location_update_accept_type").ok()
-    });
+    })
+}
+
+/// TS 100 392-2 clause 16.10.35a: the accept type "shall indicate the type of registration".
+/// Answering an ItsiAttach with PeriodicLocationUpdating leaves radios that key attach-completion
+/// off the accept type believing the attach never completed.
+#[test]
+fn test_itsi_attach_accept_preserves_accept_type() {
+    debug::setup_logging_verbose();
     assert_eq!(
-        accept_type,
+        accept_type_for(2260812, LocationUpdateType::ItsiAttach),
         Some(LocationUpdateType::ItsiAttach.into_raw()),
         "an ItsiAttach must be accepted as an ItsiAttach"
     );
+}
+
+/// Clause 16.10.35a, table 16.68: a roaming, demand (the answer to D-LOCATION UPDATE COMMAND,
+/// clause 16.4.3) or periodic registration is accepted as that type, also with periodic
+/// registration configured (before: always "periodic location updating").
+#[test]
+fn test_location_update_accept_type_names_the_registration() {
+    debug::setup_logging_verbose();
+    for (lu_type, accepted) in [
+        (LocationUpdateType::RoamingLocationUpdating, 0b000),
+        (LocationUpdateType::PeriodicLocationUpdating, 0b010),
+        (LocationUpdateType::DemandLocationUpdating, 0b110),
+    ] {
+        assert_eq!(accept_type_for(2320972, lu_type), Some(accepted), "{lu_type:?}");
+    }
 }
 
 /// DGNA assign (SS-DGNA default): a dashboard control command makes MM affiliate the GSSI in the
@@ -1256,6 +1276,169 @@ fn test_moved_to_sibling_cell_drops_registration_silently() {
     );
 }
 
+/// A plain roaming registration tells the Brew entity the radio has no call to restore: an MS
+/// with a circuit mode call registers with service restoration roaming (TS 100 392-2 clause
+/// 16.4 a)). Demand location updating answers our COMMAND and says nothing about calls.
+#[test]
+fn test_plain_roaming_registration_is_reported_as_without_call() {
+    use tetra_saps::control::call_control::CallControl;
+    let reported = |lu_type: LocationUpdateType, brew: bool| {
+        let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+        if brew {
+            config.cell.local_ssi_ranges = tetra_core::ranges::SortedDisjointSsiRanges::from_vec_ssirange(vec![]);
+            config.brew = Some(tetra_config::bluestation::CfgBrew {
+                host: "brew.example".into(),
+                port: 3000,
+                tls: false,
+                username: None,
+                password: None,
+                reconnect_delay: std::time::Duration::from_secs(1),
+                jitter_initial_latency_frames: 0,
+                feature_sds_enabled: true,
+                whitelisted_ssis: None,
+                feature_rssi_export: false,
+                feature_lip_forward: false,
+                lip_forward_issi: None,
+                pbx_gateway_issis: None,
+                backhaul_hysteresis_secs: 0,
+            });
+        }
+        let mut test = ComponentTest::from_config(config, Some(TdmaTime::default()));
+        test.populate_entities(vec![TetraEntity::Mm], vec![TetraEntity::Mle, TetraEntity::Cmce, TetraEntity::Brew]);
+        submit_location_update(&mut test, 2320972, 0, lu_type);
+        test.dump_sinks().iter().any(|m| {
+            m.dest == TetraEntity::Brew && matches!(m.msg, SapMsgInner::CmceCallControl(CallControl::RegisteredWithoutCall { issi: 2320972 }))
+        })
+    };
+    assert!(reported(LocationUpdateType::RoamingLocationUpdating, true));
+    assert!(!reported(LocationUpdateType::ServiceRestorationRoamingLocationUpdating, true));
+    assert!(!reported(LocationUpdateType::DemandLocationUpdating, true));
+    assert!(!reported(LocationUpdateType::RoamingLocationUpdating, false), "nothing without Brew");
+}
+
+// ── Detach all + attach (group report) ───────────────────────────────────────────────────────
+
+fn attach_entry(gssi: u32) -> tetra_pdus::mm::fields::group_identity_uplink::GroupIdentityUplink {
+    tetra_pdus::mm::fields::group_identity_uplink::GroupIdentityUplink {
+        class_of_usage: Some(4),
+        group_identity_detachment_uplink: None,
+        gssi: Some(gssi),
+        address_extension: None,
+        vgssi: None,
+    }
+}
+
+fn submit_mm_uplink(test: &mut ComponentTest, issi: u32, write: impl FnOnce(&mut BitBuffer)) {
+    let mut sdu = BitBuffer::new_autoexpand(64);
+    write(&mut sdu);
+    sdu.seek(0);
+    test.submit_message(SapMsg {
+        sap: Sap::LmmSap,
+        src: TetraEntity::Mle,
+        dest: TetraEntity::Mm,
+        msg: SapMsgInner::LmmMleUnitdataInd(LmmMleUnitdataInd {
+            sdu,
+            handle: 0,
+            received_address: TetraAddress::issi(issi),
+        }),
+    });
+    test.run_stack(Some(2));
+}
+
+/// Location update of `issi` attaching `groups`; `detach_all` sets attach/detach mode 1.
+fn submit_location_update_with_groups(test: &mut ComponentTest, issi: u32, lu_type: LocationUpdateType, detach_all: bool, groups: &[u32]) {
+    let demand = ULocationUpdateDemand {
+        location_update_type: lu_type,
+        request_to_append_la: false,
+        cipher_control: false,
+        ciphering_parameters: None,
+        class_of_ms: None,
+        energy_saving_mode: None,
+        la_information: None,
+        ssi: Some(issi as u64),
+        address_extension: None,
+        group_identity_location_demand: Some(tetra_pdus::mm::fields::group_identity_location_demand::GroupIdentityLocationDemand {
+            group_identity_attach_detach_mode: detach_all as u8,
+            group_identity_uplink: Some(groups.iter().map(|&g| attach_entry(g)).collect()),
+        }),
+        group_report_response: None,
+        authentication_uplink: None,
+        extended_capabilities: None,
+        proprietary: None,
+    };
+    submit_mm_uplink(test, issi, |b| demand.to_bitbuf(b).expect("serialize U-LOCATION-UPDATE-DEMAND"));
+}
+
+fn submit_attach_detach_all(test: &mut ComponentTest, issi: u32, groups: &[u32]) {
+    let pdu = tetra_pdus::mm::pdus::u_attach_detach_group_identity::UAttachDetachGroupIdentity {
+        group_identity_report: false,
+        group_identity_attach_detach_mode: true,
+        group_report_response: None,
+        group_identity_uplink: Some(groups.iter().map(|&g| attach_entry(g)).collect()),
+        proprietary: None,
+    };
+    submit_mm_uplink(test, issi, |b| pdu.to_bitbuf(b).expect("serialize U-ATTACH/DETACH GROUP IDENTITY"));
+}
+
+/// Subscriber updates MM sent towards CMCE: (action, groups).
+fn subscriber_updates(msgs: &[SapMsg]) -> Vec<(BrewSubscriberAction, Vec<u32>)> {
+    msgs.iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::MmSubscriberUpdate(u) if m.dest == TetraEntity::Cmce => Some((u.action, u.groups.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn mm_with_cmce_sink() -> ComponentTest {
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime::default()));
+    test.populate_entities(vec![TetraEntity::Mm], vec![TetraEntity::Mle, TetraEntity::Cmce]);
+    test
+}
+
+/// The group report a radio sends after D-LOCATION UPDATE COMMAND re-attaches its groups with
+/// "detach all and attach" (TS 100 392-2 clause 16.4.3, table 16.49). A group it attaches again
+/// must stay affiliated: deaffiliating it for a moment releases a running call to it (seen in the
+/// milestone 4 field test, D-RELEASE on air and a new call identifier).
+#[test]
+fn test_detach_all_attach_keeps_reattached_group_affiliated() {
+    debug::setup_logging_verbose();
+    const ISSI: u32 = 2320972;
+    let mut test = mm_with_cmce_sink();
+    submit_location_update_with_groups(&mut test, ISSI, LocationUpdateType::RoamingLocationUpdating, false, &[9, 10]);
+    test.dump_sinks();
+
+    submit_attach_detach_all(&mut test, ISSI, &[9, 11]);
+    let updates = subscriber_updates(&test.dump_sinks());
+    let deaffiliated: Vec<u32> = updates
+        .iter()
+        .filter(|(a, _)| *a == BrewSubscriberAction::Deaffiliate)
+        .flat_map(|(_, g)| g.clone())
+        .collect();
+    assert_eq!(deaffiliated, vec![10], "only the group the radio dropped, got {updates:?}");
+    assert!(updates.iter().any(|(a, g)| *a == BrewSubscriberAction::Affiliate && g.contains(&11)));
+    let attached = test.config.state_read().subscribers.attached_groups_of(ISSI);
+    assert!(attached.contains(&9) && attached.contains(&11) && !attached.contains(&10));
+}
+
+/// Same for a location update with attach/detach mode 1 (the answer to D-LOCATION UPDATE COMMAND).
+#[test]
+fn test_location_update_detach_all_keeps_reattached_group_affiliated() {
+    debug::setup_logging_verbose();
+    const ISSI: u32 = 2320972;
+    let mut test = mm_with_cmce_sink();
+    submit_location_update_with_groups(&mut test, ISSI, LocationUpdateType::RoamingLocationUpdating, false, &[9]);
+    test.dump_sinks();
+
+    submit_location_update_with_groups(&mut test, ISSI, LocationUpdateType::DemandLocationUpdating, true, &[9]);
+    let updates = subscriber_updates(&test.dump_sinks());
+    assert!(
+        !updates.iter().any(|(a, _)| *a == BrewSubscriberAction::Deaffiliate),
+        "re-attached group must not be deaffiliated, got {updates:?}"
+    );
+    assert!(test.config.state_read().subscribers.attached_groups_of(ISSI).contains(&9));
+}
+
 /// A clean radio power-off need not wait for either presence or periodic timers.
 #[test]
 fn test_authorized_itsi_detach_updates_dashboard_and_brew_immediately() {
@@ -1320,4 +1503,88 @@ fn test_uplink_from_known_unavailable_radio_requests_registration_and_location_u
         registered_event |= matches!(event, tetra_entities::net_telemetry::TelemetryEvent::MsRegistration { issi: RADIO });
     }
     assert!(registered_event);
+}
+
+// ── Group access (Brew server `group-access` rules) ──────────────────────────────────────────
+
+/// The first MM downlink PDU of `pdu_type` (its SDU from the start).
+fn mm_downlink(msgs: &[SapMsg], pdu_type: MmPduTypeDl) -> Option<BitBuffer> {
+    msgs.iter().find_map(|m| {
+        let SapMsgInner::LmmMleUnitdataReq(ref req) = m.msg else {
+            return None;
+        };
+        let sdu = BitBuffer::from_bitstr(&req.sdu.to_bitstr());
+        (sdu.peek_bits(4) == Some(pdu_type.into_raw())).then_some(sdu)
+    })
+}
+
+/// (GSSI, detachment reason) of the refused entries, and the accepted GSSIs.
+fn split_downlink(gid: &[tetra_pdus::mm::fields::group_identity_downlink::GroupIdentityDownlink]) -> (Vec<(u32, u8)>, Vec<u32>) {
+    let refused = gid.iter().filter_map(|g| Some((g.gssi?, g.group_identity_detachment_uplink?))).collect();
+    let accepted = gid.iter().filter(|g| g.group_identity_attachment.is_some()).filter_map(|g| g.gssi).collect();
+    (refused, accepted)
+}
+
+fn limit_group(test: &mut ComponentTest, gssi: u32, block: bool, issis: &[u32]) {
+    test.config.state_write().brew_group_access.insert(
+        gssi,
+        tetra_config::bluestation::BrewGroupAccess { gssi, block, issis: issis.to_vec(), ..Default::default() },
+    );
+}
+
+/// A group the server's rules do not admit is refused in the acknowledgement with a reason
+/// (TS 100 392-2 clause 16.8.2; "Temporary 1 detachment", table 16.52) and "at least one
+/// attachment/detachment rejected" (table 16.44); the others attach as before and the refused
+/// one is neither attached nor affiliated.
+#[test]
+fn test_group_access_refuses_attachment_in_the_acknowledgement() {
+    debug::setup_logging_verbose();
+    const ISSI: u32 = 2320972;
+    let mut test = mm_with_cmce_sink();
+    limit_group(&mut test, 10, false, &[ISSI + 1]); // allow list without this radio
+    limit_group(&mut test, 11, true, &[ISSI + 1]); // block list without this radio
+    submit_location_update_with_groups(&mut test, ISSI, LocationUpdateType::RoamingLocationUpdating, false, &[9]);
+    test.dump_sinks();
+
+    submit_attach_detach_all(&mut test, ISSI, &[9, 10, 11]);
+    let msgs = test.dump_sinks();
+    let mut sdu = mm_downlink(&msgs, MmPduTypeDl::DAttachDetachGroupIdentityAcknowledgement).expect("acknowledgement");
+    let ack = DAttachDetachGroupIdentityAcknowledgement::from_bitbuf(&mut sdu).expect("parses");
+    assert_eq!(ack.group_identity_accept_reject, 1);
+    let (refused, accepted) = split_downlink(ack.group_identity_downlink.as_deref().unwrap_or_default());
+    assert_eq!(refused, vec![(10, 1)]);
+    assert!(accepted.contains(&9) && accepted.contains(&11), "{accepted:?}");
+    let attached = test.config.state_read().subscribers.attached_groups_of(ISSI);
+    assert!(attached.contains(&9) && attached.contains(&11) && !attached.contains(&10));
+    let updates = subscriber_updates(&msgs);
+    assert!(!updates.iter().any(|(a, g)| *a == BrewSubscriberAction::Affiliate && g.contains(&10)), "{updates:?}");
+
+    // No rules: everything accepted as before.
+    test.config.state_write().brew_group_access.clear();
+    submit_attach_detach_all(&mut test, ISSI, &[9, 10]);
+    let mut sdu = mm_downlink(&test.dump_sinks(), MmPduTypeDl::DAttachDetachGroupIdentityAcknowledgement).expect("acknowledgement");
+    let ack = DAttachDetachGroupIdentityAcknowledgement::from_bitbuf(&mut sdu).expect("parses");
+    assert_eq!(ack.group_identity_accept_reject, 0);
+    assert!(test.config.state_read().subscribers.attached_groups_of(ISSI).contains(&10));
+}
+
+/// Same in a location update: the refused group is in the group identity location accept with
+/// its reason (clause 16.10.23).
+#[test]
+fn test_group_access_refuses_attachment_in_the_location_update_accept() {
+    debug::setup_logging_verbose();
+    const ISSI: u32 = 2320972;
+    let mut test = mm_with_cmce_sink();
+    limit_group(&mut test, 10, true, &[ISSI]);
+    submit_location_update_with_groups(&mut test, ISSI, LocationUpdateType::RoamingLocationUpdating, false, &[9, 10]);
+    let msgs = test.dump_sinks();
+    let mut sdu = mm_downlink(&msgs, MmPduTypeDl::DLocationUpdateAccept).expect("accept");
+    let accept = DLocationUpdateAccept::from_bitbuf(&mut sdu).expect("parses");
+    let gila = accept.group_identity_location_accept.expect("group identity location accept");
+    assert_eq!(gila.group_identity_accept_reject, 1);
+    let (refused, accepted) = split_downlink(gila.group_identity_downlink.as_deref().unwrap_or_default());
+    assert_eq!(refused, vec![(10, 1)]);
+    assert_eq!(accepted, vec![9]);
+    let attached = test.config.state_read().subscribers.attached_groups_of(ISSI);
+    assert!(attached.contains(&9) && !attached.contains(&10));
 }

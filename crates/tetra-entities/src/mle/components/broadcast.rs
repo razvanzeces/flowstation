@@ -178,6 +178,7 @@ impl MleBroadcast {
                 data_class_info: None,
                 req_handle: 0,
                 chan_alloc: None,
+                stealing_slot: None,
                 tx_reporter: None,
             }),
         };

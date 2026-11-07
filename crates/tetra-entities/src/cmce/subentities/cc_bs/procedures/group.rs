@@ -121,7 +121,27 @@ impl CcBsSubentity {
         let carrier_num = call.carrier_num;
         let dest_ssi = call.dest_gssi;
         let current_speaker = call.source_issi;
-        let grant_now = matches!(state, GroupCallState::NoActiveSpeaker { .. });
+        let emergency = is_emergency_priority(call.priority);
+
+        // Who may talk on the group (Brew server rules, `group-access`): a radio that may not is
+        // told "transmission not granted" and stays in the call (clause 14.5.2.2.1 b), table
+        // 14.80). An emergency call is never limited.
+        if !emergency && !self.config.state_read().group_may_talk(dest_ssi, requesting_party.ssi) {
+            tracing::info!(
+                "CMCE: U-TX DEMAND call_id={} from ISSI {} on GSSI {} not granted (may not talk on the group, group-access)",
+                call_id,
+                requesting_party.ssi,
+                dest_ssi
+            );
+            self.fsm_send_d_tx_granted_individual(queue, call_id, requesting_party, carrier_num, ts, TransmissionGrant::NotGranted, Some(current_speaker));
+            return Ok(());
+        }
+        let Some(call) = self.active_calls.get_mut(&call_id) else {
+            return Err(GroupTransitionError::UnknownCall(call_id));
+        };
+        // The network talker of this over has moved here unannounced and keys up again: it
+        // keeps the floor (see `take_over_moved_talker`).
+        let grant_now = matches!(state, GroupCallState::NoActiveSpeaker { .. }) || call.take_over_moved_talker(requesting_party.ssi);
         let queue_result = if grant_now {
             call.grant_floor(requesting_party.ssi, Some(requesting_party));
             None

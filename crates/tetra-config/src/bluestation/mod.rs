@@ -70,6 +70,9 @@ pub use sec_telegram::*;
 pub mod sec_recovery;
 pub use sec_recovery::*;
 
+pub mod sec_multi_network;
+pub use sec_multi_network::*;
+
 pub mod sec_emergency;
 pub use sec_emergency::*;
 

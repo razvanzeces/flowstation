@@ -121,6 +121,7 @@ impl TelemetrySink {
                 self.push(TelemetryEvent::MsCell { issi, cell });
                 return;
             }
+            TelemetryEvent::MsMovedAway { cell: left, .. } => *left = cell,
             TelemetryEvent::GroupCallStarted { call_id, .. }
             | TelemetryEvent::GroupCallEnded { call_id, .. }
             | TelemetryEvent::CallSpeakerChanged { call_id, .. }
@@ -279,6 +280,10 @@ mod tests {
         cell1.send(TelemetryEvent::MsRegistration { issi: 7 });
         assert!(matches!(source.try_recv(), Some(TelemetryEvent::MsRegistration { issi: 7 })));
         assert!(matches!(source.try_recv(), Some(TelemetryEvent::MsCell { issi: 7, cell: 1 })));
+        // A radio leaving cell 1 is reported as leaving cell 1, so consumers can tell a move to a
+        // sibling cell (its MsCell already names the new cell) from one to another station.
+        cell1.send(TelemetryEvent::MsMovedAway { issi: 7, cell: 0 });
+        assert!(matches!(source.try_recv(), Some(TelemetryEvent::MsMovedAway { issi: 7, cell: 1 })));
 
         // Cell 0 keeps its ids; cell 1's call 4 gets a station-wide id that can't clash.
         cell0.send(TelemetryEvent::GroupCallEnded { call_id: 4, gssi: 91 });

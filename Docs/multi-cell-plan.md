@@ -211,8 +211,8 @@ sender's cell had no members and Brew SDS was on — linked CMCEs now always han
 group SDS to the switch, which sends to the network only an SDS for nobody on site (and only with
 Brew SDS on).
 
-**Reselection:** auto sibling neighbours advertise `cell_reselection_types_supported = 3` (announced
-and unannounced), the main carrier number extension (band 4 | offset 2 | duplex 3 | reverse 1 bits)
+**Reselection:** auto sibling neighbours advertise `cell_reselection_types_supported = 3` (TS 100
+392-2 table 18.22: forward registration supported, expedited cell reselection recommended), the main carrier number extension (band 4 | offset 2 | duplex 3 | reverse 1 bits)
 when the sibling's band plan differs, and its `ms_txpwr_max_cell` when it differs; cells must share
 `custom_duplex_spacing` (not expressible to radios). D-NWRK-BROADCAST with neighbours now sends
 `[cell_info.cell_reselect]` (slow/fast threshold and hysteresis, 4 bits each in 2 dB units; default

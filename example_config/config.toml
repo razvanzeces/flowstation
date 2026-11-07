@@ -260,6 +260,10 @@ voice_service = true
 # u_plane_dtx             = false   # advertise U-plane DTX (discontinuous TX) support (default false)
 # frame_18_ext            = false   # frame-18 extension flag in SYNC (default false)
 # ms_txpwr_max_cell       = 4       # max MS TX power index (Table 18.57; 4 = 30 dBm / 1 W; default 4)
+# rxlev_access_min_dbm    = -110    # RXLEV_ACCESS_MIN in SYSINFO (table 21.65; -125..-50 dBm in 5 dB steps;
+#                                   # default -110). A higher value lowers C1, so radios reselect a better
+#                                   # neighbour earlier, but radios below it cannot access this cell.
+#                                   # See Docs/cell-reselection.md.
 # subscriber_class        = 0xFFFF  # 16-bit mask of subscriber classes allowed on this cell (default all)
 
 ###############################################################################
@@ -277,7 +281,9 @@ voice_service = true
 #
 # [[cell_info.neighbor_cells_ca]]
 # cell_identifier_ca = 1                # 0-31, unique within CA cluster
-# cell_reselection_types_supported = 1  # 0=none, 1=announced, 2=unannounced, 3=both
+# cell_reselection_types_supported = 1  # table 18.22: 0=no forward registration, 1=no forward registration +
+#                                       # expedited reselection recommended, 2=forward registration supported,
+#                                       # 3=forward registration + expedited (see Docs/cell-reselection.md)
 # neighbor_cell_synchronized = false    # true if time-sync'd with us
 # cell_load_ca = 0                      # 0=low, 1=medium-low, 2=medium-high, 3=high
 # main_carrier_number = 1525            # 0-4095, must differ from our main_carrier
@@ -331,6 +337,9 @@ voice_service = true
 # configured, or with multi-cell [[cells]]). A radio starts looking for a better
 # cell when its serving cell drops below the threshold, and moves only to a
 # neighbour better by the hysteresis. dB, 0-30 in 2 dB steps. Defaults shown.
+# slow_threshold_db is added to fast_threshold_db (clause 18.5.4), so the
+# default slow threshold is 30 dB. Thresholds count from rxlev_access_min_dbm.
+# See Docs/cell-reselection.md.
 #
 # [cell_info.cell_reselect]
 # slow_threshold_db = 20
@@ -519,6 +528,26 @@ voice_service = true
 # max_cached_issis = 1024         # hard cap on cached terminals (1..=65535)
 # reactive_enabled = true         # command unknown radios to re-register on sight (default true)
 # reactive_cooldown_secs = 10     # min gap between reactive COMMANDs to the same ISSI (2..=120)
+
+###############################################################################
+
+# OPTIONAL: Multi Network (radios of other networks by migration)
+#
+# Radios whose home network (MCC/MNC) is listed in `networks` may register here by migration
+# (ETSI TS 100 392-2 clause 16.4.1.1 case b)): they get a (V)ASSI from `vassi_range` and their
+# home groups a (V)GSSI from `vgssi_range` (clauses 16.4.7, 16.8.7). While enabled, the cells
+# announce migration in SYSINFO by themselves (clause 18.5.2.1); `migration` in [cell_info] is not
+# needed. Off: every migrating radio is refused with "Migration not supported" as
+# before. A radio of this network coming back from another one (case c)) registers as usual.
+# With a brew-server that offers the `mni` extension a visitor reaches its home network through
+# the server, and `networks` may stay empty: then every network the server reaches and has up is
+# accepted. Without such a server visitors work only inside this station.
+#
+# [multi_network]
+# enabled = true
+# networks = [{ mcc = 901, mnc = 1234 }]   # optional with an `mni` server
+# vassi_range = [15728640, 15794175]   # 0xF00000..0xF0FFFF (default), never an ISSI of this network
+# vgssi_range = [15794176, 15859711]   # 0xF10000..0xF1FFFF (default)
 
 ###############################################################################
 
@@ -1037,4 +1066,21 @@ voice_service = true
 # device = "driver=plutosdr,uri=ip:192.168.3.1"
 # tx_freq = 438125000
 # rx_freq = 433125000
+#
+# Several networks (one MCC/MNC per cell, ETSI TS 100 392-2 table 18.17): see
+# Docs/networks.md. A network reached through another network's Brew server
+# (Multi Network "Infrastructure", the server must offer `mni`) has `via`
+# instead of its own [brew]; `network = "..."` binds a cell to it:
+#
+# network = "home"                  # at the very top of the file
+# [networks.home]                   # MCC/MNC from [net_info]
+# [networks.home.brew]              # the [brew] keys move here
+# ...
+# [networks.tp]
+# mcc = 901
+# mnc = 1638
+# via = "home"
+# [[cells]]
+# id = 1
+# network = "tp"
 ###############################################################################

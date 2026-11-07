@@ -109,6 +109,19 @@ impl CcBsSubentity {
         queue.push_back(msg);
     }
 
+    /// D-TX CEASED to `party` of individual call `call_id`, if it is a local party of the call.
+    pub(in crate::cmce::subentities::cc_bs) fn send_individual_d_tx_ceased_to(
+        &self,
+        queue: &mut MessageQueue,
+        call: &IndividualCall,
+        call_id: u16,
+        party: TetraAddress,
+    ) {
+        if let Some((target, _)) = Self::individual_floor_parties(call, party) {
+            self.send_individual_d_tx_ceased(queue, call, call_id, target);
+        }
+    }
+
     fn send_individual_d_tx_ceased(&self, queue: &mut MessageQueue, call: &IndividualCall, call_id: u16, target: IndividualFloorParty) {
         if !Self::individual_floor_party_is_local(call, target) {
             tracing::trace!(

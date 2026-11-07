@@ -9,6 +9,7 @@ pub struct MockTransport {
     connected: bool,
     sent: Vec<Vec<u8>>,
     inbound: VecDeque<Vec<u8>>,
+    brew_extensions: Vec<String>,
 }
 
 impl MockTransport {
@@ -17,7 +18,14 @@ impl MockTransport {
             connected: false,
             sent: Vec::new(),
             inbound: VecDeque::new(),
+            brew_extensions: Vec::new(),
         }
+    }
+
+    /// Brew extensions the mock server offers on connect (see `server_brew_extensions`).
+    pub fn with_brew_extensions(mut self, extensions: &[&str]) -> Self {
+        self.brew_extensions = extensions.iter().map(|e| e.to_string()).collect();
+        self
     }
 
     pub fn sent_payloads(&self) -> &[Vec<u8>] {
@@ -76,5 +84,9 @@ impl NetworkTransport for MockTransport {
 
     fn disconnect(&mut self) {
         self.connected = false;
+    }
+
+    fn server_brew_extensions(&self) -> &[String] {
+        &self.brew_extensions
     }
 }

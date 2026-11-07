@@ -86,14 +86,97 @@ network, called `default`, and cells are linked only when Brew or LST is configu
 - The Setup page's Brew **profiles** apply to a root `[brew]` and are refused on a station with
   `[networks]`; edit the network's `brew` table in the configuration instead.
 
+## Reached through another network's Brew server (`via`)
+
+A network can also be reached without credentials of its own on the station: `via` names the
+station's network whose Brew server reaches it (the "Infrastructure" way of Multi Network, see
+brew-server `docs/Multi-Network.md`). The network's cells broadcast its own MCC/MNC and connect
+with that network's `[brew]` login, and tell the server, which must offer the `mni` extension,
+that their radios and groups belong to this network (`SERVICE_MS_NETWORK`,
+`SERVICE_GROUP_NETWORK`, `SERVICE_CALL_NETWORK`). The server registers them in that network, for
+example over its link to TetraPack, and routes their calls and SDS there.
+
+```toml
+network = "home"
+
+[networks.home]                    # 901/9999 from [net_info]
+[networks.home.brew]
+host = "brew.example.org"
+port = 443
+tls = true
+username = 1000001
+password = "secret"
+
+[networks.tp]                      # TetraPack, reached through the brew-server
+mcc = 901
+mnc = 1638
+via = "home"
+
+[[cells]]
+id = 1
+network = "tp"
+[cells.cell_info]
+main_carrier = 1532
+```
+
+A radio whose home is 901/9999 that selects 901/1638 on the terminal registers on cell 1 and
+appears on the server as a radio of 901/1638. `via` must name a network with a `brew` of its own,
+and a network has either `brew` or `via`. `[multi_network]` is not needed for this (it is for radios
+of other networks registering on this network's cells by migration, and turns migration on for
+the cells while enabled). Networks and the network of
+each cell can also be set on the dashboard page **Infrastructure** ("Networks" card and the
+"Network" column of the location areas card); the first network added there turns `[net_info]`
+and `[brew]` into the network `home`. With Multi Network on and a brew-server that offers `mni`, the
+card also lists the networks the server reports (its own and the ones it links to) with "Add
+network", and warns when a network reached `via` the server has an MCC/MNC the server does not
+reach ("Routing with this MCC/MNC not possible").
+
+## Radio configuration: ITSI attach or migration
+
+How a radio registers on a cell of another network is set in the radio, per network in its list of
+foreign networks, and decides which network the radio belongs to there:
+
+| Radio setting for the other network | What the radio sends (TS 100 392-2) | Where it lands |
+| --- | --- | --- |
+| ITSI attach | `U-LOCATION UPDATE DEMAND` type ITSI attach / demand, with that network's MNI as address extension: the radio has an identity of its own in that network | That network: on a `via` cell the brew-server registers it there (e.g. TetraPack) |
+| Migration | type migrating location updating with the radio's home MNI (clause 16.4.1.1 case b)) | Its home network: the station gives it a (V)ASSI on the air (clause 16.4.7) and names it with its home ISSI towards the brew-server, which treats it as one of its own radios (home = server's network) or registers it at its home network over a link (`mni`) |
+
+Seen on a Motorola MTP6650 (CPS, German UI): *Mobilitäts- und Systemparameter → Netzwerke*, column
+*Registrierungsmethode* per network ("ITSI-Anschluss" or "Migration"); migration also needs
+*Grundfunktionen → Migration* ticked. The home network is set under *Netzwerke → Startseite* and
+does not belong in the list of foreign networks. With "ITSI-Anschluss" the radio registered on a
+901/1638 `via` cell as a TetraPack radio (field check 2026-11-07). Other makes have equivalent
+settings; the names differ.
+
+A migrated radio that calls or sends an SDS to a bare SSI reaches a party of the cell's network,
+not of its home network: the SwMI takes the missing MNI as that of the current network (TS 100
+392-2 clause 14.2.3, note 3: a migrated MS sends the MNI also for addresses of its home network).
+So on a 901/1638 cell an SDS from a migrated 9999 radio to `200999` goes to 901/1638 (TetraPack);
+to reach the app in 9999 the radio has to dial the full TSI. Calls and SDS from the home network
+to the radio reach it on its (V)ASSI.
+
+The same holds for groups: a migrated radio that attaches a group without an MNI is in the cell
+network's group (clause 14.2.3). So the cell decides which network a radio talks in, with one
+radio and one home identity ("switching the network by cell"). Field check 2026-11-07, MTP6650
+with home 901/9999 and the brew-server of 901/9999 linked to TetraPack:
+
+| Radio on | Group calls go to | The station shows |
+| --- | --- | --- |
+| a 901/9999 cell | the brew-server's own groups (901/9999) | a radio of this network |
+| a 901/1638 `via` cell | TetraPack / Brandmeister groups (901/1638), over the brew-server's link | the radio migrated, on a (V)ASSI |
+
+Groups bridged between the networks (talkgroup pools on the brew-server) work in both cases.
+
 ## Not yet
 
 - Routing by the radio's *home* network on a single carrier (a migrating radio presents its home
   MNI in U-LOCATION UPDATE DEMAND). Today a cell serves one network and a radio reaches another
   network by moving to that network's cell. Home-MNI routing is the natural next step on top of
   this and would also need migration enabled on the cell and in the radios' codeplugs.
-- Passing a radio's network to the core over Brew, so a dispatch console can see which network a
-  radio belongs to.
+- Passing a radio's network to a core of the network's own (`brew`); with `via` and a brew-server
+  that offers `mni` the server is told (see above).
+- A network reached `via` with more than one cell announces only its home cell in
+  `SERVICE_BTS_INFO`.
 - On-air validation: this has been exercised in unit and integration tests only. The first live
   check is two carriers on different MNIs, a radio with both networks programmed, and switching
   networks on the radio while the Cells card shows which cell it registers on.

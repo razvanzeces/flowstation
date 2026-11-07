@@ -7,6 +7,7 @@
 
 use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use tetra_core::tetra_entities::TetraEntity;
 
 /// Command received from the remote command server.
 #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
@@ -99,6 +100,27 @@ pub enum ControlCommand {
         is_group: bool,
         payload: Vec<u8>,
     },
+}
+
+impl ControlCommand {
+    /// Return the stack entity that owns this command. Keep this mapping shared by the remote
+    /// control worker and local dashboard so local commands cannot bypass entity routing.
+    pub(crate) fn target_entity(&self) -> TetraEntity {
+        match self {
+            Self::SendSds { .. }
+            | Self::SendRawSdsType4 { .. }
+            | Self::KickMs { .. }
+            | Self::RestartService
+            | Self::ShutdownService
+            | Self::AddLiveSds { .. }
+            | Self::DeleteLiveSds { .. }
+            | Self::ClearLiveSds
+            | Self::ClearEmergency { .. }
+            | Self::AmbienceListen { .. }
+            | Self::TestCmdB { .. } => TetraEntity::Cmce,
+            Self::OtarSck { .. } | Self::Dgna { .. } | Self::CommandA { .. } => TetraEntity::Mm,
+        }
+    }
 }
 
 /// Response sent back after processing a [`ControlCommand`].

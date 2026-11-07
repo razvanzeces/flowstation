@@ -4,8 +4,8 @@ use tetra_core::CellId;
 use tetra_core::freqs::FreqInfo;
 
 use crate::bluestation::{
-    CfgAprsWx, CfgAsterisk, CfgCellInfo, CfgControl, CfgDapnet, CfgEmergency, CfgExtraCell, CfgGeoalarm, CfgHealth, CfgNetInfo, CfgPhyIo,
-    CfgRecovery, CfgSecurity, CfgSnomNotify, CfgSoapySdr, CfgTpg2200Action, CfgWxService, PhyBackend, StackState,
+    CfgAprsWx, CfgAsterisk, CfgCellInfo, CfgControl, CfgDapnet, CfgEmergency, CfgExtraCell, CfgGeoalarm, CfgHealth, CfgMultiNetwork, CfgNetInfo, CfgPhyIo, CfgRecovery,
+    CfgSecurity, CfgSnomNotify, CfgSoapySdr, CfgTpg2200Action, CfgWxService, PhyBackend, StackState, rxlev_access_min_code,
 };
 
 use super::sec_brew::CfgBrew;
@@ -93,6 +93,11 @@ pub struct StackConfig {
     /// site switch (see [`StackConfig::is_site_linked`]). Always false in parsed configs.
     pub site_linked: bool,
 
+    /// Main carriers of every cell of this station, set on an additional cell's derived config
+    /// (that config has no `extra_cells`). Empty in parsed configs; see
+    /// [`StackConfig::is_station_carrier`].
+    pub station_carriers: Vec<u16>,
+
     /// Which cell of the station this config runs: `CellId::PRIMARY` for the file as parsed, the
     /// `[[cells]]` id on a derived per-cell config (see [`StackConfig::for_extra_cell`]).
     pub cell_id: CellId,
@@ -149,16 +154,21 @@ pub struct StackConfig {
     /// Emergency-state handling. Always present (defaults: LOCAL-only — no Brew forward,
     /// telegram_alert ON, clear_timeout_secs 30). See [`CfgEmergency`].
     pub emergency: CfgEmergency,
+
+    /// Multi Network: radios of other networks by migration (clause 16.4.1.1 b)). Default off.
+    pub multi_network: CfgMultiNetwork,
 }
 
-/// "Cell re-selection types supported" advertised for sibling cells: both announced (U-PREPARE /
-/// D-NEW-CELL, with forward registration) and unannounced reselection are handled between the
-/// station's cells (0 = none, 1 = announced, 2 = unannounced, 3 = both).
+/// "Cell re-selection types supported" advertised for sibling cells, table 18.22: forward
+/// registration supported, expedited cell reselection recommended (0 = no forward registration,
+/// 1 = none + expedited, 2 = forward registration, 3 = forward registration + expedited).
 const SIBLING_CELL_RESELECTION_TYPES: u8 = 3;
+
+const RXLEV_ACCESS_MIN_RANGE: &str = "rxlev_access_min_dbm must be -125 to -50 in 5 dB steps (table 21.65)";
 
 /// "Main carrier number extension" for a neighbour whose band plan differs from the serving
 /// cell's (otherwise a radio would look for the neighbour's carrier number on the serving cell's
-/// plan): frequency band (4 bits), offset (2), duplex spacing (3), reverse operation (1).
+/// plan). See [`carrier_band_plan`].
 fn carrier_number_extension(neighbour: &CfgCellInfo, serving: &CfgCellInfo) -> Option<u16> {
     let same_plan = neighbour.freq_band == serving.freq_band
         && neighbour.freq_offset_hz == serving.freq_offset_hz
@@ -167,12 +177,20 @@ fn carrier_number_extension(neighbour: &CfgCellInfo, serving: &CfgCellInfo) -> O
     if same_plan {
         return None;
     }
-    let offset_id = FreqInfo::freq_offset_hz_to_id(neighbour.freq_offset_hz)?;
+    carrier_band_plan(neighbour)
+}
+
+/// A cell's band plan in the layout of the "main carrier number extension": frequency band
+/// (4 bits), offset (2), duplex spacing (3), reverse operation (1). Together with the main carrier
+/// number it names the cell's frequency independently of any other cell's plan. `None` when the
+/// frequency offset has no code.
+pub fn carrier_band_plan(cell: &CfgCellInfo) -> Option<u16> {
+    let offset_id = FreqInfo::freq_offset_hz_to_id(cell.freq_offset_hz)?;
     Some(
-        ((neighbour.freq_band as u16 & 0xF) << 6)
+        ((cell.freq_band as u16 & 0xF) << 6)
             | ((offset_id as u16 & 0x3) << 4)
-            | ((neighbour.duplex_spacing_id as u16 & 0x7) << 1)
-            | neighbour.reverse_operation as u16,
+            | ((cell.duplex_spacing_id as u16 & 0x7) << 1)
+            | cell.reverse_operation as u16,
     )
 }
 
@@ -229,6 +247,10 @@ impl StackConfig {
         let mut cfg = self.clone();
         cfg.cell = extra.cell.clone();
         cfg.phy_io.soapysdr = extra.soapysdr.clone();
+        // Carriers of the cells of this cell's network (the station's cells as radios see them).
+        let same_net = self.network_cells(&network.name);
+        cfg.station_carriers =
+            self.cells().iter().filter(|(cid, _, _)| same_net.contains(cid)).map(|(_, c, _)| c.main_carrier).collect();
         cfg.cell_id = id;
         cfg.extra_cells = Vec::new();
         // The cell serves its own network: its identity on air and its core (or none).
@@ -296,7 +318,9 @@ impl StackConfig {
                     location_area: (sibling.location_area != cell.location_area).then_some(sibling.location_area),
                     maximum_ms_transmit_power: (sibling.ms_txpwr_max_cell != cell.ms_txpwr_max_cell)
                         .then_some(sibling.ms_txpwr_max_cell),
-                    minimum_rx_access_level: None,
+                    // 18.5.12: needed by the MS for C2 when it differs from the serving cell.
+                    minimum_rx_access_level: (sibling.rxlev_access_min_dbm != cell.rxlev_access_min_dbm)
+                        .then(|| sibling.rxlev_access_min()),
                     subscriber_class: None,
                     bs_service_details: None,
                     timeshare_cell_information_or_security_parameters: None,
@@ -312,6 +336,14 @@ impl StackConfig {
     /// True for every cell of a station that runs more than one cell.
     pub fn is_multi_cell(&self) -> bool {
         !self.extra_cells.is_empty() || !self.cell_id.is_primary()
+    }
+
+    /// True when `carrier` is the main carrier of a cell of this station (this one or a sibling).
+    /// A neighbour on any other carrier belongs to another station.
+    pub fn is_station_carrier(&self, carrier: u16) -> bool {
+        // Only cells of this cell's network: another network's cell is no target of a handover.
+        let same_net = self.network_cells(&self.network);
+        self.cells().iter().any(|(id, c, _)| same_net.contains(id) && c.main_carrier == carrier) || self.station_carriers.contains(&carrier)
     }
 
     /// True when a network link (Brew, or enabled LST Dispatch) is configured.
@@ -350,7 +382,34 @@ impl StackConfig {
                 name: super::DEFAULT_NETWORK.to_owned(),
                 net: self.net.clone(),
                 brew: self.brew.clone(),
+                via: None,
             })
+    }
+
+    /// True when this cell's network is reached through another network's Brew server (`via`):
+    /// its radios and groups are named with this network's MCC/MNC towards the server (`mni`).
+    pub fn network_is_via(&self) -> bool {
+        self.network(&self.network).is_some_and(|n| n.via.is_some())
+    }
+
+    /// Multi Network towards the Brew server (`mni`): `[multi_network]` is on, or this cell's
+    /// network is reached `via` another one.
+    pub fn mni_enabled(&self) -> bool {
+        self.multi_network.enabled || self.network_is_via()
+    }
+
+    /// Migration supported on this cell (BS service details, ETSI TS 100 392-2 18.5.2.1):
+    /// `[cell_info] migration = true`, or `[multi_network]` is on, which exists to accept radios
+    /// of other networks by migration (16.4.1.1 b) and so turns it on by itself.
+    pub fn migration_supported(&self) -> bool {
+        self.cell.migration || self.multi_network.enabled
+    }
+
+    /// The cells this config's Brew connection announces (SERVICE_BTS_INFO): on the station's
+    /// config the cells of the primary's network, on a per-cell config that cell.
+    pub fn cells_of_station_network(&self) -> Vec<(CellId, &CfgCellInfo, Option<&CfgSoapySdr>)> {
+        let same_net = self.network_cells(&self.network);
+        self.cells().into_iter().filter(|(id, _, _)| same_net.contains(id)).collect()
     }
 
     /// The cells serving network `name`, lowest id first (the primary comes first when it is one).
@@ -471,7 +530,11 @@ impl StackConfig {
             if c.cell.ms_txpwr_max_cell > 7 {
                 return Err(format!("{}: ms_txpwr_max_cell must be 0-7 (3 bits)", c.id));
             }
+            if rxlev_access_min_code(c.cell.rxlev_access_min_dbm).is_none() {
+                return Err(format!("{}: {RXLEV_ACCESS_MIN_RANGE}", c.id));
+            }
             Self::validate_cell_rf(self.phy_io.backend, &c.cell, c.soapysdr.as_ref()).map_err(|e| format!("{}: {e}", c.id))?;
+            validate_neighbours(&c.cell).map_err(|e| format!("{}: {e}", c.id))?;
         }
 
         let cells = self.cells();
@@ -537,6 +600,9 @@ impl StackConfig {
         if self.cell.ms_txpwr_max_cell > 7 {
             return Err("ms_txpwr_max_cell must be 0-7 (3 bits)");
         }
+        if rxlev_access_min_code(self.cell.rxlev_access_min_dbm).is_none() {
+            return Err(RXLEV_ACCESS_MIN_RANGE);
+        }
 
         // The WAP/SNDCP gateway is driven solely by `[cell_info.wap_ip].enabled`
         // (CfgCellInfo::wap_enabled): when on, the cell advertises SNDCP + advanced-link and runs
@@ -561,82 +627,9 @@ impl StackConfig {
             return Err("lst_dispatch.enabled cannot be used together with [brew]");
         }
 
-        // Validate neighbor cells
-        if self.cell.neighbor_cells_ca.len() > 7 {
-            return Err("cell.neighbor_cells_ca supports at most 7 entries");
-        }
+        validate_neighbours(&self.cell)?;
 
-        // Check for duplicate cell_identifier_ca and main_carrier_number
-        {
-            let mut seen_ids = std::collections::HashSet::new();
-            let mut seen_carriers = std::collections::HashSet::new();
-            for cell in &self.cell.neighbor_cells_ca {
-                if !seen_ids.insert(cell.cell_identifier_ca) {
-                    return Err("cell.neighbor_cells_ca: duplicate cell_identifier_ca — each neighbour must have a unique identifier");
-                }
-                if !seen_carriers.insert(cell.main_carrier_number) {
-                    return Err("cell.neighbor_cells_ca: duplicate main_carrier_number — each neighbour must be on a different carrier");
-                }
-                if cell.main_carrier_number == self.cell.main_carrier {
-                    return Err("cell.neighbor_cells_ca: main_carrier_number is this cell's own main_carrier — a cell cannot be its own neighbour");
-                }
-            }
-        }
-
-        for cell in &self.cell.neighbor_cells_ca {
-            if cell.cell_identifier_ca > 0x1F {
-                return Err("cell.neighbor_cells_ca: cell_identifier_ca must be 0-31");
-            }
-            if cell.cell_reselection_types_supported > 0x3 {
-                return Err("cell.neighbor_cells_ca: cell_reselection_types_supported must be 0-3");
-            }
-            if cell.cell_load_ca > 0x3 {
-                return Err("cell.neighbor_cells_ca: cell_load_ca must be 0-3");
-            }
-            if cell.main_carrier_number > 0xFFF {
-                return Err("cell.neighbor_cells_ca: main_carrier_number must be 0-4095");
-            }
-            if let Some(v) = cell.main_carrier_number_extension
-                && v > 0x3FF
-            {
-                return Err("cell.neighbor_cells_ca: main_carrier_number_extension must be 0-1023");
-            }
-            if let Some(v) = cell.mcc
-                && v > 0x3FF
-            {
-                return Err("cell.neighbor_cells_ca: mcc must be 0-1023");
-            }
-            if let Some(v) = cell.mnc
-                && v > 0x3FFF
-            {
-                return Err("cell.neighbor_cells_ca: mnc must be 0-16383");
-            }
-            if let Some(v) = cell.location_area
-                && v > 0x3FFF
-            {
-                return Err("cell.neighbor_cells_ca: location_area must be 0-16383");
-            }
-            if let Some(v) = cell.maximum_ms_transmit_power
-                && v > 0x7
-            {
-                return Err("cell.neighbor_cells_ca: maximum_ms_transmit_power must be 0-7");
-            }
-            if let Some(v) = cell.minimum_rx_access_level
-                && v > 0xF
-            {
-                return Err("cell.neighbor_cells_ca: minimum_rx_access_level must be 0-15");
-            }
-            if let Some(v) = cell.timeshare_cell_information_or_security_parameters
-                && v > 0x1F
-            {
-                return Err("cell.neighbor_cells_ca: timeshare_cell_information_or_security_parameters must be 0-31");
-            }
-            if let Some(v) = cell.tdma_frame_offset
-                && v > 0x3F
-            {
-                return Err("cell.neighbor_cells_ca: tdma_frame_offset must be 0-63");
-            }
-        }
+        self.multi_network.validate()?;
 
         // Restart recovery: an explicit allowlist must not exceed the cache cap (the numeric
         // ranges are already clamped in apply_recovery_patch). Only meaningful when enabled.
@@ -649,6 +642,86 @@ impl StackConfig {
 
         Ok(())
     }
+}
+
+/// Checks of a cell's `neighbor_cells_ca` list (field widths of table 18.64, uniqueness).
+pub(crate) fn validate_neighbours(cell_info: &CfgCellInfo) -> Result<(), &'static str> {
+    if cell_info.neighbor_cells_ca.len() > 7 {
+        return Err("cell.neighbor_cells_ca supports at most 7 entries");
+    }
+
+    // Check for duplicate cell_identifier_ca and main_carrier_number
+    {
+        let mut seen_ids = std::collections::HashSet::new();
+        let mut seen_carriers = std::collections::HashSet::new();
+        for cell in &cell_info.neighbor_cells_ca {
+            if !seen_ids.insert(cell.cell_identifier_ca) {
+                return Err("cell.neighbor_cells_ca: duplicate cell_identifier_ca — each neighbour must have a unique identifier");
+            }
+            if !seen_carriers.insert(cell.main_carrier_number) {
+                return Err("cell.neighbor_cells_ca: duplicate main_carrier_number — each neighbour must be on a different carrier");
+            }
+            if cell.main_carrier_number == cell_info.main_carrier {
+                return Err("cell.neighbor_cells_ca: main_carrier_number is this cell's own main_carrier — a cell cannot be its own neighbour");
+            }
+        }
+    }
+
+    for cell in &cell_info.neighbor_cells_ca {
+        if cell.cell_identifier_ca > 0x1F {
+            return Err("cell.neighbor_cells_ca: cell_identifier_ca must be 0-31");
+        }
+        if cell.cell_reselection_types_supported > 0x3 {
+            return Err("cell.neighbor_cells_ca: cell_reselection_types_supported must be 0-3");
+        }
+        if cell.cell_load_ca > 0x3 {
+            return Err("cell.neighbor_cells_ca: cell_load_ca must be 0-3");
+        }
+        if cell.main_carrier_number > 0xFFF {
+            return Err("cell.neighbor_cells_ca: main_carrier_number must be 0-4095");
+        }
+        if let Some(v) = cell.main_carrier_number_extension
+            && v > 0x3FF
+        {
+            return Err("cell.neighbor_cells_ca: main_carrier_number_extension must be 0-1023");
+        }
+        if let Some(v) = cell.mcc
+            && v > 0x3FF
+        {
+            return Err("cell.neighbor_cells_ca: mcc must be 0-1023");
+        }
+        if let Some(v) = cell.mnc
+            && v > 0x3FFF
+        {
+            return Err("cell.neighbor_cells_ca: mnc must be 0-16383");
+        }
+        if let Some(v) = cell.location_area
+            && v > 0x3FFF
+        {
+            return Err("cell.neighbor_cells_ca: location_area must be 0-16383");
+        }
+        if let Some(v) = cell.maximum_ms_transmit_power
+            && v > 0x7
+        {
+            return Err("cell.neighbor_cells_ca: maximum_ms_transmit_power must be 0-7");
+        }
+        if let Some(v) = cell.minimum_rx_access_level
+            && v > 0xF
+        {
+            return Err("cell.neighbor_cells_ca: minimum_rx_access_level must be 0-15");
+        }
+        if let Some(v) = cell.timeshare_cell_information_or_security_parameters
+            && v > 0x1F
+        {
+            return Err("cell.neighbor_cells_ca: timeshare_cell_information_or_security_parameters must be 0-31");
+        }
+        if let Some(v) = cell.tdma_frame_offset
+            && v > 0x3F
+        {
+            return Err("cell.neighbor_cells_ca: tdma_frame_offset must be 0-63");
+        }
+    }
+    Ok(())
 }
 
 /// Global shared configuration: immutable config + mutable state.

@@ -143,7 +143,13 @@ fn validate_driver(soapy: &CfgSoapySdr) -> Result<(), String> {
 /// Append a new `[[cells]]` entry for SDR `device` on `main_carrier`. Returns the new config text
 /// and the id given to the cell. The SDR's TX/RX frequencies follow from the carrier with the
 /// primary cell's band plan; everything else is inherited from the primary cell.
-pub fn add_cell_toml(original: &str, device: &str, main_carrier: u16, colour_code: Option<u8>) -> Result<(String, u8), String> {
+pub fn add_cell_toml(
+    original: &str,
+    device: &str,
+    main_carrier: u16,
+    colour_code: Option<u8>,
+    location_area: Option<u16>,
+) -> Result<(String, u8), String> {
     let device = device.trim();
     if device.is_empty() {
         return Err("device is required (e.g. driver=plutosdr,uri=ip:192.168.3.1)".into());
@@ -158,6 +164,13 @@ pub fn add_cell_toml(original: &str, device: &str, main_carrier: u16, colour_cod
     let mut block = format!("\n[[cells]]\nid = {id}\n\n[cells.cell_info]\nmain_carrier = {main_carrier}\n");
     if let Some(cc) = colour_code {
         block.push_str(&format!("colour_code = {cc}\n"));
+    }
+    // Without it the cell inherits the primary's location area.
+    if let Some(la) = location_area {
+        if la > 16383 {
+            return Err("location_area must be 0-16383".into());
+        }
+        block.push_str(&format!("location_area = {la}\n"));
     }
     block.push_str(&format!(
         "\n[cells.soapysdr]\ndevice = {}\ntx_freq = {dl}\nrx_freq = {ul}\n",
@@ -251,18 +264,19 @@ location_area = 1
 
     #[test]
     fn add_then_remove_cell_round_trips() {
-        let (with_one, id) = add_cell_toml(BASE, "driver=plutosdr,uri=ip:192.168.3.1", 1525, Some(2)).unwrap();
+        let (with_one, id) = add_cell_toml(BASE, "driver=plutosdr,uri=ip:192.168.3.1", 1525, Some(2), None).unwrap();
         assert_eq!(id, 1);
         let cfg = parsing::from_toml_str(&with_one).unwrap();
         let cell = &cfg.extra_cells[0];
         assert_eq!(cell.cell.main_carrier, 1525);
         assert_eq!(cell.cell.colour_code, 2);
+        assert_eq!(cell.cell.location_area, 1, "inherited from the primary");
         let soapy = cell.soapysdr.as_ref().unwrap();
         assert_eq!(soapy.device.as_deref(), Some("driver=plutosdr,uri=ip:192.168.3.1"));
         let (dl, ul) = carrier_freqs(&cfg.cell, 1525).unwrap();
         assert_eq!((soapy.dl_freq as u32, soapy.ul_freq as u32), (dl, ul));
 
-        let (with_two, id2) = add_cell_toml(&with_one, "driver=plutosdr,uri=ip:192.168.4.1", 1529, None).unwrap();
+        let (with_two, id2) = add_cell_toml(&with_one, "driver=plutosdr,uri=ip:192.168.4.1", 1529, None, None).unwrap();
         assert_eq!(id2, 2);
 
         let back = remove_cell_toml(&with_two, 1).unwrap();
@@ -276,18 +290,26 @@ location_area = 1
 
     #[test]
     fn add_rejects_a_carrier_already_in_use() {
-        let err = add_cell_toml(BASE, "driver=plutosdr", 1521, None).unwrap_err();
+        let err = add_cell_toml(BASE, "driver=plutosdr", 1521, None, None).unwrap_err();
         assert!(err.contains("carrier 1521"), "{err}");
     }
 
     #[test]
     fn remove_keeps_following_sections_and_rejects_unknown_ids() {
-        let (text, _) = add_cell_toml(BASE, "driver=plutosdr", 1525, None).unwrap();
+        let (text, _) = add_cell_toml(BASE, "driver=plutosdr", 1525, None, None).unwrap();
         let text = format!("{text}\n[security]\n# keep me\n");
         let out = remove_cell_toml(&text, 1).unwrap();
         assert!(out.contains("[security]") && out.contains("# keep me"));
         assert!(!out.contains("[[cells]]"));
         assert!(remove_cell_toml(&out, 1).is_err());
         assert!(remove_cell_toml(&out, 0).is_err());
+    }
+
+    #[test]
+    fn add_sets_the_cells_own_location_area() {
+        let (text, _) = add_cell_toml(BASE, "driver=plutosdr", 1525, None, Some(7)).unwrap();
+        let cfg = parsing::from_toml_str(&text).unwrap();
+        assert_eq!((cfg.cell.location_area, cfg.extra_cells[0].cell.location_area), (1, 7));
+        assert!(add_cell_toml(BASE, "driver=plutosdr", 1525, None, Some(16384)).is_err());
     }
 }

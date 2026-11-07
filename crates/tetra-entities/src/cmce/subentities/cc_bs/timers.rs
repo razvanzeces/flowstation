@@ -35,6 +35,8 @@ impl CcBsSubentity {
         self.check_network_media_inactivity(queue);
         // Keep pushing cease to a preempted walkie; complete Ready when UL quiet / deadline.
         self.check_preempt_pending(queue);
+        // Answer or give up U-CALL RESTOREs waiting for a Brew group call to come up here.
+        self.drive_deferred_restores(queue);
 
         // Energy-economy group-call announce batching: re-emit the group D-SETUP across the
         // union of affiliated EE members' wake frames so members on a different sleep phase
@@ -50,7 +52,9 @@ impl CcBsSubentity {
                         let (dest_ssi, resend) = match self.cached_setups.get(&call_id) {
                             Some(c) => (c.dest_addr.ssi, c.resend),
                             None => {
-                                tracing::debug!(
+                                // Every few seconds for each individual call (restored ones too):
+                                // trace only.
+                                tracing::trace!(
                                     "CMCE: skipping D-SETUP resend for call_id={} (no cached D-SETUP; likely Brew-routed individual call)",
                                     call_id
                                 );
@@ -654,6 +658,9 @@ impl CcBsSubentity {
         active: bool,
     ) {
         self.ul_slot_hot.insert((carrier_num, ts), active);
+        if active {
+            self.end_handoff_hold_on_activity(carrier_num, ts);
+        }
         if !active {
             // Keep preempted_issi for soft-restart targeting until slot goes cold for good.
         }
@@ -808,6 +815,9 @@ impl CcBsSubentity {
             });
 
             if let Some((call_id, failed_addr)) = duplex_individual {
+                if self.hold_for_handoff(call_id, failed_addr.ssi) {
+                    return;
+                }
                 tracing::warn!(
                     "UL inactivity timeout on carrier={} ts={}, releasing duplex individual call_id={} after hard failure from ISSI {}",
                     carrier_num,

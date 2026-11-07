@@ -77,6 +77,9 @@ impl CcBsSubentity {
             CallControl::NetworkCircuitRelease { brew_uuid, cause } => {
                 self.rx_network_circuit_release(queue, brew_uuid, cause);
             }
+            CallControl::HandoverPrepareGroupCall { issi, gssi } => {
+                self.prepare_handover_group_call(queue, issi, gssi);
+            }
             CallControl::SiteHandoverIndividualCall {
                 brew_uuid,
                 issi,
@@ -85,6 +88,15 @@ impl CcBsSubentity {
                 priority,
             } => {
                 self.fsm_on_site_handover_individual_call(queue, brew_uuid, issi, peer_issi, simplex_duplex, priority);
+            }
+            CallControl::SiteAreaMembers { issi, groups } => {
+                self.set_area_members(queue, issi, groups);
+            }
+            CallControl::IndividualCallRestoreAnswer { issi, peer, call } => {
+                self.on_individual_call_restore_answer(queue, issi, peer, call);
+            }
+            CallControl::IndividualCallHandoffRequest { issi, peer } => {
+                self.on_individual_call_handoff_request(queue, issi, peer);
             }
             // Brew/LST-bound late-entry signals — never ingress to CMCE.
             CallControl::NetworkCallHold { .. }

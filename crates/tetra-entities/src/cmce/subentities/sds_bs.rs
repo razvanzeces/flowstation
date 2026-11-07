@@ -1119,6 +1119,7 @@ impl SdsBsSubentity {
                         timeslots,
                         alloc_type: ChanAllocType::Replace,
                         ul_dl_assigned: UlDlAssignment::Dl,
+                        cell_change: false,
                     }),
                     Layer2Service::Unacknowledged,
                 )
@@ -1556,6 +1557,7 @@ impl SdsBsSubentity {
                         timeslots,
                         alloc_type: ChanAllocType::Replace,
                         ul_dl_assigned: UlDlAssignment::Dl,
+                        cell_change: false,
                     }),
                 )
             }
