@@ -358,8 +358,7 @@ const APRSFI_USER_AGENT: &str = "FlowStation-APRS-WX (+https://github.com/Aitorr
 /// Uppercase an APRS callsign/object name and keep only the characters aprs.fi accepts
 /// in a station name (letters, digits, '-'), max 9 chars (e.g. "dn9cho-13" -> "DN9CHO-13").
 pub fn sanitize_callsign(s: &str) -> String {
-    s.trim()
-        .split_whitespace()
+    s.split_whitespace()
         .next()
         .unwrap_or("")
         .chars()
