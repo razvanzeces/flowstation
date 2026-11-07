@@ -112,6 +112,25 @@ impl CcBsSubentity {
             return;
         }
 
+        // Who may use the group (Brew server rules, `group-access`): a radio the group does not
+        // admit cannot call it; a listener-only radio may join a running call to listen but not
+        // start one. An emergency call always passes.
+        let emergency = is_emergency_priority(pdu.call_priority);
+        let (may_join, may_talk) = {
+            let state = self.config.state_read();
+            (state.group_may_join(dest_gssi, calling_party.ssi), state.group_may_talk(dest_gssi, calling_party.ssi))
+        };
+        if !emergency && !may_join {
+            self.reject_setup_request(
+                queue,
+                message,
+                calling_party,
+                DisconnectCause::RequestedServiceNotAvailable,
+                "the group does not admit this radio (group-access)",
+            );
+            return;
+        }
+
         if !self.has_listener(dest_gssi) {
             tracing::info!(
                 "CMCE: rejecting U-SETUP from issi={} to gssi={} (no listeners)",
@@ -131,11 +150,22 @@ impl CcBsSubentity {
             .find(|(_, call)| call.dest_gssi == dest_gssi)
             .map(|(call_id, _)| *call_id)
         {
-            self.fsm_group_late_entry(queue, message, pdu, calling_party, active_call_id);
+            self.fsm_group_late_entry(queue, message, pdu, calling_party, active_call_id, emergency || may_talk);
             return;
         }
 
-        if is_emergency_priority(pdu.call_priority) {
+        if !emergency && !may_talk {
+            self.reject_setup_request(
+                queue,
+                message,
+                calling_party,
+                DisconnectCause::RequestedServiceNotAvailable,
+                "listen only on this group (group-access)",
+            );
+            return;
+        }
+
+        if emergency {
             tracing::info!(
                 "CMCE: EMERGENCY group call set-up from ISSI {} to GSSI {} (priority {})",
                 calling_party.ssi,
@@ -266,6 +296,7 @@ impl CcBsSubentity {
                     carrier: Some(circuit.carrier_num),
                     timeslots,
                     ul_dl_assigned: UlDlAssignment::Both,
+                    cell_change: false,
                 }),
                 main_address: calling_party,
                 tx_reporter: None,
@@ -367,8 +398,9 @@ impl CcBsSubentity {
         pdu: &USetup,
         calling_party: TetraAddress,
         call_id: u16,
+        may_talk: bool,
     ) {
-        let Some(call) = self.active_calls.get(&call_id) else {
+        let Some(call) = self.active_calls.get_mut(&call_id) else {
             return;
         };
         let dest_gssi = call.dest_gssi;
@@ -376,9 +408,12 @@ impl CcBsSubentity {
         let ts = call.ts;
         let usage = call.usage;
         let call_timeout = call.call_timeout;
+        let tx_active = call.is_tx_active();
         // Hand the floor to the joiner only when nobody is speaking (call in hangtime), exactly as
-        // a U-TX DEMAND would; an ongoing speaker keeps it.
-        let grant_floor = !call.is_tx_active();
+        // a U-TX DEMAND would; an ongoing speaker keeps it, unless the joiner is that speaker
+        // coming over from another station unannounced (see `take_over_moved_talker`). A
+        // listener-only radio (`group-access`) joins to listen and never gets it.
+        let grant_floor = may_talk && (!tx_active || call.take_over_moved_talker(calling_party.ssi));
 
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
             panic!()
@@ -406,12 +441,18 @@ impl CcBsSubentity {
             call_time_out: call_timeout,
             hook_method_selection: pdu.hook_method_selection,
             simplex_duplex_selection: pdu.simplex_duplex_selection,
+            // A listener-only joiner in hangtime: not granted, the U-plane stays off until the
+            // next talker's group D-TX GRANTED (clause 14.5.2.1, table 14.80).
             transmission_grant: if grant_floor {
                 TransmissionGrant::Granted
-            } else {
+            } else if tx_active {
                 TransmissionGrant::GrantedToOtherUser
+            } else {
+                TransmissionGrant::NotGranted
             },
-            transmission_request_permission: false,
+            // Individually addressed, so it tells this radio alone: a listener-only radio is
+            // "not allowed to request for transmission" (clause 14.8.43, table 14.81: 1).
+            transmission_request_permission: !may_talk,
             // The ongoing call keeps its owner; a late joiner never takes ownership.
             call_ownership: false,
             call_priority: None,
@@ -448,6 +489,7 @@ impl CcBsSubentity {
                     carrier: Some(carrier_num),
                     timeslots,
                     ul_dl_assigned: UlDlAssignment::Both,
+                    cell_change: false,
                 }),
                 main_address: calling_party,
                 tx_reporter: None,
@@ -778,6 +820,7 @@ impl CcBsSubentity {
                 queued_tx_demand: None,
                 ambience: false,
                 restoring_cross_cell: false,
+                handoff_hold: None,
             },
         ) {
             match err {
@@ -1078,6 +1121,7 @@ impl CcBsSubentity {
                 queued_tx_demand: None,
                 ambience: false,
                 restoring_cross_cell: false,
+                handoff_hold: None,
             },
         ) {
             match err {

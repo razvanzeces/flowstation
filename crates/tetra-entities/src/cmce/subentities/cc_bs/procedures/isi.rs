@@ -36,7 +36,15 @@ impl CcBsSubentity {
             return;
         }
 
-        if !self.is_locally_registered_issi(called_addr.ssi) {
+        if self.is_area_member(called_addr.ssi) && !self.is_locally_registered_issi(called_addr.ssi) {
+            // Multi-cell: registered on a sibling cell of this location area; the site switch
+            // pages it here too, where it may be without registering (clause 18.3.4.7.1a).
+            tracing::info!(
+                "CMCE: paging ISSI {} here for uuid={} (registered on a sibling cell of this location area)",
+                called_addr.ssi,
+                brew_uuid
+            );
+        } else if !self.is_locally_registered_issi(called_addr.ssi) {
             tracing::info!(
                 "CMCE: rejecting Brew setup request uuid={} src={} dst={} number='{}' (called ISSI not registered locally, known registry ISSIs={:?})",
                 brew_uuid,
@@ -257,6 +265,7 @@ impl CcBsSubentity {
                 queued_tx_demand: None,
                 ambience,
                 restoring_cross_cell: false,
+                handoff_hold: None,
             },
         ) {
             match err {
@@ -322,6 +331,22 @@ impl CcBsSubentity {
             return;
         }
 
+        self.provision_restoring_individual_leg(queue, brew_uuid, issi, peer_issi, simplex_duplex, priority);
+    }
+
+    /// Allocate and open a traffic channel for an individual call `issi` restores here with
+    /// `peer_issi` on the network (`brew_uuid`), and insert the call already `Active` with
+    /// `restoring_cross_cell` set, so its U-CALL RESTORE is answered with a channel allocation.
+    /// Returns the local call identifier, or `None` when no channel is free.
+    pub(in crate::cmce::subentities::cc_bs) fn provision_restoring_individual_leg(
+        &mut self,
+        queue: &mut MessageQueue,
+        brew_uuid: uuid::Uuid,
+        issi: u32,
+        peer_issi: u32,
+        simplex_duplex: bool,
+        priority: u8,
+    ) -> Option<u16> {
         let main_carrier = self.config.config().cell.main_carrier;
         let circuit = {
             let mut state = self.config.state_write();
@@ -341,7 +366,7 @@ impl CcBsSubentity {
                         peer_issi,
                         e
                     );
-                    return;
+                    return None;
                 }
             }
         };
@@ -417,8 +442,10 @@ impl CcBsSubentity {
             queued_tx_demand: None,
             ambience: false,
             restoring_cross_cell: true,
+            handoff_hold: None,
         };
         self.individual_calls.insert(call_id, call);
+        Some(call_id)
     }
 
     /// Handle network circuit connect request (Brew -> local called MS).
@@ -484,6 +511,7 @@ impl CcBsSubentity {
             carrier: Some(call.calling_carrier_num),
             timeslots: calling_timeslots,
             ul_dl_assigned: UlDlAssignment::Both,
+            cell_change: false,
         };
 
         let d_connect = DConnect {
@@ -705,6 +733,7 @@ impl CcBsSubentity {
             carrier: Some(call.called_carrier_num),
             timeslots: called_timeslots,
             ul_dl_assigned,
+            cell_change: false,
         };
 
         let d_connect_ack = DConnectAcknowledge {

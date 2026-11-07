@@ -524,6 +524,79 @@ pub struct SdsCommandRuntimeOverride {
     pub commands: Vec<CfgSdsCommandEntry>,
 }
 
+/// One cell of the Brew server's cell directory (`SERVICE_CELL_DIRECTORY`, brew-server extension
+/// `cell-directory`): a cell of another station, online or not, with what it broadcasts. Shown on
+/// the dashboard's Roaming page, to name the neighbours and to pick a neighbour from the list.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BrewDirectoryCell {
+    /// Global cell id `<station login>/<cell>`.
+    pub id: String,
+    pub station: String,
+    pub cell: u8,
+    pub online: bool,
+    /// When an offline station went away (Unix ms).
+    #[serde(default)]
+    pub last_seen_ms: Option<u64>,
+    pub mcc: u16,
+    pub mnc: u16,
+    pub carrier: u16,
+    /// Absolute band plan ("main carrier number extension" layout).
+    pub carrier_ext: u16,
+    pub location_area: u16,
+    /// MS_TXPWR_MAX_CELL in dBm (15-45, table 18.57), when the station reported it.
+    #[serde(default)]
+    pub ms_txpwr_max_dbm: Option<u8>,
+    /// RXLEV_ACCESS_MIN in dBm (-125 to -50, table 21.65), when reported.
+    #[serde(default)]
+    pub rxlev_access_min_dbm: Option<i16>,
+    /// BS service details (table 18.26), flag name -> set, when reported.
+    #[serde(default)]
+    pub service_details: Option<BTreeMap<String, bool>>,
+    /// The neighbour cells this cell broadcasts, when reported.
+    #[serde(default)]
+    pub neighbours: Option<Vec<BrewDirectoryNeighbour>>,
+}
+
+/// A neighbour a directory cell broadcasts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BrewDirectoryNeighbour {
+    pub mcc: u16,
+    pub mnc: u16,
+    pub carrier: u16,
+    pub carrier_ext: u16,
+    #[serde(default)]
+    pub location_area: Option<u16>,
+}
+
+/// Who may use one group, as the Brew server sends it (`SERVICE_GROUP_ACCESS`, brew-server
+/// extension `group-access`). `issis` is an allow list (`block = false`: only these may attach and
+/// talk) or a block list (`block = true`: these may not); empty = everyone. `rx_only` makes
+/// radios listeners: all of them when `rx_only_issis` is empty, else the listed ones.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BrewGroupAccess {
+    pub gssi: u32,
+    #[serde(default)]
+    pub block: bool,
+    #[serde(default)]
+    pub issis: Vec<u32>,
+    #[serde(default)]
+    pub rx_only: bool,
+    #[serde(default)]
+    pub rx_only_issis: Vec<u32>,
+}
+
+impl BrewGroupAccess {
+    /// May `issi` attach to (and listen on) the group?
+    pub fn may_join(&self, issi: u32) -> bool {
+        self.issis.is_empty() || self.issis.contains(&issi) != self.block
+    }
+
+    /// May `issi` talk on the group (admitted and not a listener only)?
+    pub fn may_talk(&self, issi: u32) -> bool {
+        self.may_join(issi) && !(self.rx_only && (self.rx_only_issis.is_empty() || self.rx_only_issis.contains(&issi)))
+    }
+}
+
 /// Mutable, stack-editable state (mutex-protected).
 #[derive(Debug, Clone)]
 pub struct StackState {
@@ -532,10 +605,22 @@ pub struct StackState {
     pub network_connected: bool,
     /// Immediate Brew transport up/down — gates Brew-routed CMCE setups. Updated without hysteresis.
     pub brew_link_up: bool,
+    /// Brew extensions (`X-Brew-Extensions`) the server offered on the last connect, for the
+    /// dashboard's Roaming page.
+    pub brew_server_extensions: Vec<String>,
+    /// The Brew server's cell directory as last received (`None` until one arrives on this
+    /// connection, or when the server does not offer `cell-directory`).
+    pub brew_cell_directory: Option<Vec<BrewDirectoryCell>>,
+    /// Who may use which group, as the Brew server last sent it (GSSI -> rule). Empty when the
+    /// server does not offer `group-access` or sent no rules: every group is open. Cleared on
+    /// reconnect (the server sends the table again after the announcement).
+    pub brew_group_access: BTreeMap<u32, BrewGroupAccess>,
     /// After a real Brew disconnect→reconnect, CMCE may request a selective SwMI-initiated
     /// location update for an ISSI whose Brew-routed setup fails (TIP/ETSI interrogation, not
     /// a mass kick). `None` or a past Instant means the soft-recovery window is closed.
     pub brew_soft_recovery_until: Option<std::time::Instant>,
+    /// Multi Network: visitors, their home groups and the server's network list.
+    pub multi_network: super::MultiNetworkState,
     /// Centralized subscriber registry for local-first routing decisions.
     pub subscribers: SubscriberRegistry,
     /// Queue of live SDS messages injected at runtime via the dashboard.
@@ -738,13 +823,41 @@ mod tests {
     }
 }
 
+impl StackState {
+    /// May `issi` attach to `gssi` (Brew server's `group-access` rules; no rule = yes)?
+    pub fn group_may_join(&self, gssi: u32, issi: u32) -> bool {
+        let issi = self.group_access_issi(issi);
+        self.brew_group_access.get(&gssi).is_none_or(|a| a.may_join(issi))
+    }
+
+    /// May `issi` talk on `gssi` (Brew server's `group-access` rules; no rule = yes)?
+    pub fn group_may_talk(&self, gssi: u32, issi: u32) -> bool {
+        let issi = self.group_access_issi(issi);
+        self.brew_group_access.get(&gssi).is_none_or(|a| a.may_talk(issi))
+    }
+
+    /// The ISSI the Brew server's rules name for a radio: a registered visitor whose home is the
+    /// server's own network is listed there under its home ISSI, not its (V)ASSI.
+    pub fn group_access_issi(&self, issi: u32) -> u32 {
+        let server = self.multi_network.server.as_ref().map(|(this, _)| *this);
+        match self.multi_network.visitors.get(&issi) {
+            Some(&(mni, home)) if Some(mni) == server => home,
+            _ => issi,
+        }
+    }
+}
+
 impl Default for StackState {
     fn default() -> Self {
         Self {
             timeslot_alloc: TimeslotAllocator::default(),
             network_connected: false,
             brew_link_up: false,
+            brew_server_extensions: Vec::new(),
+            brew_cell_directory: None,
+            brew_group_access: BTreeMap::new(),
             brew_soft_recovery_until: None,
+            multi_network: Default::default(),
             subscribers: SubscriberRegistry::new(),
             live_sds_queue: VecDeque::new(),
             next_live_sds_id: 1,

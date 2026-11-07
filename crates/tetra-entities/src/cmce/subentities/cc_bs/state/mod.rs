@@ -273,6 +273,19 @@ impl ActiveCall {
         self.tx_active && self.source_issi == issi
     }
 
+    /// The talker of a network over has come to this cell and asks for the floor here, after an
+    /// unannounced cell change (the over is still running because the old cell has not ended it
+    /// yet). The SwMI decides who may transmit (TS 100 392-2 clause 14.5.2.2.1 a)), and it is the same
+    /// talker, so the floor is handed to the local radio. The network session is forgotten, so
+    /// its late end (GROUP_IDLE from the old cell) does not tear down the new over.
+    pub(super) fn take_over_moved_talker(&mut self, issi: u32) -> bool {
+        if self.local_floor || !self.is_current_speaker(issi) || self.brew_uuid.is_none() {
+            return false;
+        }
+        self.brew_uuid = None;
+        true
+    }
+
     #[inline]
     pub(super) fn call_timeout_expired(&self, now: TdmaTime) -> bool {
         match call_timeout_to_timeslots(self.call_timeout) {
@@ -458,6 +471,19 @@ pub(super) struct IndividualCall {
     /// there — unlike an ordinary same-cell restore, where the MS never left the channel. Set at
     /// pre-provision, cleared once the restore completes.
     pub(super) restoring_cross_cell: bool,
+    /// Separate stations (extension `call-handoff`): a duplex call between two radios of this
+    /// station whose leg of `issi` lost its uplink at `since`. The radio may have gone to another
+    /// station and restore the call there; the network then asks for the call and the other
+    /// party's leg goes on, bridged to it. Released when nothing comes within
+    /// `HANDOFF_HOLD_TS`.
+    pub(super) handoff_hold: Option<HandoffHold>,
+}
+
+/// See `IndividualCall::handoff_hold`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct HandoffHold {
+    pub(super) issi: u32,
+    pub(super) since: TdmaTime,
 }
 
 impl IndividualCall {
@@ -722,6 +748,26 @@ mod tests {
             CallOrigin::Network { brew_uuid: u } => assert_eq!(*u, brew_uuid),
             CallOrigin::Local { .. } => panic!("expected Network origin after Brew floor"),
         }
+    }
+
+    #[test]
+    fn moved_network_talker_takes_over_its_over() {
+        let brew_uuid = uuid::Uuid::from_u128(7);
+        let mut call = ActiveCall::new_network(brew_uuid, 214, 2001, 1, 1, 0, TdmaTime::default(), CallTimeout::T2m, 0);
+        // Somebody else may not take a running network over.
+        assert!(!call.take_over_moved_talker(2002));
+        assert_eq!(call.brew_uuid, Some(brew_uuid));
+        // The talker itself may, and the network session is forgotten.
+        assert!(call.take_over_moved_talker(2001));
+        assert_eq!(call.brew_uuid, None);
+        // Once taken (or with a local talker) there is nothing left to take over.
+        assert!(!call.take_over_moved_talker(2001));
+        let mut local = ActiveCall::new_local(issi(1001), 214, 1001, 1, 1, 0, TdmaTime::default(), CallTimeout::T2m, 0);
+        assert!(!local.take_over_moved_talker(1001));
+        // A network over in hang time has no talker any more.
+        let mut idle = ActiveCall::new_network(brew_uuid, 214, 2001, 1, 1, 0, TdmaTime::default(), CallTimeout::T2m, 0);
+        idle.enter_hangtime(TdmaTime::default());
+        assert!(!idle.take_over_moved_talker(2001));
     }
 
     #[test]

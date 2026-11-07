@@ -20,6 +20,7 @@ use super::sec_emergency::{CfgEmergencyDto, apply_emergency_patch};
 use super::sec_geoalarm::{CfgGeoalarmDto, apply_geoalarm_patch};
 use super::sec_health::{CfgHealthDto, apply_health_patch};
 use super::sec_lst_dispatch::{CfgLstDispatchDto, apply_lst_dispatch_patch};
+use super::sec_multi_network::{CfgMultiNetworkDto, apply_multi_network_patch};
 use super::sec_networks::{CfgNetwork, DEFAULT_NETWORK, parse_networks};
 use super::sec_recovery::{CfgRecoveryDto, apply_recovery_patch};
 use super::sec_security::{CfgSecurityDto, apply_security_patch};
@@ -29,6 +30,17 @@ use super::sec_telemetry::{CfgTelemetryDto, apply_telemetry_patch};
 use super::sec_tpg2200_action::{CfgTpg2200ActionDto, apply_tpg2200_action_patch};
 use super::sec_wx::{CfgWxServiceDto, apply_wx_service_patch};
 use super::{PhyIoDto, phy_dto_to_cfg};
+
+/// A `neighbor_cells_ca` array of tables (`what` names it in errors).
+pub(crate) fn parse_neighbour_list(v: Value, what: &str) -> Result<Vec<CfgNeighborCellCa>, String> {
+    // v is a Value::Array of Value::Table — deserialise via serde
+    let tables = v.try_into::<Vec<toml::Table>>().map_err(|e| format!("{what}: {e}"))?;
+    tables
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| Value::Table(t).try_into::<CfgNeighborCellCa>().map_err(|e| format!("{what}[{i}]: {e}")))
+        .collect()
+}
 
 /// Build `StackConfig` from a TOML configuration file
 pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::Error>> {
@@ -49,22 +61,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
                 None
             }
         })
-        .map(|v| {
-            // v is a Value::Array of Value::Table — deserialise via serde
-            v.try_into::<Vec<toml::Table>>()
-                .map_err(|e| format!("cell_info.neighbor_cells_ca: {}", e))
-                .and_then(|tables| {
-                    tables
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, t)| {
-                            Value::Table(t)
-                                .try_into::<CfgNeighborCellCa>()
-                                .map_err(|e| format!("cell_info.neighbor_cells_ca[{}]: {}", i, e))
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                })
-        })
+        .map(|v| parse_neighbour_list(v, "cell_info.neighbor_cells_ca"))
         .transpose()?
         .unwrap_or_default();
 
@@ -205,6 +202,12 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         return Err(format!("Unrecognized fields in recovery config: {:?}", sorted_keys(&recovery.extra)).into());
     }
 
+    if let Some(ref mn) = root.multi_network
+        && !mn.extra.is_empty()
+    {
+        return Err(format!("Unrecognized fields in multi_network config: {:?}", sorted_keys(&mn.extra)).into());
+    }
+
     // Optional health section — reject typos so a mis-spelled watchdog/threshold key is caught.
     if let Some(ref health) = root.health
         && !health.extra.is_empty()
@@ -260,6 +263,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         networks_explicit: false,
         network: DEFAULT_NETWORK.to_owned(),
         site_linked: false,
+        station_carriers: Vec::new(),
         cell_id: tetra_core::CellId::PRIMARY,
         brew: None,
         lst_dispatch: None,
@@ -278,6 +282,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         telegram: None,
         health: apply_health_patch(root.health.unwrap_or_default()),
         emergency: apply_emergency_patch(root.emergency.unwrap_or_default()),
+        multi_network: apply_multi_network_patch(root.multi_network.unwrap_or_default()),
     };
 
     if let Some(brew) = root.brew {
@@ -326,6 +331,7 @@ fn resolve_networks(cfg: &mut StackConfig, raw_networks: Option<Value>, primary_
             name: DEFAULT_NETWORK.to_owned(),
             net: cfg.net.clone(),
             brew: cfg.brew.clone(),
+            via: None,
         }];
         cfg.network = DEFAULT_NETWORK.to_owned();
         return Ok(());
@@ -422,6 +428,7 @@ struct TomlConfigRoot {
     telegram_alerts: Option<CfgTelegramDto>,
     health: Option<CfgHealthDto>,
     emergency: Option<CfgEmergencyDto>,
+    multi_network: Option<CfgMultiNetworkDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,
@@ -784,6 +791,29 @@ main_carrier_number = 1586
         // Explicitly rolled back to the legacy MM D-ATTACH path.
         let cfg = from_toml_str(&minimal_toml("dgna_use_ss_facility = false")).expect("parse");
         assert!(!cfg.cell.dgna_use_ss_facility, "false => legacy MM D-ATTACH path");
+    }
+
+    #[test]
+    fn rxlev_access_min_defaults_to_minus_110_and_is_configurable() {
+        // Absent: -110 dBm, SYSINFO code 3 (table 21.65), config still valid.
+        let cfg = from_toml_str(&minimal_toml("")).expect("parse");
+        assert_eq!(cfg.cell.rxlev_access_min_dbm, -110);
+        assert_eq!(cfg.cell.rxlev_access_min(), 3);
+        cfg.validate().expect("default is valid");
+
+        // Ends of table 21.65 and a value in between.
+        for (dbm, code) in [(-125, 0), (-75, 10), (-50, 15)] {
+            let cfg = from_toml_str(&minimal_toml(&format!("rxlev_access_min_dbm = {dbm}"))).expect("parse");
+            cfg.validate().expect("coded level is valid");
+            assert_eq!(cfg.cell.rxlev_access_min(), code, "{dbm} dBm");
+        }
+
+        // Not one of the 16 coded levels.
+        for dbm in [-130, -45, -77, 0] {
+            let cfg = from_toml_str(&minimal_toml(&format!("rxlev_access_min_dbm = {dbm}"))).expect("parse");
+            let err = cfg.validate().unwrap_err();
+            assert!(err.contains("rxlev_access_min_dbm"), "{dbm}: {err}");
+        }
     }
 
     #[test]

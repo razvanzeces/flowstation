@@ -18,14 +18,20 @@ use crate::net_telemetry::{TelemetryEvent, channel::TelemetrySink};
 use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::{CfgBrew, SharedConfig};
-use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
+use tetra_core::{CellId, Sap, TdmaTime, tetra_entities::TetraEntity};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::{
     SapMsg, SapMsgInner,
-    control::call_control::{CallControl, NetworkCircuitCall},
+    control::call_control::{CallControl, CellReselection, NetworkCircuitCall},
     tmd::TmdCircuitDataReq,
 };
 
+use tetra_pdus::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
+
+use super::protocol::{
+    BREW_HO_STATUS_NO_TARGET, BREW_HO_STATUS_OK, BREW_HO_STATUS_REJECTED, BrewHoChannel, BrewHoRequest, BrewHoResult, BrewHoSdu,
+};
+use tetra_saps::control::call_control::{HandoverChannel, HandoverOutcome};
 use super::worker::{BREW_EVENT_CHANNEL_CAPACITY, BrewCommand, BrewEvent, BrewWorker};
 
 /// Hangtime before releasing group call circuit to allow reuse without re-signaling.
@@ -167,6 +173,38 @@ struct UlForwardedCall {
     carrier_num: u16,
 }
 
+/// Target side: a forwarded registration handed to MM, waiting for its answer and, for type 1,
+/// for CMCE's channel of the MS's group call.
+#[derive(Debug)]
+struct HoForward {
+    /// The server's transaction id
+    transaction_id: u32,
+    since: Instant,
+    /// The group call the serving station would move the MS into directly (type 1)
+    call_gssi: Option<u32>,
+    /// MM's accept, kept while CMCE brings the call's channel up
+    accept: Option<BrewHoSdu>,
+}
+
+/// Serving side: a handover request this station sent.
+#[derive(Debug)]
+struct HoRequest {
+    issi: u32,
+    since: Instant,
+    /// The group call named in the request
+    call: Option<Type1Call>,
+}
+
+/// Serving side: the one group call an MS listens to, offered for type 1 reselection, with the
+/// traffic channel it runs on here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Type1Call {
+    gssi: u32,
+    call_id: u16,
+    carrier: u16,
+    ts: u8,
+}
+
 // ─── BrewEntity ───────────────────────────────────────────────────
 
 pub struct BrewEntity {
@@ -219,6 +257,24 @@ pub struct BrewEntity {
     /// Multi-cell: where every cell's radios are registered. Radios on an additional cell are
     /// not in this (primary) stack's subscriber list, so network SDS checks this too.
     site_directory: Option<SharedDirectory>,
+
+    /// Target side of an announced reselection from another station: forwarded registrations
+    /// handed to MLE/MM, ISSI -> (server transaction id, when). MM's answer goes back as
+    /// SERVICE_HO_RESULT.
+    ho_forwards: HashMap<u32, HoForward>,
+    /// Serving side: handover requests this station sent, by transaction id.
+    ho_requests: HashMap<u32, HoRequest>,
+    /// Last transaction id used for `ho_requests`.
+    ho_last_transaction: u32,
+    /// Serving side: radios that left for another station with its registration accept, to drop
+    /// from MM once D-NEW-CELL had time to reach them (ISSI -> when to drop).
+    ho_departing: HashMap<u32, Instant>,
+    /// Radios dropped because another station registered them: MM's deregistration that follows
+    /// is not sent to the server (the ISSI is no longer ours there). ISSI -> when dropped.
+    moved_away: HashMap<u32, Instant>,
+    /// Radios answered with D-NEW-CELL whose reselection was reported to the server: a later
+    /// `SERVICE_MS_MOVED` for them is not reported again as unannounced. ISSI -> when answered.
+    announced_away: HashMap<u32, Instant>,
 
     /// Rate limiting for RSSI export: tracks last sent time per ISSI.
     /// Only used when feature_rssi_export is enabled in config.
@@ -276,6 +332,12 @@ impl BrewEntity {
             brew_version_announced: false,
             telemetry_sink: None,
             site_directory: None,
+            ho_forwards: HashMap::new(),
+            ho_requests: HashMap::new(),
+            ho_last_transaction: 0,
+            ho_departing: HashMap::new(),
+            moved_away: HashMap::new(),
+            announced_away: HashMap::new(),
             rssi_last_sent: HashMap::new(),
             worker_handle: Some(handle),
         }
@@ -289,6 +351,13 @@ impl BrewEntity {
     /// Multi-cell: let network SDS reach radios registered on any cell of the site.
     pub fn set_site_directory(&mut self, directory: SharedDirectory) {
         self.site_directory = Some(directory);
+    }
+
+    /// Tell the server which cell `issi` registered on: in a multi-cell site the one the site
+    /// directory has it on, otherwise the primary. The worker only sends it where offered.
+    fn report_ms_cell(&self, issi: u32) {
+        let cell = ms_cell(self.site_directory.as_ref(), issi);
+        let _ = self.command_sender.send(BrewCommand::ReportMsCell { issi, cell });
     }
 
     /// True if `issi` is registered on this stack or, in a multi-cell site, on any of its cells.
@@ -585,6 +654,25 @@ impl BrewEntity {
                     // every 5s for a circuit that is already gone.
                     self.drop_network_circuit(uuid);
                 }
+                BrewEvent::HandoverRequest(req) => self.handle_handover_request(queue, req),
+                BrewEvent::HandoverResult(res) => self.handle_handover_result(queue, res),
+                BrewEvent::MsMoved { issi } => self.handle_ms_moved(queue, issi),
+                BrewEvent::CallRestoreAnswer { issi, peer, call } => {
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Brew,
+                        dest: TetraEntity::Cmce,
+                        msg: SapMsgInner::CmceCallControl(CallControl::IndividualCallRestoreAnswer { issi, peer, call }),
+                    });
+                }
+                BrewEvent::CallHandoffRequest { issi, peer } => {
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Brew,
+                        dest: TetraEntity::Cmce,
+                        msg: SapMsgInner::CmceCallControl(CallControl::IndividualCallHandoffRequest { issi, peer }),
+                    });
+                }
                 BrewEvent::CircuitDtmf { uuid, length_bits, data } => {
                     tracing::debug!("BrewEntity: CIRCUIT DTMF uuid={} bits={}", uuid, length_bits);
                     // DTMF from network → CMCE (CMCE can forward to local MS via U-INFO if needed)
@@ -728,6 +816,7 @@ impl BrewEntity {
                 if routable && self.connected {
                     tracing::info!("BrewEntity: subscriber register issi={} → REGISTER", issi);
                     let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
+                    self.report_ms_cell(issi);
                 } else if !routable {
                     tracing::debug!("BrewEntity: subscriber register issi={} (filtered, not sent to Brew)", issi);
                 } else {
@@ -741,7 +830,9 @@ impl BrewEntity {
                     .remove(&issi)
                     .map(|g| g.into_iter().collect())
                     .unwrap_or_default();
-                if routable && self.connected {
+                if self.moved_away.remove(&issi).is_some() {
+                    tracing::info!("BrewEntity: ISSI {} moved to another station, dropped here without DEREGISTER", issi);
+                } else if routable && self.connected {
                     tracing::info!("BrewEntity: subscriber deregister issi={} → DEAFFILIATE + DEREGISTER", issi);
                     if !existing_groups.is_empty() {
                         let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
@@ -790,7 +881,9 @@ impl BrewEntity {
                         }
                     }
                 }
-                if !removed_groups.is_empty() && routable && self.connected {
+                if self.moved_away.contains_key(&issi) {
+                    // Dropped because it moved away: the other station holds its groups now.
+                } else if !removed_groups.is_empty() && routable && self.connected {
                     tracing::info!("BrewEntity: deaffiliate issi={} → DEAFFILIATE groups={:?}", issi, removed_groups);
                     let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
                         issi,
@@ -814,27 +907,32 @@ impl BrewEntity {
     }
 
     fn resync_subscribers(&self) {
-        for (issi, groups) in &self.subscriber_groups {
+        for issi in self.subscriber_groups.keys() {
             if !super::is_brew_issi_routable(&self.config, *issi) {
                 tracing::debug!("BrewEntity: resync skipping issi={} (filtered)", issi);
                 continue;
             }
-            let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi: *issi });
-            if groups.is_empty() {
-                tracing::info!("BrewEntity: resync issi={} — registered, no group affiliations", issi);
-            } else {
-                let gssi_list: Vec<u32> = groups.iter().copied().collect();
-                tracing::info!(
-                    "BrewEntity: resync issi={} — registered, affiliating {} groups: {:?}",
-                    issi,
-                    gssi_list.len(),
-                    gssi_list
-                );
-                let _ = self.command_sender.send(BrewCommand::AffiliateGroups {
-                    issi: *issi,
-                    groups: gssi_list,
-                });
-            }
+            self.register_with_groups(*issi, "resync");
+        }
+    }
+
+    /// REGISTER `issi` with the server and affiliate the groups it has here.
+    fn register_with_groups(&self, issi: u32, why: &str) {
+        let Some(groups) = self.subscriber_groups.get(&issi) else { return };
+        let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
+        self.report_ms_cell(issi);
+        if groups.is_empty() {
+            tracing::info!("BrewEntity: {} issi={} — registered, no group affiliations", why, issi);
+        } else {
+            let gssi_list: Vec<u32> = groups.iter().copied().collect();
+            tracing::info!(
+                "BrewEntity: {} issi={} — registered, affiliating {} groups: {:?}",
+                why,
+                issi,
+                gssi_list.len(),
+                gssi_list
+            );
+            let _ = self.command_sender.send(BrewCommand::AffiliateGroups { issi, groups: gssi_list });
         }
     }
 
@@ -1205,8 +1303,12 @@ impl BrewEntity {
             return;
         };
 
+        // CALL_RELEASE reaches here too (the worker sends both end events); for an individual
+        // call the circuit release that follows does the work, so only the label differs.
+        let individual = self.ul_forwarded.values().any(|f| f.uuid == uuid && f.kind == UlForwardKind::Circuit);
         tracing::info!(
-            "BrewEntity: group call ended uuid={} call_id={:?} gssi={} frames={}",
+            "BrewEntity: {} ended uuid={} call_id={:?} gssi={} frames={}",
+            if individual { "individual call" } else { "group call" },
             uuid,
             call.call_id,
             call.dest_gssi,
@@ -1635,6 +1737,32 @@ impl BrewEntity {
         tracing::debug!("BrewEntity: drop requested for unknown uuid={}", brew_uuid);
     }
 
+    /// A network talker came to this cell unannounced and CMCE gave it the floor of the over it
+    /// was heard on. Its old session (sent by the station it left) ends here: no more downlink
+    /// from it, and its late GROUP_IDLE finds nothing.
+    fn drop_moved_talker_session(&mut self, carrier_num: u16, ts: u8, source_issi: u32, dest_gssi: u32) {
+        let moved: Vec<Uuid> = self
+            .active_calls
+            .values()
+            .filter(|c| {
+                c.source_issi == source_issi
+                    && c.dest_gssi == dest_gssi
+                    && c.carrier_num == Some(carrier_num)
+                    && c.ts == Some(ts)
+            })
+            .map(|c| c.uuid)
+            .collect();
+        for uuid in moved {
+            tracing::info!(
+                "BrewEntity: talker {} keyed up here, ending its network session uuid={} gssi={}",
+                source_issi,
+                uuid,
+                dest_gssi
+            );
+            self.drop_network_call(uuid);
+        }
+    }
+
     /// CMCE had no listeners — hold the session until Affiliate promotes it (no circuit yet).
     fn hold_inbound_no_listeners(&mut self, brew_uuid: Uuid, dest_gssi: u32) {
         let Some(call) = self.active_calls.remove(&brew_uuid) else {
@@ -1759,6 +1887,7 @@ impl TetraEntityTrait for BrewEntity {
         self.expire_hanging_calls(queue);
         // Release inbound calls the core stopped feeding without ever sending GROUP_IDLE
         self.reap_idle_calls(queue);
+        self.drop_departed(queue);
     }
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
@@ -1903,6 +2032,10 @@ impl TetraEntityTrait for BrewEntity {
                     carrier_num,
                     ts
                 );
+                // A call restored on another cell of a multi-cell station moves to a new
+                // timeslot: its old one no longer carries this call's uplink.
+                self.ul_forwarded
+                    .retain(|&slot, fwd| slot == (carrier_num, ts) || fwd.uuid != brew_uuid || fwd.kind != UlForwardKind::Circuit);
                 // Register UL forwarding: voice on `ts` gets sent to TetraPack.
                 self.ul_forwarded.insert(
                     (carrier_num, ts),
@@ -1920,6 +2053,12 @@ impl TetraEntityTrait for BrewEntity {
                 // from TetraPack (handle_voice_frame + drain_jitter_playout) are delivered to the MS.
                 // Without this entry handle_voice_frame silently drops all incoming DL audio because
                 // it looks up the uuid in active_calls and finds nothing.
+                if let Some(call) = self.active_calls.get_mut(&brew_uuid) {
+                    // Downlink voice follows the call to its new timeslot (restored on a sibling cell).
+                    call.call_id = Some(call_id);
+                    call.carrier_num = Some(carrier_num);
+                    call.ts = Some(ts);
+                }
                 self.active_calls.entry(brew_uuid).or_insert_with(|| ActiveCall {
                     uuid: brew_uuid,
                     call_id: Some(call_id),
@@ -1968,6 +2107,71 @@ impl TetraEntityTrait for BrewEntity {
             SapMsgInner::MmSubscriberUpdate(update) => {
                 self.handle_subscriber_update(update);
             }
+            SapMsgInner::CmceCallControl(CallControl::SiteForwardRegistrationResult { issi, sdu }) => {
+                self.finish_forward_registration(queue, issi, sdu);
+            }
+            SapMsgInner::CmceCallControl(CallControl::HandoverGroupCallReady { issi, gssi, call }) => {
+                self.finish_handover_channel(issi, gssi, call);
+            }
+            SapMsgInner::CmceCallControl(CallControl::HandoverRequest {
+                issi,
+                target_carrier,
+                target_carrier_ext,
+                target_mcc,
+                target_mnc,
+                target_location_area,
+                sdu,
+            }) => {
+                let req = BrewHoRequest {
+                    transaction_id: 0,
+                    issi,
+                    target_carrier,
+                    target_carrier_ext,
+                    target_mcc,
+                    target_mnc,
+                    target_location_area,
+                    sdu: sdu.as_ref().map(BrewHoSdu::from_bitbuffer),
+                    call_gssi: None,
+                };
+                self.send_handover_request(queue, req);
+            }
+            SapMsgInner::CmceCallControl(CallControl::IndividualCallRestoreRequest { issi, peer }) => {
+                if self.connected {
+                    let _ = self.command_sender.send(BrewCommand::RequestCallRestore { issi, peer });
+                } else {
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Brew,
+                        dest: TetraEntity::Cmce,
+                        msg: SapMsgInner::CmceCallControl(CallControl::IndividualCallRestoreAnswer { issi, peer, call: None }),
+                    });
+                }
+            }
+            SapMsgInner::CmceCallControl(CallControl::IndividualCallHandoffAnswer { issi, peer, call }) => {
+                if self.connected {
+                    let _ = self.command_sender.send(BrewCommand::SendCallHandoff { issi, peer, call });
+                }
+            }
+            SapMsgInner::CmceCallControl(CallControl::RegisteredWithoutCall { issi }) => {
+                if self.connected {
+                    let _ = self.command_sender.send(BrewCommand::ReportRegisteredWithoutCall { issi });
+                }
+            }
+            SapMsgInner::CmceCallControl(CallControl::HandoverDone { issi }) => {
+                self.ho_departing.insert(issi, Instant::now() + HO_DEPARTURE_DELAY);
+            }
+            SapMsgInner::CmceCallControl(CallControl::ReselectionAnnounced { issi, reselection }) => {
+                self.announced_away.retain(|_, at| at.elapsed() < ANNOUNCED_AWAY_LIFETIME);
+                self.announced_away.insert(issi, Instant::now());
+                self.report_reselection(issi, reselection);
+            }
+            SapMsgInner::CmceCallControl(CallControl::HandoverFailed { issi }) => {
+                // The MS stays here (D-PREPARE-FAIL), but the target may have registered it
+                // already: claim it back so calls and SDS keep reaching this station.
+                if self.connected && super::is_brew_issi_routable(&self.config, issi) {
+                    self.register_with_groups(issi, "reselection refused, re-register");
+                }
+            }
             SapMsgInner::MsRssiUpdate { issi, rssi_dbfs } => {
                 self.handle_rssi_update(issi, rssi_dbfs);
             }
@@ -1978,6 +2182,404 @@ impl TetraEntityTrait for BrewEntity {
                 tracing::debug!("BrewEntity: unexpected rx_prim from {:?} on {:?}", message.src, message.sap);
             }
         }
+    }
+}
+
+// ─── Announced reselection from another station (target side) ─────
+
+/// How long MLE/MM may take to answer a forwarded registration (MLE drops it after 3 s too; the
+/// server has answered the serving station with "timeout" long before).
+const HO_FORWARD_ANSWER_TIMEOUT: Duration = Duration::from_secs(3);
+/// How long a request this station sent may wait for its result (MLE answers the MS after 3 s
+/// anyway; T370 is 5 s, TS 100 392-2 clause 18.6.2).
+const HO_REQUEST_LIFETIME: Duration = Duration::from_secs(5);
+
+/// How long after D-NEW-CELL the radio's registration elsewhere still belongs to that announced
+/// reselection (type 3 may scan for a while first). Matches brew-server's report window.
+const ANNOUNCED_AWAY_LIFETIME: Duration = Duration::from_secs(10);
+/// Time between D-NEW-CELL and dropping the departing MS here, so that nothing CMCE sends when
+/// the MS's groups lose their last listener (D-RELEASE) reaches the MS before it has left.
+const HO_DEPARTURE_DELAY: Duration = Duration::from_secs(2);
+
+impl BrewEntity {
+    /// A serving station relayed an announced cell reselection to this station
+    /// (TS 100 392-2 clause 18.3.4.7, U-PREPARE clause 18.4.1.4.6).
+    ///
+    /// - With a registration (`SERVICE_HO_FORWARD_REG`, the MM PDU from U-PREPARE): hand it to
+    ///   MLE as if forwarded by a sibling cell. MM registers the radio here (which moves the ISSI
+    ///   to this station on Brew) and its answer goes back for D-NEW-CELL.
+    /// - Without (`SERVICE_HO_PREPARE`): nothing to register; answer ok. The radio restores its
+    ///   call with U-RESTORE on arrival, as after any reselection.
+    fn handle_handover_request(&mut self, queue: &mut MessageQueue, req: BrewHoRequest) {
+        let Some(sdu) = req.sdu else {
+            tracing::info!(
+                "BrewEntity: handover prepare for ISSI {} on carrier {} (transaction {}), nothing to register",
+                req.issi,
+                req.target_carrier,
+                req.transaction_id
+            );
+            self.send_handover_result(req.transaction_id, req.issi, BREW_HO_STATUS_OK, None, None);
+            return;
+        };
+        tracing::info!(
+            "BrewEntity: forwarded registration for ISSI {} on carrier {} (transaction {}{}) → MM",
+            req.issi,
+            req.target_carrier,
+            req.transaction_id,
+            req.call_gssi.map(|g| format!(", call to {g}")).unwrap_or_default()
+        );
+        self.ho_forwards.retain(|_, f| f.since.elapsed() < HO_FORWARD_ANSWER_TIMEOUT);
+        self.ho_forwards.insert(
+            req.issi,
+            HoForward {
+                transaction_id: req.transaction_id,
+                since: Instant::now(),
+                call_gssi: req.call_gssi,
+                accept: None,
+            },
+        );
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Brew,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::CmceCallControl(CallControl::SiteForwardRegistration {
+                issi: req.issi,
+                target_carrier: req.target_carrier,
+                sdu: sdu.to_bitbuffer(),
+            }),
+        });
+    }
+
+    /// MM answered a registration forwarded by another station: return it to the serving station.
+    /// A D-LOCATION UPDATE REJECT is reported as rejected, so the serving station sends
+    /// D-PREPARE-FAIL with it (clause 18.4.1.4.3). An accept for an MS in a group call the
+    /// serving station named waits for CMCE's channel of that call (type 1), so both go back in
+    /// one result.
+    fn finish_forward_registration(&mut self, queue: &mut MessageQueue, issi: u32, answer: Option<tetra_core::BitBuffer>) {
+        let Some(forward) = self.ho_forwards.get_mut(&issi) else {
+            tracing::debug!("BrewEntity: forwarded registration answer for ISSI {} without a request", issi);
+            return;
+        };
+        if forward.since.elapsed() >= HO_FORWARD_ANSWER_TIMEOUT || forward.accept.is_some() {
+            tracing::info!("BrewEntity: MM answered ISSI {}'s forwarded registration too late, dropped", issi);
+            self.ho_forwards.remove(&issi);
+            return;
+        }
+        let rejected = answer
+            .as_ref()
+            .and_then(|a| a.peek_bits_startoffset(0, 4))
+            .is_some_and(|t| t == MmPduTypeDl::DLocationUpdateReject.into_raw());
+        let status = if rejected { BREW_HO_STATUS_REJECTED } else { BREW_HO_STATUS_OK };
+        let transaction_id = forward.transaction_id;
+        tracing::info!(
+            "BrewEntity: forwarded registration for ISSI {} {} (transaction {})",
+            issi,
+            if rejected { "rejected" } else { "accepted" },
+            transaction_id
+        );
+        let sdu = answer.as_ref().map(BrewHoSdu::from_bitbuffer);
+        if let (false, Some(gssi), Some(accept)) = (rejected, forward.call_gssi, sdu.clone()) {
+            forward.accept = Some(accept);
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Brew,
+                dest: TetraEntity::Cmce,
+                msg: SapMsgInner::CmceCallControl(CallControl::HandoverPrepareGroupCall { issi, gssi }),
+            });
+            return;
+        }
+        self.ho_forwards.remove(&issi);
+        self.send_handover_result(transaction_id, issi, status, sdu, None);
+    }
+
+    /// CMCE has the channel of the group call an accepted MS arrives into (or none): send the
+    /// accept and the channel to the serving station.
+    fn finish_handover_channel(&mut self, issi: u32, gssi: u32, call: Option<(u16, u16, u8, u8)>) {
+        let Some(forward) = self.ho_forwards.remove(&issi) else { return };
+        let Some(accept) = forward.accept.filter(|_| forward.call_gssi == Some(gssi)) else {
+            return;
+        };
+        if forward.since.elapsed() >= HO_FORWARD_ANSWER_TIMEOUT {
+            tracing::info!("BrewEntity: channel for ISSI {}'s reselection came too late, dropped", issi);
+            return;
+        }
+        let channel = call.map(|(call_id, carrier, timeslot, usage)| BrewHoChannel {
+            call_id,
+            carrier,
+            timeslot,
+            usage,
+        });
+        tracing::info!(
+            "BrewEntity: ISSI {} accepted{} (transaction {})",
+            issi,
+            channel
+                .map(|c| format!(" with call {} on carrier {} ts {}", c.call_id, c.carrier, c.timeslot))
+                .unwrap_or_default(),
+            forward.transaction_id
+        );
+        self.send_handover_result(forward.transaction_id, issi, BREW_HO_STATUS_OK, Some(accept), channel);
+    }
+
+    /// Serving side: ask the station serving the neighbour cell to prepare the MS's arrival
+    /// (`SERVICE_HO_PREPARE`, or `SERVICE_HO_FORWARD_REG` with its registration). Without a
+    /// connection the answer is "not prepared" at once; a server without `handover-v1` gets
+    /// nothing (the worker answers for it).
+    fn send_handover_request(&mut self, queue: &mut MessageQueue, mut req: BrewHoRequest) {
+        if !self.connected {
+            Self::push_handover_result(queue, req.issi, HandoverOutcome::NotPrepared, None, None);
+            return;
+        }
+        self.ho_requests.retain(|_, r| r.since.elapsed() < HO_REQUEST_LIFETIME && r.issi != req.issi);
+        self.ho_last_transaction = self.ho_last_transaction.wrapping_add(1);
+        req.transaction_id = self.ho_last_transaction;
+        // Type 1 needs the target's channel in this cell's channel allocation, which names it
+        // in this cell's band plan (no extended carrier numbering, clause 21.5.2).
+        // A linked multi-cell station runs its group calls per cell (call identifiers and
+        // channels belong to the cells, not to this entity), so it offers type 2 only.
+        let same_plan = tetra_config::bluestation::carrier_band_plan(&self.config.config().cell) == Some(req.target_carrier_ext);
+        let linked = super::is_site_linked(&self.config);
+        let call = if req.sdu.is_some() && same_plan && !linked { self.type1_call(req.issi) } else { None };
+        req.call_gssi = call.map(|c| c.gssi);
+        self.ho_requests.insert(
+            req.transaction_id,
+            HoRequest {
+                issi: req.issi,
+                since: Instant::now(),
+                call,
+            },
+        );
+        tracing::info!(
+            "BrewEntity: asking for carrier {} to prepare ISSI {} (transaction {}{})",
+            req.target_carrier,
+            req.issi,
+            req.transaction_id,
+            if req.sdu.is_some() { ", forward registration" } else { "" }
+        );
+        let _ = self.command_sender.send(BrewCommand::SendHandoverRequest(req));
+    }
+
+    /// Serving side: the answer to one of our requests (relayed from the target, or the server's
+    /// own "no target" / "timeout"). MLE turns it into D-NEW-CELL or D-PREPARE-FAIL.
+    fn handle_handover_result(&mut self, queue: &mut MessageQueue, res: BrewHoResult) {
+        let Some(HoRequest { issi, since: at, call }) = self.ho_requests.remove(&res.transaction_id) else {
+            tracing::debug!(
+                "BrewEntity: handover result for unknown transaction {} (ISSI {}) ignored",
+                res.transaction_id,
+                res.issi
+            );
+            return;
+        };
+        if issi != res.issi || at.elapsed() >= HO_REQUEST_LIFETIME {
+            tracing::info!("BrewEntity: stale or mismatched handover result for ISSI {} ignored", res.issi);
+            return;
+        }
+        let outcome = match (res.status, res.reason.as_deref()) {
+            (BREW_HO_STATUS_OK, _) => HandoverOutcome::Accepted,
+            (BREW_HO_STATUS_REJECTED, _) => HandoverOutcome::Rejected,
+            (BREW_HO_STATUS_NO_TARGET, Some("gone")) => HandoverOutcome::TargetGone,
+            _ => HandoverOutcome::NotPrepared,
+        };
+        tracing::info!(
+            "BrewEntity: handover result for ISSI {} (transaction {}): status {}{} → {:?}",
+            issi,
+            res.transaction_id,
+            res.status,
+            res.reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default(),
+            outcome
+        );
+        // A channel is only of use for the call we named, and only while that call still runs here.
+        let channel = match (outcome, call, res.channel) {
+            (HandoverOutcome::Accepted, Some(named), Some(c)) if self.type1_call(issi) == Some(named) => Some(HandoverChannel {
+                call_id: named.call_id,
+                new_call_id: c.call_id,
+                carrier: c.carrier,
+                timeslot: c.timeslot,
+                usage: c.usage,
+                serving_carrier: named.carrier,
+                serving_timeslot: named.ts,
+            }),
+            _ => None,
+        };
+        Self::push_handover_result(queue, issi, outcome, res.sdu.as_ref().map(BrewHoSdu::to_bitbuffer), channel);
+    }
+
+    fn push_handover_result(
+        queue: &mut MessageQueue,
+        issi: u32,
+        outcome: HandoverOutcome,
+        sdu: Option<tetra_core::BitBuffer>,
+        channel: Option<HandoverChannel>,
+    ) {
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Brew,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::CmceCallControl(CallControl::HandoverResult { issi, outcome, sdu, channel }),
+        });
+    }
+
+    /// The group call `issi` listens to here, as (GSSI, call identifier), if exactly one call to
+    /// its groups runs on this cell and `issi` is not its talker. That call can continue on the
+    /// target's channel (type 1); a talker or an unclear call gets type 2 and restores it.
+    fn type1_call(&self, issi: u32) -> Option<Type1Call> {
+        let groups = self.subscriber_groups.get(&issi)?;
+        let talking = self.ul_forwarded.values().any(|c| c.source_issi == issi);
+        if talking {
+            return None;
+        }
+        let mut calls: Vec<Type1Call> = self
+            .active_calls
+            .values()
+            .filter_map(|c| {
+                Some(Type1Call {
+                    gssi: c.dest_gssi,
+                    call_id: c.call_id?,
+                    carrier: c.carrier_num?,
+                    ts: c.ts?,
+                })
+            })
+            .chain(self.hanging_calls.values().map(|c| Type1Call {
+                gssi: c.dest_gssi,
+                call_id: c.call_id,
+                carrier: c.carrier_num,
+                ts: c.ts,
+            }))
+            .chain(self.pending_tails.values().map(|t| Type1Call {
+                gssi: t.dest_gssi,
+                call_id: t.call_id,
+                carrier: t.carrier_num,
+                ts: t.ts,
+            }))
+            .chain(
+                self.ul_forwarded
+                    .iter()
+                    .filter(|(_, c)| c.kind == UlForwardKind::Group)
+                    .map(|(&(carrier, ts), c)| Type1Call {
+                        gssi: c.dest_gssi,
+                        call_id: c.call_id,
+                        carrier,
+                        ts,
+                    }),
+            )
+            .filter(|c| groups.contains(&c.gssi))
+            .collect();
+        calls.sort_unstable();
+        calls.dedup();
+        match calls.as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        }
+    }
+
+    /// The server reports that `issi` registered on another station without a handover prepared
+    /// here: the radio left (unannounced reselection). An over it is talking in here ends now, as
+    /// when its uplink falls silent, instead of holding the group's floor until the uplink
+    /// inactivity timer fires; the SwMI controls who transmits (TS 100 392-2 clause 14.5.2.2.1 a)).
+    /// The station then stops serving it, without deregistering it on the server (the other
+    /// station owns the ISSI). A radio this station is sending away itself is left to that path.
+    fn handle_ms_moved(&mut self, queue: &mut MessageQueue, issi: u32) {
+        let sending_away = self.ho_departing.contains_key(&issi) || self.ho_requests.values().any(|r| r.issi == issi);
+        if sending_away || self.moved_away.contains_key(&issi) {
+            tracing::debug!("BrewEntity: ISSI {} reported on another station, already leaving", issi);
+            return;
+        }
+        let announced = self.announced_away.get(&issi).is_some_and(|at| at.elapsed() < ANNOUNCED_AWAY_LIFETIME);
+        if !announced {
+            // It left without U-PREPARE (or this station did not answer one). In a circuit mode
+            // call that is unannounced reselection, otherwise undeclared (clause 18.3.4.7.0).
+            let reselection = if self.in_circuit_call(issi) {
+                CellReselection::Unannounced
+            } else {
+                CellReselection::Undeclared
+            };
+            self.report_reselection(issi, reselection);
+        }
+        let talking: Vec<(u16, u8)> = self
+            .ul_forwarded
+            .iter()
+            .filter(|(_, c)| c.kind == UlForwardKind::Group && c.source_issi == issi)
+            .map(|(slot, _)| *slot)
+            .collect();
+        for (carrier_num, ts) in talking {
+            tracing::info!(
+                "BrewEntity: talker {} left for another station, ending its over on carrier={} ts={}",
+                issi,
+                carrier_num,
+                ts
+            );
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Brew,
+                dest: TetraEntity::Cmce,
+                msg: SapMsgInner::CmceCallControl(CallControl::UlInactivityTimeout { carrier_num, ts }),
+            });
+        }
+        self.ho_departing.insert(issi, Instant::now());
+        self.drop_departed(queue);
+    }
+
+    /// Whether `issi` takes part in a circuit mode call here: a party of a connected individual
+    /// call, the talker of a group call, or affiliated to a group with a call on a traffic
+    /// channel here (hang time included), from CMCE's published call table. An individual call
+    /// still being set up does not count.
+    fn in_circuit_call(&self, issi: u32) -> bool {
+        // On a linked multi-cell station the call table above is the primary cell's only; the
+        // calls this entity carries for any cell count too (its talkers and individual calls,
+        // and network group calls to the radio's groups).
+        let groups = self.subscriber_groups.get(&issi);
+        if self.ul_forwarded.values().any(|c| c.source_issi == issi || (c.kind != UlForwardKind::Group && c.dest_gssi == issi))
+            || self.active_calls.values().any(|c| c.dest_gssi != 0 && groups.is_some_and(|g| g.contains(&c.dest_gssi)))
+        {
+            return true;
+        }
+        let state = self.config.state_read();
+        state.active_call_ts.contains_key(&issi)
+            || state
+                .subscribers
+                .attached_groups_of(issi)
+                .into_iter()
+                .any(|gssi| state.active_call_ts.contains_key(&gssi))
+    }
+
+    fn report_reselection(&self, issi: u32, reselection: CellReselection) {
+        tracing::info!("BrewEntity: {} left by {:?} cell reselection", issi, reselection);
+        let _ = self.command_sender.send(BrewCommand::ReportReselection { issi, reselection });
+    }
+
+    /// Serving side: radios sent to another station with its registration accept are dropped
+    /// from MM here, without deregistering them on the server (the other station owns the ISSI
+    /// now). CMCE sees the deregistration too and stops serving their groups if nobody else here
+    /// listens.
+    fn drop_departed(&mut self, queue: &mut MessageQueue) {
+        let now = Instant::now();
+        self.moved_away.retain(|_, at| now.duration_since(*at) < HO_REQUEST_LIFETIME);
+        let due: Vec<u32> = self.ho_departing.iter().filter(|(_, at)| **at <= now).map(|(i, _)| *i).collect();
+        for issi in due {
+            self.ho_departing.remove(&issi);
+            tracing::info!("BrewEntity: ISSI {} left for another station, dropping its registration here", issi);
+            self.moved_away.insert(issi, now);
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Brew,
+                dest: TetraEntity::Mm,
+                msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
+                    issi,
+                    groups: Vec::new(),
+                    action: BrewSubscriberAction::Deregister,
+                }),
+            });
+        }
+    }
+
+    fn send_handover_result(&self, transaction_id: u32, issi: u32, status: u8, sdu: Option<BrewHoSdu>, channel: Option<BrewHoChannel>) {
+        let _ = self.command_sender.send(BrewCommand::SendHandoverResult(BrewHoResult {
+            transaction_id,
+            issi,
+            status,
+            reason: None,
+            sdu,
+            channel,
+        }));
     }
 }
 
@@ -2037,6 +2639,7 @@ impl BrewEntity {
         ts: u8,
     ) {
         self.abort_pending_tails_on_slot(queue, carrier_num, ts, "local FloorGranted");
+        self.drop_moved_talker_session(carrier_num, ts, source_issi, dest_gssi);
 
         if !self.connected {
             tracing::trace!("BrewEntity: not connected, ignoring local call start");
@@ -2347,5 +2950,41 @@ impl Drop for BrewEntity {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
+    }
+}
+
+/// The cell of this station `issi` is on: where the site directory has it in a multi-cell
+/// station, otherwise (or not known there) the primary.
+fn ms_cell(directory: Option<&SharedDirectory>, issi: u32) -> CellId {
+    directory
+        .and_then(|d| d.read().expect("site directory").location(issi))
+        .unwrap_or(CellId::PRIMARY)
+}
+
+#[cfg(test)]
+mod ms_cell_tests {
+    use super::*;
+    use crate::net_site::SiteDirectory;
+    use std::sync::{Arc, RwLock};
+    use tetra_saps::control::brew::MmSubscriberUpdate;
+
+    #[test]
+    fn single_cell_stations_report_the_primary() {
+        assert_eq!(ms_cell(None, 2320001), CellId::PRIMARY);
+    }
+
+    #[test]
+    fn multi_cell_stations_report_where_the_directory_has_the_radio() {
+        let directory: SharedDirectory = Arc::new(RwLock::new(SiteDirectory::default()));
+        let register = MmSubscriberUpdate {
+            issi: 2320001,
+            groups: Vec::new(),
+            action: BrewSubscriberAction::Register,
+        };
+        directory.write().unwrap().apply(CellId(3), &register);
+        assert_eq!(ms_cell(Some(&directory), 2320001), CellId(3));
+        assert_eq!(ms_cell(Some(&directory), 2320002), CellId::PRIMARY, "unknown radio");
+        directory.write().unwrap().apply(CellId(1), &register);
+        assert_eq!(ms_cell(Some(&directory), 2320001), CellId(1), "moved within the station");
     }
 }

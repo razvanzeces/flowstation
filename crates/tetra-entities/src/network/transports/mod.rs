@@ -82,6 +82,13 @@ pub trait NetworkTransport: Send {
     fn server_brew_version(&self) -> u8 {
         0
     }
+
+    /// Return the Brew extensions the server offered in the last connect response
+    /// (`X-Brew-Extensions`). Empty when it offered none, as TetraPack and BrandMeister do.
+    /// WebSocketTransport overrides this.
+    fn server_brew_extensions(&self) -> &[String] {
+        &[]
+    }
 }
 
 /// Factory trait for creating transport instances

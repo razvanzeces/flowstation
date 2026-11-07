@@ -26,8 +26,10 @@ impl DPrepareFail {
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeDl::DPrepareFail)?;
         let fail_cause = buffer.read_field(2, "fail_cause")? as u8;
-        let obit = delimiters::read_obit(buffer)?;
-        let sdu = if obit { sdu::read_rest(buffer) } else { None };
+        // No type 2 elements are defined, so the O-bit carries no information; the SDU follows
+        // whatever its value (Annex E.2.1 note 2).
+        let _obit = delimiters::read_obit(buffer)?;
+        let sdu = sdu::read_rest(buffer);
 
         Ok(DPrepareFail { fail_cause, sdu })
     }
@@ -36,7 +38,8 @@ impl DPrepareFail {
     pub fn to_bitbuf(&self, buffer: &mut BitBuffer) -> Result<(), PduParseErr> {
         buffer.write_bits(MlePduTypeDl::DPrepareFail.into_raw(), 3);
         buffer.write_bits(self.fail_cause as u64, 2);
-        delimiters::write_obit(buffer, self.sdu.is_some() as u8);
+        // O-bit 0: no type 2 elements; the SDU is not announced by it (Annex E.2.1, E.20/E.22/E.23).
+        delimiters::write_obit(buffer, 0);
         if let Some(ref s) = self.sdu {
             sdu::write(buffer, s);
         }

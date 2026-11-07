@@ -16,6 +16,11 @@ impl CcBsSubentity {
             ul_slot_preempted_issi: HashMap::new(),
             telemetry: None,
             ambience_armed: HashMap::new(),
+            deferred_restores: Vec::new(),
+            deferred_individual_restores: Vec::new(),
+            handover_reservations: Vec::new(),
+            restore_listeners: HashSet::new(),
+            area_members: HashMap::new(),
         }
     }
 
@@ -105,6 +110,37 @@ impl CcBsSubentity {
             },
         );
 
+        self.send_late_entry_d_setup(queue, call_id, gssi, carrier_num, ts, usage, tx_active);
+    }
+
+    /// A radio attached again to a group it was already counted in (U-ATTACH/DETACH GROUP
+    /// IDENTITY after its own roaming registration, which made it drop its group attachments,
+    /// clause 16.4.1.1 a)): repeat the late-entry D-SETUP of a call already running on `gssi`
+    /// at once. A D-SETUP sent between the station's registration and the radio's own one is
+    /// ignored by the radio, and the periodic one only comes every 5 multiframes.
+    pub(super) fn repeat_late_entry_for_reattached_gssi(&mut self, queue: &mut MessageQueue, gssi: u32) {
+        let Some((call_id, carrier_num, ts, usage, tx_active)) = self
+            .active_calls
+            .iter()
+            .find(|(_, c)| c.dest_gssi == gssi)
+            .map(|(&id, c)| (id, c.carrier_num, c.ts, c.usage, c.is_tx_active()))
+        else {
+            return;
+        };
+        self.send_late_entry_d_setup(queue, call_id, gssi, carrier_num, ts, usage, tx_active);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_late_entry_d_setup(
+        &mut self,
+        queue: &mut MessageQueue,
+        call_id: u16,
+        gssi: u32,
+        carrier_num: u16,
+        ts: u8,
+        usage: u8,
+        tx_active: bool,
+    ) {
         let Some(cached) = self.cached_setups.get_mut(&call_id) else {
             return;
         };
@@ -158,6 +194,7 @@ impl CcBsSubentity {
             carrier: Some(carrier_num),
             timeslots,
             ul_dl_assigned: ul_dl,
+            cell_change: false,
         };
         (sdu, chan_alloc)
     }
@@ -256,6 +293,7 @@ impl CcBsSubentity {
             timeslots,
             alloc_type: ChanAllocType::Replace,
             ul_dl_assigned,
+            cell_change: false,
         };
 
         SapMsg {
@@ -323,8 +361,12 @@ impl CcBsSubentity {
         Self::build_d_disconnect(d_setup_pdu.call_identifier, disconnect_cause)
     }
 
+    /// `call_identifier` is the one the MS restores with; `new_call_identifier` is this cell's,
+    /// when it differs (TS 100 392-2 clauses 14.7.1.3 and 14.5.2.2.4: the MS uses the new one
+    /// in all later signalling).
     pub(super) fn build_d_call_restore(
         call_identifier: u16,
+        new_call_identifier: Option<u16>,
         transmission_grant: TransmissionGrant,
         call_status: Option<CallStatus>,
     ) -> BitBuffer {
@@ -333,7 +375,7 @@ impl CcBsSubentity {
             transmission_grant: transmission_grant.into_raw() as u8,
             transmission_request_permission: false,
             reset_call_time_out_timer_t310_: true,
-            new_call_identifier: None,
+            new_call_identifier: new_call_identifier.map(u64::from),
             call_time_out: None,
             call_status: call_status.map(CallStatus::into_raw),
             modify: None,
@@ -458,6 +500,37 @@ impl CcBsSubentity {
             .map(|(call_id, call)| (*call_id, call.state))
     }
 
+    /// Multi-cell (site switch): `issi`, registered on a sibling cell of this cell's location area,
+    /// counts as a listener of `groups` here, so group calls to them run on this cell too: within
+    /// its registered area a radio changes cell without registering (TS 100 392-2 clause
+    /// 18.3.4.7.1a), so the SwMI does not know which of the area's cells it listens to.
+    /// It may also be called here: the switch pages it on every cell of the area.
+    pub(super) fn set_area_members(&mut self, queue: &mut MessageQueue, issi: u32, groups: Option<Vec<u32>>) {
+        let here = groups.is_some();
+        let new: HashSet<u32> = groups.unwrap_or_default().into_iter().collect();
+        let old = self.area_members.remove(&issi).unwrap_or_default();
+        for gssi in old.difference(&new) {
+            self.dec_group_listener(*gssi);
+            self.drop_group_calls_if_unlistened(queue, *gssi);
+        }
+        for gssi in new.difference(&old) {
+            let first_listener = !self.has_listener(*gssi);
+            self.inc_group_listener(*gssi);
+            if first_listener {
+                Self::push_control(queue, TetraEntity::Brew, CallControl::GroupListenersAvailable { gssi: *gssi });
+            }
+        }
+        if here {
+            tracing::debug!("CMCE: ISSI {} may be here (same location area), groups {:?}", issi, new);
+            self.area_members.insert(issi, new);
+        }
+    }
+
+    /// `issi` is registered on a sibling cell of this cell's location area (see `set_area_members`).
+    pub(super) fn is_area_member(&self, issi: u32) -> bool {
+        self.area_members.contains_key(&issi)
+    }
+
     pub(super) fn drop_group_calls_if_unlistened(&mut self, queue: &mut MessageQueue, gssi: u32) {
         if self.has_listener(gssi) {
             return;
@@ -519,6 +592,12 @@ impl CcBsSubentity {
                 tracing::info!("CMCE: subscriber register issi={} known={}", issi, known);
             }
             BrewSubscriberAction::Deregister => {
+                self.deferred_restores.retain(|r| r.sender.ssi != issi);
+                self.deferred_individual_restores.retain(|r| r.sender.ssi != issi);
+                let restored: Vec<u32> = self.restore_listeners.iter().filter(|(i, _)| *i == issi).map(|(_, g)| *g).collect();
+                for gssi in restored {
+                    self.drop_restore_listener(queue, issi, gssi);
+                }
                 if let Some(existing) = self.subscriber_groups.remove(&issi) {
                     for gssi in existing {
                         self.dec_group_listener(gssi);
@@ -531,15 +610,27 @@ impl CcBsSubentity {
             }
             BrewSubscriberAction::Affiliate => {
                 let mut new_groups = Vec::new();
+                let mut reattached = Vec::new();
                 {
                     let entry = self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
                     for gssi in groups {
                         if entry.insert(gssi) {
                             new_groups.push(gssi);
+                        } else {
+                            reattached.push(gssi);
                         }
                     }
                 }
+                for gssi in &reattached {
+                    self.repeat_late_entry_for_reattached_gssi(queue, *gssi);
+                }
                 for gssi in &new_groups {
+                    // A restore already counted this MS for the group: MM's affiliation takes
+                    // the count over instead of adding a second one.
+                    if self.restore_listeners.remove(&(issi, *gssi)) {
+                        tracing::debug!("CMCE: affiliation of issi={} to gssi={} replaces its restore listener", issi, gssi);
+                        continue;
+                    }
                     let first_listener = !self.has_listener(*gssi);
                     self.inc_group_listener(*gssi);
                     // Promote Brew pending inbound once the first local ear appears.
@@ -1036,8 +1127,13 @@ impl CcBsSubentity {
 
     /// Release a group call: send D-RELEASE, close circuits, clean up state
     pub(super) fn release_group_call(&mut self, queue: &mut MessageQueue, call_id: u16, disconnect_cause: DisconnectCause) {
+        let mut released_gssi = None;
         if let Some(call) = self.active_calls.get_mut(&call_id) {
             call.begin_release(disconnect_cause);
+            released_gssi = Some(call.dest_gssi);
+        }
+        if let Some(gssi) = released_gssi {
+            self.drop_restore_listeners_for_group(gssi);
         }
 
         let Some(cached) = self.cached_setups.get(&call_id) else {

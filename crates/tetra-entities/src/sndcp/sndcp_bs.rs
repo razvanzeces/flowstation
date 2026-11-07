@@ -155,6 +155,7 @@ impl Sndcp {
                 req_handle: 0,
                 graceful_degradation: None,
                 chan_alloc: None,
+                stealing_slot: None,
                 tx_reporter: None,
             }),
         });
@@ -303,6 +304,7 @@ impl Sndcp {
                 req_handle: 0,
                 graceful_degradation: None,
                 chan_alloc,
+                stealing_slot: None,
                 tx_reporter: None,
             }),
         });
@@ -391,6 +393,7 @@ fn pdch_allocation_for_data_transmit_response() -> CmceChanAllocReq {
         timeslots: normalize_pdch_timeslots_to_single(assigned_scch_pdch_timeslots_for_resource_request()),
         alloc_type: ChanAllocType::Replace,
         ul_dl_assigned: UlDlAssignment::Both,
+        cell_change: false,
     }
 }
 
@@ -403,6 +406,7 @@ fn pdch_allocation_for_end_of_data() -> CmceChanAllocReq {
         timeslots: SNDCP_PDCH_RELEASE_TIMESLOTS,
         alloc_type: ChanAllocType::QuitAndGo,
         ul_dl_assigned: UlDlAssignment::Both,
+        cell_change: false,
     }
 }
 

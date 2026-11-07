@@ -113,6 +113,10 @@ pub struct TlaTlDataReqBl {
     // Custom fields for BS stack:
     /// Optional Channel Allocation Request that may be included by CMCE
     pub chan_alloc: Option<CmceChanAllocReq>,
+    /// Carrier and timeslot of the traffic channel to steal from when `stealing_permission` is set
+    /// and the addressed MS is on that assigned channel. Without it, the stealing timeslot comes
+    /// from `chan_alloc`.
+    pub stealing_slot: Option<(u16, u8)>,
 
     /// Optional TxReporter that may be included to track transmission and optionally, acknowledgement
     pub tx_reporter: Option<TxReporter>,
@@ -263,6 +267,10 @@ pub struct TlaTlUnitdataReqBl {
     // Custom fields for BS stack:
     /// Optional Channel Allocation Request that may be included by CMCE
     pub chan_alloc: Option<CmceChanAllocReq>,
+    /// Carrier and timeslot of the traffic channel to steal from when `stealing_permission` is set
+    /// and the addressed MS is on that assigned channel. Without it, the stealing timeslot comes
+    /// from `chan_alloc`.
+    pub stealing_slot: Option<(u16, u8)>,
 
     /// Optional TxReporter that may be included to track transmission and optionally, acknowledgement
     pub tx_reporter: Option<TxReporter>,

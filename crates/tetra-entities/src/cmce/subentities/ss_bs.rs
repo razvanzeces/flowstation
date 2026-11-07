@@ -370,6 +370,7 @@ impl SsBsSubentity {
             timeslots,
             alloc_type: ChanAllocType::Replace,
             ul_dl_assigned: UlDlAssignment::Dl,
+            cell_change: false,
         }
     }
 

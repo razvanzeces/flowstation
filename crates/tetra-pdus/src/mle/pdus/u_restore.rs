@@ -36,7 +36,9 @@ impl URestore {
         let mcc = typed::parse_type2_generic(obit, buffer, 10, "mcc")?;
         let mnc = typed::parse_type2_generic(obit, buffer, 14, "mnc")?;
         let la = typed::parse_type2_generic(obit, buffer, 14, "la")?;
-        let sdu = if obit { sdu::read_rest(buffer) } else { None };
+        // The O-bit only announces MCC/MNC/LA; the U-CALL RESTORE follows either way, also when
+        // the MS stays in the same LA (Annex E.2.1 note 2, table E.29).
+        let sdu = sdu::read_rest(buffer);
 
         Ok(URestore { mcc, mnc, la, sdu })
     }
@@ -44,11 +46,8 @@ impl URestore {
     /// Serialize this PDU into the given BitBuffer.
     pub fn to_bitbuf(&self, buffer: &mut BitBuffer) -> Result<(), PduParseErr> {
         buffer.write_bits(MlePduTypeUl::URestore.into_raw(), 3);
-        let obit = self.mcc.is_some() || self.mnc.is_some() || self.la.is_some() || self.sdu.is_some();
+        let obit = self.mcc.is_some() || self.mnc.is_some() || self.la.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit {
-            return Ok(());
-        }
         typed::write_type2_generic(obit, buffer, self.mcc, 10);
         typed::write_type2_generic(obit, buffer, self.mnc, 14);
         typed::write_type2_generic(obit, buffer, self.la, 14);

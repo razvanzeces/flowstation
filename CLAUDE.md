@@ -9,8 +9,9 @@ dashboard, network entities), `bins/bluestation-bs` (the service binary).
 - **Branch `bost`** is where all work is committed and pushed. Since v0.5.3 upstream made `main`
   the stable OTA branch that installs update from; `bost` stays the working branch. `beta` is not
   used for this project.
-- Current release: **v0.5.5** (`BOST_VERSION` in `crates/tetra-core/src/lib.rs`, heading in
-  `CHANGELOG.md`). A release bumps both; the changelog is in Spanish, `## vX.Y.Z — title` headings.
+- Current release: **v0.5.6** (`BOST_VERSION` in `crates/tetra-core/src/lib.rs`, heading in
+  `CHANGELOG.md`). A release bumps both; `## vX.Y.Z — title` headings.
+- Two changelogs with the same entries: `CHANGELOG.md` in Spanish (the dashboard OTA reads it from GitHub, keep its format) and `CHANGELOG_en.md` in English. Every change goes into both in the same commit.
 - Project status and next steps: [`Docs/multi-cell-status.md`](Docs/multi-cell-status.md).
   Design and per-phase "as built" notes: [`Docs/multi-cell-plan.md`](Docs/multi-cell-plan.md).
 
@@ -27,6 +28,7 @@ cargo check -p bluestation-bs --features asterisk   # Asterisk code only compile
 - **Do not run `cargo fmt --all`**: the repo is not rustfmt-clean and it rewrites ~45 unrelated
   files. Format only what you touch, by hand, matching the surrounding style.
 - `Cargo.lock` is committed and in sync; a build should not modify it.
+- New Brew extension: add it to `HANDOVER_EXTENSIONS` in `crates/tetra-entities/src/net_dashboard/roaming.rs` and give it a category in `roamRenderBrew` (`html.rs`, Infrastructure page, formerly Roaming / Cells, "Server features"), with the label in `LANGS.en` and `LANGS.es`.
 - Dashboard JS lives inside `crates/tetra-entities/src/net_dashboard/html.rs` (a `r#"…"#` raw
   string — never write `"#` inside it). Syntax-check by extracting the `<script>` blocks and running
   `node --check`. UI strings go in `LANGS.en` and `LANGS.es` (other languages fall back to EN).

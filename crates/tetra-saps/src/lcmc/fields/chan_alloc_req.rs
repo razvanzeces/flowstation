@@ -14,4 +14,7 @@ pub struct CmceChanAllocReq {
     /// QuitAndGo: remove existing allocation.
     pub alloc_type: ChanAllocType,
     pub ul_dl_assigned: UlDlAssignment,
+    /// The channel is on another cell (announced type 1 cell reselection, TS 100 392-2 clause
+    /// 21.5.2 "cell change flag"): `carrier` and `timeslots` are the new cell's.
+    pub cell_change: bool,
 }

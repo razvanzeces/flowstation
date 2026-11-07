@@ -15,11 +15,13 @@ struct Entry {
     rssi_dbfs: Option<f32>,
     last_seen: Instant,
     groups: HashSet<u32>,
+    /// The cell the radio is on (0 = primary; only multi-cell stations report it).
+    cell: u8,
 }
 
 impl Entry {
     fn new() -> Self {
-        Self { rssi_dbfs: None, last_seen: Instant::now(), groups: HashSet::new() }
+        Self { rssi_dbfs: None, last_seen: Instant::now(), groups: HashSet::new(), cell: 0 }
     }
 }
 
@@ -49,6 +51,22 @@ pub fn on_register(issi: u32) {
 /// A radio deregistered or timed out — drop it.
 pub fn on_deregister(issi: u32) {
     dir().write().unwrap_or_else(|e| e.into_inner()).remove(&issi);
+}
+
+/// Multi-cell: the cell a radio just registered on.
+pub fn on_cell(issi: u32, cell: u8) {
+    if let Some(e) = dir().write().unwrap_or_else(|e| e.into_inner()).get_mut(&issi) {
+        e.cell = cell;
+    }
+}
+
+/// A radio left `cell` without deregistering. Still on that cell here means it went to another
+/// station, so it is dropped; a move to a sibling cell already set the new cell and keeps it.
+pub fn on_moved_away(issi: u32, cell: u8) {
+    let mut d = dir().write().unwrap_or_else(|e| e.into_inner());
+    if d.get(&issi).is_some_and(|e| e.cell == cell) {
+        d.remove(&issi);
+    }
 }
 
 /// Signal update for an attached radio (also counts as activity). RSSI alone cannot register it.
@@ -224,5 +242,24 @@ mod tests {
         }
         let rows = lines(16);
         assert_eq!(rows.len(), 16, "capped to max");
+    }
+
+    #[test]
+    fn a_radio_that_moved_to_another_station_is_dropped() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear();
+        // Single-cell station: leaving cell 0 means another station.
+        on_register(5001);
+        on_moved_away(5001, 0);
+        assert_eq!(registered_count(), 0);
+        // Multi-cell: cell 1 -> sibling cell 2 keeps it, cell 2 -> another station drops it.
+        on_register(5002);
+        on_cell(5002, 1);
+        on_register(5002);
+        on_cell(5002, 2);
+        on_moved_away(5002, 1);
+        assert_eq!(registered_count(), 1);
+        on_moved_away(5002, 2);
+        assert_eq!(registered_count(), 0);
     }
 }

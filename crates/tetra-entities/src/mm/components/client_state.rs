@@ -613,9 +613,14 @@ impl MmClientMgr {
     }
 
     /// Remove a client without a deregistration telemetry event: the MS moved to a sibling cell
-    /// and is still registered there (multi-cell), so it must not vanish from the dashboard.
+    /// (multi-cell) or another station and is still registered there, so it must not vanish from
+    /// the dashboard. `MsMovedAway` tells the attached-radio count it left this cell.
     pub fn remove_client_quiet(&mut self, ssi: u32) -> Option<MmClientProperties> {
-        self.clients.remove(&ssi)
+        let client = self.clients.remove(&ssi)?;
+        if let Some(sink) = &self.telemetry_sink {
+            sink.send(TelemetryEvent::MsMovedAway { issi: ssi, cell: 0 });
+        }
+        Some(client)
     }
 
     /// Detaches all groups from a client
@@ -672,6 +677,23 @@ impl MmClientMgr {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// A radio dropped because it moved to another cell or station is reported as moved away,
+    /// not deregistered: it stays registered on the network.
+    #[test]
+    fn quiet_removal_reports_moved_away_not_deregistration() {
+        let (sink, source) = crate::net_telemetry::telemetry_channel();
+        let mut mgr = MmClientMgr::new(Some(sink));
+        mgr.try_register_client(100, true).unwrap();
+        while source.try_recv().is_some() {}
+
+        assert!(mgr.remove_client_quiet(100).is_some());
+        assert!(matches!(source.try_recv(), Some(TelemetryEvent::MsMovedAway { issi: 100, cell: 0 })));
+        assert!(source.try_recv().is_none());
+        // Nothing to report for a radio that is not here.
+        assert!(mgr.remove_client_quiet(100).is_none());
+        assert!(source.try_recv().is_none());
+    }
 
     /// The T351 presence guard: a radio heard transmitting recently is reported "on air" so it is
     /// never torn down at expiry (FH-BUG-044 — present stations vanishing from the dashboard).

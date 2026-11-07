@@ -27,6 +27,19 @@
 //! id = 1
 //! network = "club"
 //! ```
+//!
+//! A network can also be reached *through the Brew server of another network* (`via`, the
+//! "Infrastructure" way of Multi Network): its cells broadcast its own MCC/MNC, connect with the
+//! other network's `[brew]` login and tell the server, which must offer the `mni` extension, that
+//! their radios and groups belong to this network. The server then registers them there (for
+//! example on its link to TetraPack). The station holds no credentials of that network.
+//!
+//! ```toml
+//! [networks.tp]
+//! mcc = 901
+//! mnc = 1638
+//! via = "home"                     # the network whose Brew server reaches 901/1638
+//! ```
 
 use std::collections::HashMap;
 
@@ -47,8 +60,11 @@ pub struct CfgNetwork {
     pub name: String,
     /// MCC/MNC the network's cells broadcast.
     pub net: CfgNetInfo,
-    /// The network's core, or `None` for a network switched inside the station only.
+    /// The network's core, or `None` for a network switched inside the station only. For a
+    /// network reached `via` another one, that network's Brew link.
     pub brew: Option<CfgBrew>,
+    /// The network whose Brew server this one is reached through (Multi Network, `mni`).
+    pub via: Option<String>,
 }
 
 impl CfgNetwork {
@@ -63,6 +79,7 @@ struct NetworkDto {
     mcc: Option<u16>,
     mnc: Option<u16>,
     brew: Option<CfgBrewDto>,
+    via: Option<String>,
     #[serde(flatten)]
     extra: HashMap<String, Value>,
 }
@@ -117,7 +134,24 @@ pub fn parse_networks(raw: Option<Value>, default_net: &CfgNetInfo) -> Result<Ve
             name: name.clone(),
             net: CfgNetInfo { mcc, mnc },
             brew,
+            via: dto.via,
         });
+    }
+
+    // A network reached through another one's Brew server uses that network's login.
+    for i in 0..networks.len() {
+        let Some(via) = networks[i].via.clone() else { continue };
+        let name = networks[i].name.clone();
+        if networks[i].brew.is_some() {
+            return Err(format!("networks.{name}: give either brew or via, not both"));
+        }
+        let Some(target) = networks.iter().find(|n| n.name == via) else {
+            return Err(format!("networks.{name}.via: no network {via:?}"));
+        };
+        if target.via.is_some() || target.brew.is_none() {
+            return Err(format!("networks.{name}.via: network {via:?} needs a brew link of its own"));
+        }
+        networks[i].brew = target.brew.clone();
     }
 
     // Two networks with one identity would be one network to the radios.
@@ -276,5 +310,49 @@ main_carrier = 1529
         assert!(err_p("a", "[networks.a]\n[networks.a.brew]\nhost = \"h\"\nusername = 1\npassword = \"x\"\ntls = false\nfoo = 1\n").contains("Unrecognized fields in networks.a.brew"));
         assert!(err_p("a", "[networks]\n").contains("names no network"));
         assert!(err_p("a", "[networks.\"bad name\"]\nmcc = 901\n").contains("a network name is letters"));
+    }
+
+    const VIA: &str = r#"
+[networks.home]
+[networks.home.brew]
+host = "brew.example"
+username = 1000001
+password = "secret"
+tls = false
+
+[networks.tp]
+mcc = 901
+mnc = 1638
+via = "home"
+
+[[cells]]
+id = 1
+network = "tp"
+[cells.cell_info]
+main_carrier = 1525
+"#;
+
+    #[test]
+    fn a_network_via_another_uses_its_brew_link() {
+        let cfg = parse_primary("home", VIA).unwrap();
+        cfg.validate().unwrap();
+        let tp = cfg.network("tp").unwrap();
+        assert_eq!(tp.via.as_deref(), Some("home"));
+        assert_eq!(tp.brew.as_ref().map(|b| b.host.as_str()), Some("brew.example"));
+        assert!(!cfg.network_is_via() && !cfg.mni_enabled());
+        let cell = cfg.for_extra_cell(CellId(1)).unwrap();
+        assert!(cell.network_is_via() && cell.mni_enabled());
+        assert_eq!((cell.net.mcc, cell.net.mnc), (901, 1638));
+        assert!(!cell.is_site_linked(), "one cell: its own Brew link, no switch");
+        assert_eq!(cfg.cells_of_station_network().len(), 1, "the primary announces only its network's cells");
+    }
+
+    #[test]
+    fn via_must_name_a_network_with_its_own_brew_link() {
+        let both = VIA.replace("via = \"home\"", "via = \"home\"\n[networks.tp.brew]\nhost = \"x\"\nusername = 2\npassword = \"y\"\ntls = false");
+        assert!(parse_primary("home", &both).unwrap_err().contains("not both"));
+        assert!(parse_primary("home", &VIA.replace("via = \"home\"", "via = \"nowhere\"")).unwrap_err().contains("no network"));
+        let no_core = VIA.replace("[networks.home.brew]\nhost = \"brew.example\"\nusername = 1000001\npassword = \"secret\"\ntls = false\n", "");
+        assert!(parse_primary("home", &no_core).unwrap_err().contains("brew link of its own"));
     }
 }

@@ -1354,6 +1354,13 @@ input[type="radio"]{accent-color:var(--accent);}
 }
 .card-title{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text2);}
 .card-actions{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+.mn-switch{position:relative;display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2);}
+.mn-switch input{position:absolute;opacity:0;width:0;height:0;}
+.mn-switch .mn-slider{position:relative;width:36px;height:20px;border-radius:10px;background:var(--border);transition:background .15s;flex:none;}
+.mn-switch .mn-slider::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s;}
+.mn-switch input:checked + .mn-slider{background:var(--accent);}
+.mn-switch input:checked + .mn-slider::after{transform:translateX(16px);}
+.mn-switch input:focus-visible + .mn-slider{outline:2px solid var(--accent2);outline-offset:2px;}
 .card-body{padding:0;}
 
 /* ── Table ── */
@@ -1390,6 +1397,17 @@ td code{
 .badge-blue{background:rgba(77,166,255,0.1);color:var(--accent2);border-color:rgba(77,166,255,0.3);}
 .badge-yellow{background:rgba(255,178,36,0.1);color:var(--warn);border-color:rgba(255,178,36,0.3);}
 .badge-dim{background:rgba(100,130,160,0.08);color:var(--text2);border-color:var(--border);}
+.roam-feats{margin-top:6px;}
+.roam-feats > summary{cursor:pointer;list-style:none;color:var(--text2);font-size:12px;}
+.roam-feats > summary::-webkit-details-marker{display:none;}
+.roam-feats > summary::before{content:'▸';display:inline-block;margin-right:6px;transition:transform .15s;}
+.roam-feats[open] > summary::before{transform:rotate(90deg);}
+.roam-feat-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}
+.roam-feat-cat{margin-top:10px;font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);}
+.roam-feat{display:inline-flex;align-items:center;gap:6px;padding:3px 11px;border-radius:999px;border:1px solid var(--border);background:rgba(100,130,160,0.08);color:var(--text2);font-family:var(--mono);font-size:11px;white-space:nowrap;}
+.roam-feat i{width:7px;height:7px;border-radius:50%;flex:none;}
+.roam-feat i.on{background:var(--accent);}
+.roam-feat i.off{background:var(--danger);}
 .badge-red{background:rgba(255,77,109,0.1);color:var(--danger);border-color:rgba(255,77,109,0.3);}
 /* Emergency call (ETSI call priority 15): solid danger fill + pulsing halo for high visibility. */
 .badge-emergency{background:var(--danger);color:#fff;border-color:var(--danger);font-weight:700;letter-spacing:0.06em;animation:badge-emergency-pulse 1s ease-in-out infinite;}
@@ -4101,6 +4119,10 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
       <span class="nav-icon" data-icon="security"></span>
       <span class="nav-label" data-i18n="security">SECURITY</span>
     </div>
+    <div class="nav-item" onclick="showPage('roaming',this)" id="nav-roaming">
+      <span class="nav-icon" data-icon="infrastructure"></span>
+      <span class="nav-label" data-i18n="roaming">INFRASTRUCTURE</span>
+    </div>
     <div class="nav-item" onclick="showPage('config',this)" id="nav-config">
       <span class="nav-icon" data-icon="config"></span>
       <span class="nav-label" data-i18n="config">CONFIG</span>
@@ -4547,27 +4569,6 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
               <div class="bts-tile"><div class="bts-tile-label" data-i18n="bts_shift">Duplex Shift</div><div class="bts-tile-value" id="bts-sec-shift">—</div></div>
             </div>
           </div>
-        </div>
-      </div>
-
-      <!-- Cells — one per SDR (multi-cell) -->
-      <div class="card" id="cells-card">
-        <div class="card-head">
-          <div class="card-title" data-i18n="cells_title">Cells</div>
-          <div class="card-actions"><span id="cells-link" class="bts-chip">—</span></div>
-        </div>
-        <div class="card-body">
-          <div class="cells-list" id="cells-list"></div>
-          <div class="help-text" data-i18n="cells_help">Each extra SDR runs one more cell. Pick a free carrier; its frequencies follow from the primary cell's band plan. The station restarts to apply changes.</div>
-          <div class="cells-add">
-            <input type="text" class="form-input" id="cells-device" list="cells-device-options" placeholder="driver=plutosdr,uri=ip:192.168.3.1">
-            <datalist id="cells-device-options"></datalist>
-            <input type="number" class="form-input narrow" id="cells-carrier" min="0" max="4095" placeholder="Carrier" data-i18n-placeholder="bts_sec_carrier">
-            <input type="number" class="form-input narrow" id="cells-cc" min="0" max="63" placeholder="Colour code" data-i18n-placeholder="cfg_colour">
-            <button class="btn btn-sm" onclick="cellsScan()" data-i18n="setup_scan">Scan</button>
-            <button class="btn btn-sm" onclick="cellsAdd()" data-i18n="cells_add">Add cell</button>
-          </div>
-          <div class="help-text" id="cells-msg"></div>
         </div>
       </div>
 
@@ -5740,6 +5741,11 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
                         </select>
                       </label>
                       <label class="field" style="cursor:pointer"><input type="checkbox" id="vc-reverse"> <span><span data-i18n="ui_reverse_operation">Reverse operation</span></span></label>
+                      <label class="field"><span data-i18n="cfg_rxlev_min">Min. access level (dBm)</span>
+                        <select id="vc-rxlev-min" class="form-input">
+                          <option value="" data-i18n="cfg_rxlev_default">Default (−110)</option><option value="-125">-125</option><option value="-120">-120</option><option value="-115">-115</option><option value="-110">-110</option><option value="-105">-105</option><option value="-100">-100</option><option value="-95">-95</option><option value="-90">-90</option><option value="-85">-85</option><option value="-80">-80</option><option value="-75">-75</option><option value="-70">-70</option><option value="-65">-65</option><option value="-60">-60</option><option value="-55">-55</option><option value="-50">-50</option>
+                        </select>
+                      </label>
                     </div>
                   </details>
                   <details style="margin-top:14px" id="vc-hw-rf-details">
@@ -5809,6 +5815,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
                       <label class="field" style="cursor:pointer"><input type="checkbox" id="vc-syswide"> <span><span data-i18n="ui_system_wide_services">System-wide services</span></span></label>
                       <label class="field" style="cursor:pointer"><input type="checkbox" id="vc-late-entry" checked> <span data-i18n="cfg_late_entry">Late entry</span></label>
                       <label class="field" style="cursor:pointer"><input type="checkbox" id="vc-voice"> <span><span data-i18n="ui_voice_service">Voice service</span></span></label>
+                      <label class="field" style="cursor:pointer"><input type="checkbox" id="vc-migration"> <span data-i18n="cfg_migration">Migration supported</span></label>
                       <label class="field" style="cursor:pointer"><input type="checkbox" id="vc-recovery"> <span data-i18n="cfg_recovery">Restart recovery (proactive)</span></label>
                       <label class="field"><span><span data-i18n="ui_local_ssi_ranges">Local SSI ranges</span></span><input type="text" id="vc-local-ssi" class="form-input" placeholder="0-90, 100-120"></label>
                     </div>
@@ -6051,6 +6058,193 @@ tbody tr:hover td{background:color-mix(in srgb,var(--bg3) 70%, transparent);}
          @BotFather token, detects their chat ID with one click (getUpdates), picks
          which categories to receive, and saves. Applies instantly and persists to
          config.toml. -->
+    <div class="page" id="page-roaming">
+      <div class="section-label" data-i18n="roaming">Roaming</div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title" data-i18n="roam_title">Roaming, neighbours and cells</div>
+          <div class="card-actions">
+            <button class="btn" onclick="loadRoaming()"><span class="btn-icon" data-icon="update"></span><span data-i18n="roam_reload">Reload</span></button>
+            <button class="btn btn-primary" onclick="roamSave()"><span class="btn-icon" data-icon="save"></span><span data-i18n="save">Save</span></button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="help-text" style="margin-bottom:8px" data-i18n="roam_help">Everything that decides when and how radios move between cells: the cells of this station and their location areas, the neighbour cells each cell broadcasts, the reselection values and the presence check. Saving checks the whole config first and restarts the station.</div>
+          <div id="roam-brew" style="font-size:13px;margin-bottom:6px"></div>
+          <div class="config-msg" id="roam-msg"></div>
+        </div>
+      </div>
+
+      <!-- Cells — one per SDR (multi-cell) -->
+      <div class="card" id="cells-card">
+        <div class="card-head">
+          <div class="card-title" data-i18n="cells_title">Cells</div>
+          <div class="card-actions"><span id="cells-link" class="bts-chip">—</span></div>
+        </div>
+        <div class="card-body">
+          <div class="cells-list" id="cells-list"></div>
+          <div class="help-text" data-i18n="cells_help">Each extra SDR runs one more cell. Pick a free carrier; its frequencies follow from the primary cell's band plan. The station restarts to apply changes.</div>
+          <div class="cells-add">
+            <input type="text" class="form-input" id="cells-device" list="cells-device-options" placeholder="driver=plutosdr,uri=ip:192.168.3.1">
+            <datalist id="cells-device-options"></datalist>
+            <input type="number" class="form-input narrow" id="cells-carrier" min="0" max="4095" placeholder="Carrier" data-i18n-placeholder="bts_sec_carrier">
+            <input type="number" class="form-input narrow" id="cells-cc" min="0" max="63" placeholder="Colour code" data-i18n-placeholder="cfg_colour">
+            <input type="number" class="form-input narrow" id="cells-la" min="0" max="16383" placeholder="Location area" data-i18n-placeholder="cfg_la" title="Location area" data-i18n-title="cells_la_help">
+            <button class="btn btn-sm" onclick="cellsScan()" data-i18n="setup_scan">Scan</button>
+            <button class="btn btn-sm" onclick="cellsAdd()" data-i18n="cells_add">Add cell</button>
+          </div>
+          <div class="help-text" id="cells-msg"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title" data-i18n="roam_cells_title">Location areas</div></div>
+        <div class="card-body">
+          <div class="help-text" style="margin-bottom:8px" data-i18n="roam_cells_help">Same location area on all cells: radios change cell without registering, so group calls and individual call setups run on every cell of the area. Own location area per cell: radios register on every change and station and server always know the exact cell (TS 100 392-2 clause 18.3.4.7.1a). Empty = the primary's location area. New cells are added in the Cells card above.</div>
+          <div class="table-wrap">
+            <table class="table-stack">
+              <thead><tr>
+                <th data-i18n="roam_th_cell">Cell</th>
+                <th data-i18n="roam_th_global">Global cell id</th>
+                <th data-i18n="cells_carrier">Carrier</th>
+                <th>CC</th>
+                <th>LA</th>
+                <th data-i18n="roam_th_network">Network</th>
+              </tr></thead>
+              <tbody id="roam-cells-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title" data-i18n="roam_nets_title">Networks (Multi Network)</div><label class="mn-switch" data-i18n-title="roam_mn_switch_help" title="Multi Network on / off"><input type="checkbox" id="rm-mn-enabled" role="switch" onchange="roamMnToggle(this)"><span class="mn-slider"></span><span id="rm-mn-state" data-i18n="roam_mn_off">Off</span></label></div>
+        <div class="card-body">
+          <div class="help-text" style="margin-bottom:8px" data-i18n="roam_nets_help">A cell broadcasts exactly one network (MCC / MNC, TS 100 392-2 table 18.17); pick it per cell in the Network column above. A radio that selects a network on the terminal uses the cells of that network. Reached: own server = the network's own [brew] link (credentials on this station, edit in the config); via = through another network's Brew server, which must offer the mni extension and reach that network (Infrastructure, no credentials here); local = switched inside this station. The first network added turns [net_info] and [brew] into the network "home".</div>
+          <div class="table-wrap">
+            <table class="table-stack">
+              <thead><tr>
+                <th data-i18n="roam_net_name">Name</th>
+                <th>MCC</th>
+                <th>MNC</th>
+                <th data-i18n="roam_net_reached">Reached</th>
+                <th data-i18n="roam_net_server">Brew server</th>
+                <th></th>
+              </tr></thead>
+              <tbody id="roam-nets-tbody"></tbody>
+            </table>
+          </div>
+          <div style="margin-top:12px"><b data-i18n="roam_srvnets_title">Networks of the Brew server</b></div>
+          <div class="help-text" id="roam-srvnets-help" style="margin:4px 0 6px"></div>
+          <div class="table-wrap"><table class="table-stack"><tbody id="roam-srvnets-tbody"></tbody></table></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+            <input type="text" class="form-input" style="width:120px" id="rm-net-name" data-i18n-placeholder="roam_net_name" placeholder="Name">
+            <input type="number" class="form-input" style="width:80px" min="0" max="1023" id="rm-net-mcc" placeholder="MCC">
+            <input type="number" class="form-input" style="width:100px" min="0" max="16383" id="rm-net-mnc" placeholder="MNC">
+            <select class="form-input" id="rm-net-via" style="min-width:140px"></select>
+            <button class="btn" onclick="roamNetAdd()"><span class="btn-icon" data-icon="add"></span><span data-i18n="roam_net_add">Add network</span></button>
+          </div>
+        </div>
+      </div>
+
+      <details class="cfg-adv-details" id="roam-resel-details">
+        <summary>
+          <span data-i18n="roam_resel_title">Cell reselection (advanced, all cells)</span>
+          <span style="font-size:11px;font-weight:500;color:var(--text3);text-transform:none;letter-spacing:0" data-i18n="roam_resel_toggle">Show / hide</span>
+        </summary>
+        <div class="cfg-adv-body">
+          <div class="group-list">
+            <label class="field"><span data-i18n="roam_fast_th">Fast threshold (dB)</span><select id="rm-fast-th" class="form-input"></select></label>
+            <label class="field"><span data-i18n="roam_slow_th">Slow threshold above fast (dB)</span><select id="rm-slow-th" class="form-input"></select></label>
+            <label class="field"><span data-i18n="roam_fast_hy">Fast hysteresis (dB)</span><select id="rm-fast-hy" class="form-input"></select></label>
+            <label class="field"><span data-i18n="roam_slow_hy">Slow hysteresis (dB)</span><select id="rm-slow-hy" class="form-input"></select></label>
+            <label class="field"><span data-i18n="cfg_rxlev_min">Min. access level (dBm)</span><select id="rm-rxlev" class="form-input"></select></label>
+            <label class="field" style="cursor:pointer"><input type="checkbox" id="rm-migration"> <span><span data-i18n="cfg_migration">Migration supported</span></span></label>
+            <label class="field"><span data-i18n="roam_presence">Presence check after silence (s)</span><input type="number" id="rm-presence" class="form-input" min="0" max="86400"></label>
+          </div>
+          <div class="help-text" id="roam-dbm-hint" style="margin-top:8px"></div>
+        </div>
+      </details>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title" data-i18n="roam_nb_title">Neighbour cells</div>
+          <div class="card-actions">
+            <select id="rm-ncell" class="form-input" onchange="roamRenderNeighbours()" style="min-width:120px"></select>
+            <button class="btn" onclick="roamNew()"><span class="btn-icon" data-icon="add"></span><span data-i18n="roam_nb_add">Add neighbour</span></button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="help-text" style="margin-bottom:8px" data-i18n="roam_nb_help">What the selected cell broadcasts in D-NWRK-BROADCAST (at most 7, clause 18.5.17). The station's other cells are added automatically. An extra cell without its own list broadcasts only the station's cells.</div>
+          <label class="sw-row" id="rm-own-row">
+            <span class="sw-text" data-i18n="roam_own_list">Own neighbour list for this cell</span>
+            <span class="sw"><input type="checkbox" id="rm-own-list" onchange="roamToggleOwn()"><i></i></span>
+          </label>
+          <div class="table-wrap">
+            <table class="table-stack">
+              <thead><tr>
+                <th>ID</th>
+                <th data-i18n="cells_carrier">Carrier</th>
+                <th>LA</th>
+                <th data-i18n="roam_th_server">On the server</th>
+                <th data-i18n="roam_th_types">Reselection</th>
+                <th data-i18n="roam_th_services">Services</th>
+                <th data-i18n="th_actions">Actions</th>
+              </tr></thead>
+              <tbody id="roam-nb-tbody"></tbody>
+            </table>
+          </div>
+          <div id="roam-nb-count" class="help-text" style="margin-top:6px"></div>
+
+          <div id="roam-editor" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+            <div class="card-title" style="margin-bottom:8px" id="roam-editor-title"></div>
+            <label class="field" id="rm-n-pick-row" style="margin-bottom:8px"><span data-i18n="roam_pick">Fill in from the server's cell list</span><select id="rm-n-pick" class="form-input" onchange="roamPick(this.value)"></select></label>
+            <div class="group-list">
+              <label class="field"><span data-i18n="roam_n_id">Cell identifier (0-31)</span><input type="number" id="rm-n-id" class="form-input" min="0" max="31"></label>
+              <label class="field"><span data-i18n="roam_n_carrier">Main carrier (0-4095)</span><input type="number" id="rm-n-carrier" class="form-input" min="0" max="4095"></label>
+              <label class="field"><span data-i18n="roam_n_ext">Carrier extension (optional)</span><input type="number" id="rm-n-ext" class="form-input" min="0" max="1023"></label>
+              <label class="field"><span data-i18n="roam_n_types">Reselection types</span><select id="rm-n-types" class="form-input"></select></label>
+              <label class="field" style="cursor:pointer"><input type="checkbox" id="rm-n-sync"> <span><span data-i18n="roam_n_sync">Synchronised with this cell</span></span></label>
+              <label class="field"><span data-i18n="roam_n_load">Cell load</span><select id="rm-n-load" class="form-input"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+              <label class="field"><span data-i18n="roam_n_la">Location area (optional)</span><input type="number" id="rm-n-la" class="form-input" min="0" max="16383"></label>
+              <label class="field"><span>MCC / MNC</span><span style="display:flex;gap:6px"><input type="number" id="rm-n-mcc" class="form-input" min="0" max="1023" style="width:90px"><input type="number" id="rm-n-mnc" class="form-input" min="0" max="16383" style="width:90px"></span></label>
+              <label class="field"><span data-i18n="roam_n_rxlev">Min. RX access level (optional)</span><select id="rm-n-rxlev" class="form-input"></select></label>
+              <label class="field"><span data-i18n="roam_n_txpwr">Max. MS TX power (optional)</span><select id="rm-n-txpwr" class="form-input"></select></label>
+            </div>
+            <div class="help-text" style="margin:10px 0 6px" data-i18n="roam_n_services_help">BS service details of the neighbour (table 18.26). Missing flags are broadcast as "not supported", so a new entry starts with this cell's own services.</div>
+            <div id="rm-n-services" style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px"></div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="btn btn-primary" onclick="roamApplyEntry()" data-i18n="roam_apply">Apply</button>
+              <button class="btn" onclick="roamCloseEditor()" data-i18n="cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title" data-i18n="roam_dir_title">Cells on the Brew server</div></div>
+        <div class="card-body">
+          <div class="help-text" style="margin-bottom:8px" data-i18n="roam_dir_help">The cells of the other stations on the Brew server, with what they broadcast (brew-server extension cell-directory). A neighbour entry is matched by network, downlink frequency and location area. A radio uses its serving cell's list to choose which cells to scan (clause 18.3.4.1), so both cells should list each other.</div>
+          <div class="help-text" id="roam-dir-note" style="margin-bottom:6px"></div>
+          <div class="table-wrap">
+            <table class="table-stack">
+              <thead><tr>
+                <th data-i18n="roam_th_global">Global cell id</th>
+                <th data-i18n="roam_th_state">State</th>
+                <th data-i18n="cells_carrier">Carrier</th>
+                <th>LA</th>
+                <th data-i18n="roam_th_levels">Access / MS power</th>
+                <th data-i18n="roam_th_listed_here">Neighbour of</th>
+                <th data-i18n="roam_th_lists_us">Lists this station</th>
+                <th data-i18n="th_actions">Actions</th>
+              </tr></thead>
+              <tbody id="roam-dir-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="page" id="page-telegram">
       <div class="section-label" data-i18n="integrations">Integrations</div>
       <div class="card">
@@ -7129,6 +7323,9 @@ const ICONS = {
   backhaul:'<path d="M5 12a7 7 0 0 1 7-7M5 12a4 4 0 0 1 4-4"/><circle cx="6" cy="11" r="1.4"/><path d="M16 8l4 4M15 13l-3 3 5 0Z"/>',
   congestion:'<path d="M6 19v-5M12 19V8M18 19v-9"/>',
   // actions
+  /* Radio tower linked to the station's cells and networks (Infrastructure page). */
+  infrastructure:'<path d="M9.4 15 12 6.6 14.6 15"/><path d="M10.6 11.8h2.8"/><circle cx="12" cy="4.6" r="1"/><path d="M8.8 2.6a3.4 3.4 0 0 0 0 4M15.2 2.6a3.4 3.4 0 0 1 0 4"/><path d="M5 17.5h14M12 15v4M5 17.5V19M19 17.5V19"/><rect x="3" y="19" width="4" height="3" rx=".8"/><rect x="10" y="19" width="4" height="3" rx=".8"/><rect x="17" y="19" width="4" height="3" rx=".8"/>',
+  roaming:'<path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/>',
   save:'<path d="M5 12.5 10 17.5 19 7"/>',
   restart:'<path d="M19 12a7 7 0 1 1-2.1-5"/><path d="M17 4v3.5h-3.5"/>',
   shutdown:'<path d="M12 4v7"/><path d="M7.5 7.2a7 7 0 1 0 9 0"/>',
@@ -7579,8 +7776,33 @@ const LANGS={
     terminals:'Radios',registered:'registered',
     active_calls:'Active Calls',circuits:'circuits in use',
     registered_terminals:'Registered Radios',
+    roaming:'Infrastructure',roam_title:'Cells, networks, neighbours and roaming',roam_reload:'Reload',roam_help:'Everything that decides when and how radios move between cells: the cells of this station and their location areas, the neighbour cells each cell broadcasts, the reselection values and the presence check. Saving checks the whole config first and restarts the station.',
+    roam_cells_title:'Location areas',roam_cells_help:'Same location area on all cells: radios change cell without registering, so group calls and individual call setups run on every cell of the area. Own location area per cell: radios register on every change and station and server always know the exact cell (TS 100 392-2 clause 18.3.4.7.1a). Empty = the primary\'s location area. New cells are added in the Cells card above.',
+    roam_th_cell:'Cell',roam_th_network:'Network',roam_nets_title:'Networks (Multi Network)',roam_mn_on:'On',roam_net_server:'Brew server',roam_net_chk_ok:'routable',roam_net_chk_down:'link down',roam_net_chk_unknown:'Routing with this MCC/MNC not possible: the Brew server does not reach it',roam_net_chk_own:'The Brew server\'s own network is {mni}',roam_srvnets_title:'Networks of the Brew server',roam_srvnets_help:'The Brew server is network {mni} and reaches these networks (extension mni). "Add network" takes its MCC/MNC so every station uses the same values.',roam_srvnets_none:'No list from the Brew server yet: it needs Multi Network on and a brew-server that offers mni.',roam_srvnets_empty:'The Brew server reaches no other network.',roam_srvnets_up:'up',roam_srvnets_down:'down',roam_srvnets_have:'configured as {net}',roam_mn_off:'Off',roam_mn_switch_help:'Multi Network on / off ([multi_network] enabled): radios of other networks may register here by migration (TS 100 392-2 16.4.1.1 b), and every cell announces migration. Saves and restarts the station.',roam_nets_help:'A cell broadcasts exactly one network (MCC / MNC, TS 100 392-2 table 18.17); pick it per cell in the Network column above. A radio that selects a network on the terminal uses the cells of that network. Reached: own server = the network\'s own [brew] link (credentials on this station, edit in the config); via = through another network\'s Brew server, which must offer the mni extension and reach that network (Infrastructure, no credentials here); local = switched inside this station. The first network added turns [net_info] and [brew] into the network "home".',roam_net_name:'Name',roam_net_reached:'Reached',roam_net_add:'Add network',roam_net_core:'own server',roam_net_via:'via {net}',roam_net_local:'local (no server)',roam_net_pending:'(not saved)',roam_net_confirm_core:'Remove network {net}? Its own Brew login in the config is removed too.',roam_net_need:'Network: name (letters, digits, _ or -), MCC and MNC are required.',roam_th_global:'Global cell id',roam_resel_title:'Cell reselection (advanced, all cells)',roam_resel_toggle:'Show / hide',roam_fast_th:'Fast threshold (dB)',roam_slow_th:'Slow threshold above fast (dB)',roam_fast_hy:'Fast hysteresis (dB)',roam_slow_hy:'Slow hysteresis (dB)',roam_presence:'Presence check after silence (s)',
+    roam_nb_title:'Neighbour cells',roam_nb_add:'Add neighbour',roam_nb_help:'What the selected cell broadcasts in D-NWRK-BROADCAST (at most 7, clause 18.5.17). The station\'s other cells are added automatically. An extra cell without its own list broadcasts only the station\'s cells.',roam_own_list:'Own neighbour list for this cell',
+    roam_th_types:'Reselection',roam_th_services:'Services',roam_n_id:'Cell identifier (0-31)',roam_n_carrier:'Main carrier (0-4095)',roam_n_ext:'Carrier extension (optional)',roam_n_types:'Reselection types',roam_n_sync:'Synchronised with this cell',roam_n_load:'Cell load',roam_n_la:'Location area (optional)',roam_n_rxlev:'Min. RX access level (optional)',roam_n_txpwr:'Max. MS TX power (optional)',
+    roam_n_services_help:'BS service details of the neighbour (table 18.26). Missing flags are broadcast as "not supported", so a new entry starts with this cell\'s own services.',roam_apply:'Apply',roam_edit:'Edit',roam_edit_title:'Neighbour {n}',roam_new_title:'New neighbour',roam_same_as_cell:'Same as this cell',
+    roam_types_0:'no forward registration',roam_types_1:'no forward registration, expedited recommended',roam_types_2:'forward registration',roam_types_3:'forward registration, expedited recommended',
+    roam_svc_registration:'registration',roam_svc_deregistration:'deregistration',roam_svc_system_wide_services:'system wide services',roam_svc_voice_service:'voice',roam_svc_circuit_mode_data_service:'circuit data',roam_svc_sndcp_service:'packet data',roam_svc_aie_service:'air encryption',roam_svc_advanced_link:'advanced link',roam_svc_priority_cell:'priority cell',roam_svc_no_minimum_mode:'no minimum mode',roam_svc_migration:'migration',
+    roam_services_none:'none (radios may not use it)',roam_th_server:'On the server',roam_pick:'Fill in from the server\'s cell list',roam_dir_title:'Cells on the Brew server',roam_dir_help:'The cells of the other stations on the Brew server, with what they broadcast (brew-server extension cell-directory). A neighbour entry is matched by network, downlink frequency and location area. A radio uses its serving cell\'s list to choose which cells to scan (clause 18.3.4.1), so both cells should list each other.',roam_th_state:'State',roam_th_levels:'Access / MS power',roam_th_listed_here:'Neighbour of',roam_th_lists_us:'Lists this station',roam_dir_add:'Add as neighbour',roam_dir_none:'none',roam_dir_empty:'No other cells on the server.',roam_dir_count:'{n} cells of other stations on the server.',roam_dir_off:'The Brew server does not send its cell list (needs a brew-server with the cell-directory extension).',roam_dir_wait:'The server offers its cell list, it has not arrived yet (it comes right after connecting).',roam_dir_unknown:'not known to the server',roam_online:'online',roam_offline:'offline',roam_not_mutual:'{id} does not list this cell: radios there are not told to scan for it',roam_diff_rxlev:'min. access level: listed {list} dBm, the cell broadcasts {cell} dBm',roam_diff_txpwr:'max. MS power: listed {list} dBm, the cell broadcasts {cell} dBm',roam_diff_services:'services differ: {list}',roam_auto_sibling:'Cell of this station (automatic)',roam_nb_none:'No neighbours.',roam_nb_count:'{n} of 7 neighbour entries',roam_need_id_carrier:'Cell identifier and carrier are required.',roam_need_la:'The primary cell needs a location area.',roam_unsaved:'Changed, not saved yet.',roam_confirm_save:'Save the roaming settings and restart the station?',
+    roam_brew_off:'Brew is not configured: roaming between stations is off, cells of this station still work.',roam_link_up:'connected',roam_link_down:'not connected',roam_ext:'Server features',roam_feat_roam:'Roaming',roam_feat_calls:'Calls',roam_feat_cells:'Cells',roam_feat_groups:'Groups',roam_feat_net:'Multi Network',roam_feat_other:'Other',
+    roam_dbm_hint:'At the radio (MS power term 0): no access below {fail} dBm, relinquishable below {fast} dBm, improvable below {slow} dBm (clause 18.3.4.5; Docs/cell-reselection.md).',
+    roam_help_fast_th:'FAST_RESELECT_THRESHOLD (clause 18.5.4): below it (C1 in dB above the access level) the serving cell is "relinquishable" and the radio moves to a neighbour better by the fast hysteresis, also during a call. 0-30 dB in 2 dB steps; default 10.',
+    roam_help_slow_th:'SLOW_RESELECT_THRESHOLD_ABOVE_FAST (clause 18.5.4): added to the fast threshold. Below the sum the serving cell is "improvable" and an idle radio moves to a neighbour better by the slow hysteresis. Default 20 (= 30 dB with fast 10). Large values make the radio look around almost always.',
+    roam_help_fast_hy:'FAST_RESELECT_HYSTERESIS (clause 18.5.4): how much better a neighbour must be when the serving cell is relinquishable. Default 6 dB. Small values with high thresholds make radios change back and forth.',
+    roam_help_slow_hy:'SLOW_RESELECT_HYSTERESIS (clause 18.5.4): how much better a neighbour must be when the serving cell is improvable. Default 10 dB.',
+    roam_help_presence:'Seconds of silence before the station sends a radio a D-LOCATION UPDATE COMMAND (clause 16.4.4) to check it is still there; unanswered, it shows as unavailable. With several cells in one location area the command is sent on all of them. 0 = off. Default 30.',
+    roam_help_n_id:'Cell identifier CA (5 bits, table 18.64): unique in this cell\'s list. Sibling cells take the first free ones.',
+    roam_help_n_carrier:'Main carrier number of the neighbour (12 bits). With another band plan also set the carrier extension.',
+    roam_help_n_ext:'Main carrier number extension (table 18.64): frequency band, offset, duplex spacing and reverse operation of the neighbour, needed only when they differ from this cell.',
+    roam_help_n_types:'Cell reselection types supported (table 18.22). Forward registration: the radio may register for the neighbour in U-PREPARE on this cell (useful with the station\'s own cells and with Brew handover). Expedited recommended: the radio changes faster, but then does not announce type 1/2 (clause 18.3.4.7.5).',
+    roam_help_n_sync:'Neighbour cell synchronised (table 18.64): only true when both cells share timing (e.g. GPS-disciplined). Separate SDRs are not.',
+    roam_help_n_load:'Cell load CA (table 18.64): 0 low to 3 high. Radios may prefer a less loaded cell.',
+    roam_help_n_la:'Location area of the neighbour. Leave empty when it is the same as this cell\'s; a different one makes radios register when they move there (clause 18.3.4.7.1a).',
+    roam_help_n_rxlev:'Minimum RX access level of the neighbour (clause 18.5.12). Empty: radios assume the same as this cell (table 18.64, note 2).',
+    roam_help_n_txpwr:'Maximum MS transmit power in the neighbour (table 18.57), used by the radio for C2. Empty: same as this cell.',
     cells_title:'Cells',cells_help:"Each extra SDR runs one more cell. Pick a free carrier; its frequencies follow from the primary cell's band plan. The station restarts to apply changes.",
-    cells_carrier:'Carrier',cells_cc:'Colour code',cells_add:'Add cell',cells_remove:'Remove',cells_cell:'Cell {n}',cells_radios:'{n} radio(s)',
+    cells_carrier:'Carrier',cells_cc:'Colour code',cells_la_help:'Location area of the new cell. Empty = same as the primary cell. With its own location area a radio registers on every change of cell (TS 100 392-2 clause 18.3.4.7.1a).',cells_add:'Add cell',cells_remove:'Remove',cells_cell:'Cell {n}',cells_radios:'{n} radio(s)',
     cells_net_local:'local',cells_net_up:'core up',cells_net_down:'core down',
     cells_single:'Single cell',rf_cells_note:'Pick a cell to show its SDR on this page.',cells_linked:'Cells linked',cells_independent:'Independent cells',
     cells_need_fields:'Device and carrier are required.',cells_confirm_add:'Add this cell? The station restarts.',cells_confirm_remove:'Remove cell {n}? The station restarts.',
@@ -7771,6 +7993,7 @@ const LANGS={
     cfg_help_custom_duplex:'Optional duplex spacing in MHz (e.g. 7.6). Empty = use duplex spacing id. Overrides the table id when set.',
     cfg_help_freq_offset:'Fine carrier offset in Hz (±6250 / ±12500). Usually 0.',
     cfg_help_reverse:'Swap UL/DL sense of the duplex. Rare; leave off unless your plan requires reverse operation.',
+    cfg_rxlev_min:'Min. access level (dBm)',cfg_rxlev_default:'Default (−110)',cfg_help_rxlev_min:'RXLEV_ACCESS_MIN in SYSINFO (ETSI table 21.65): radios below this level cannot use the cell, and a higher value makes them reselect a better neighbour earlier. −125 to −50 dBm in 5 dB steps; default −110. Use the same value on neighbouring stations or set it per neighbour. See Docs/cell-reselection.md.',cfg_migration:'Migration supported',cfg_help_migration:'BS service details in SYSINFO: migration is supported by this cell (ETSI 18.5.2.1), for radios of another network (other MCC/MNC). Radios of another network are accepted only when [multi_network] is on and lists their network: they get a (V)ASSI (ETSI 16.4.1.1 b, 16.4.7). Otherwise every migrating registration is rejected with cause 12 “Migration not supported”. Turned on by itself while [multi_network] is on. Default off.',cfg_migration_auto:'On by itself: [multi_network] is enabled.',
     cfg_help_hw_device:'SoapySDR device string from Setup. Change device in Setup, not here.',
     cfg_help_ppm:'Frequency correction in PPM (comma or dot). Typically 0, but clone SDRs can be 1–2 kHz off: Sepura radios still register, Hytera radios never find the cell. Measure with an RTL-SDR and tools/carrier-offset.py (Docs/carrier-accuracy.md); a station transmitting low needs a positive value.',
     cfg_help_rx_ant:'RX antenna port for this SDR driver. Empty = device default.',
@@ -8145,8 +8368,33 @@ const LANGS={
   },
   es:{
     "ui_language":"Idioma",
+    roaming:'Infraestructura',roam_title:'Celdas, redes, vecinas y roaming',roam_reload:'Recargar',roam_help:'Todo lo que decide cuándo y cómo pasan las radios de una celda a otra: las celdas de esta estación y sus áreas de localización, las celdas vecinas que anuncia cada celda, los valores de reselección y la comprobación de presencia. Al guardar se comprueba toda la configuración y la estación se reinicia.',
+    roam_cells_title:'Áreas de localización',roam_cells_help:'Misma área de localización en todas las celdas: las radios cambian de celda sin registrarse, así que las llamadas de grupo y los establecimientos de llamada individual se emiten en todas las celdas del área. Área propia por celda: las radios se registran en cada cambio y la estación y el servidor siempre conocen la celda exacta (TS 100 392-2 cláusula 18.3.4.7.1a). Vacío = el área de la primaria. Las celdas nuevas se añaden en la tarjeta Celdas de arriba.',
+    roam_th_cell:'Celda',roam_th_network:'Red',roam_nets_title:'Redes (Multi Network)',roam_mn_on:'Activo',roam_net_server:'Servidor Brew',roam_net_chk_ok:'enrutable',roam_net_chk_down:'enlace caído',roam_net_chk_unknown:'No es posible enrutar con este MCC/MNC: el servidor Brew no llega a esa red',roam_net_chk_own:'La red propia del servidor Brew es {mni}',roam_srvnets_title:'Redes del servidor Brew',roam_srvnets_help:'El servidor Brew es la red {mni} y llega a estas redes (extensión mni). «Añadir red» toma su MCC/MNC para que todas las estaciones usen los mismos valores.',roam_srvnets_none:'Aún no hay lista del servidor Brew: hace falta Multi Network activo y un brew-server que ofrezca mni.',roam_srvnets_empty:'El servidor Brew no llega a ninguna otra red.',roam_srvnets_up:'activa',roam_srvnets_down:'caída',roam_srvnets_have:'configurada como {net}',roam_mn_off:'Apagado',roam_mn_switch_help:'Multi Network activo / apagado ([multi_network] enabled): las radios de otras redes pueden registrarse aquí por migración (TS 100 392-2 16.4.1.1 b), y todas las celdas anuncian migración. Guarda y reinicia la estación.',roam_nets_help:'Una celda emite exactamente una red (MCC / MNC, TS 100 392-2 tabla 18.17); elígela por celda en la columna Red de arriba. Una radio que selecciona una red en el terminal usa las celdas de esa red. Acceso: servidor propio = el enlace [brew] propio de la red (credenciales en esta estación, se editan en la configuración); vía = a través del servidor Brew de otra red, que debe ofrecer la extensión mni y llegar a esa red (Infraestructura, sin credenciales aquí); local = conmutada dentro de esta estación. La primera red añadida convierte [net_info] y [brew] en la red "home".',roam_net_name:'Nombre',roam_net_reached:'Acceso',roam_net_add:'Añadir red',roam_net_core:'servidor propio',roam_net_via:'vía {net}',roam_net_local:'local (sin servidor)',roam_net_pending:'(sin guardar)',roam_net_confirm_core:'¿Quitar la red {net}? También se borra su propio usuario Brew de la configuración.',roam_net_need:'Red: hacen falta nombre (letras, dígitos, _ o -), MCC y MNC.',roam_th_global:'Id. global de celda',roam_resel_title:'Reselección de celda (avanzado, todas las celdas)',roam_resel_toggle:'Mostrar / ocultar',roam_fast_th:'Umbral rápido (dB)',roam_slow_th:'Umbral lento sobre el rápido (dB)',roam_fast_hy:'Histéresis rápida (dB)',roam_slow_hy:'Histéresis lenta (dB)',roam_presence:'Comprobación de presencia tras silencio (s)',
+    roam_nb_title:'Celdas vecinas',roam_nb_add:'Añadir vecina',roam_nb_help:'Lo que la celda seleccionada anuncia en D-NWRK-BROADCAST (máx. 7, cláusula 18.5.17). Las demás celdas de la estación se añaden solas. Una celda adicional sin lista propia anuncia solo las celdas de la estación.',roam_own_list:'Lista de vecinas propia para esta celda',
+    roam_th_types:'Reselección',roam_th_services:'Servicios',roam_n_id:'Identificador de celda (0-31)',roam_n_carrier:'Portadora principal (0-4095)',roam_n_ext:'Extensión de portadora (opcional)',roam_n_types:'Tipos de reselección',roam_n_sync:'Sincronizada con esta celda',roam_n_load:'Carga de la celda',roam_n_la:'Área de localización (opcional)',roam_n_rxlev:'Nivel mín. de acceso RX (opcional)',roam_n_txpwr:'Potencia TX máx. de la radio (opcional)',
+    roam_n_services_help:'Detalles de servicio de la vecina (tabla 18.26). Los que faltan se anuncian como «no admitido», por eso una entrada nueva empieza con los servicios de esta celda.',roam_apply:'Aplicar',roam_edit:'Editar',roam_edit_title:'Vecina {n}',roam_new_title:'Vecina nueva',roam_same_as_cell:'Igual que esta celda',
+    roam_types_0:'sin registro anticipado',roam_types_1:'sin registro anticipado, reselección acelerada recomendada',roam_types_2:'registro anticipado',roam_types_3:'registro anticipado, reselección acelerada recomendada',
+    roam_svc_registration:'registro',roam_svc_deregistration:'baja',roam_svc_system_wide_services:'servicios de todo el sistema',roam_svc_voice_service:'voz',roam_svc_circuit_mode_data_service:'datos en circuito',roam_svc_sndcp_service:'datos en paquetes',roam_svc_aie_service:'cifrado de aire',roam_svc_advanced_link:'enlace avanzado',roam_svc_priority_cell:'celda prioritaria',roam_svc_no_minimum_mode:'sin modo mínimo',roam_svc_migration:'migración',
+    roam_services_none:'ninguno (las radios no pueden usarla)',roam_th_server:'En el servidor',roam_pick:'Rellenar desde la lista de celdas del servidor',roam_dir_title:'Celdas en el servidor Brew',roam_dir_help:'Las celdas de las otras estaciones del servidor Brew, con lo que anuncian (extensión cell-directory de brew-server). Una vecina se identifica por red, frecuencia de bajada y área de localización. Una radio usa la lista de su celda servidora para elegir qué celdas explorar (cláusula 18.3.4.1), así que ambas celdas deberían anunciarse mutuamente.',roam_th_state:'Estado',roam_th_levels:'Acceso / potencia MS',roam_th_listed_here:'Vecina de',roam_th_lists_us:'Anuncia esta estación',roam_dir_add:'Añadir como vecina',roam_dir_none:'ninguna',roam_dir_empty:'No hay otras celdas en el servidor.',roam_dir_count:'{n} celdas de otras estaciones en el servidor.',roam_dir_off:'El servidor Brew no envía su lista de celdas (requiere un brew-server con la extensión cell-directory).',roam_dir_wait:'El servidor ofrece su lista de celdas, aún no ha llegado (llega justo después de conectar).',roam_dir_unknown:'desconocida en el servidor',roam_online:'en línea',roam_offline:'fuera de línea',roam_not_mutual:'{id} no anuncia esta celda: a las radios allí no se les indica que la busquen',roam_diff_rxlev:'nivel mín. de acceso: anunciado {list} dBm, la celda emite {cell} dBm',roam_diff_txpwr:'potencia máx. MS: anunciada {list} dBm, la celda emite {cell} dBm',roam_diff_services:'servicios distintos: {list}',roam_auto_sibling:'Celda de esta estación (automática)',roam_nb_none:'Sin vecinas.',roam_nb_count:'{n} de 7 entradas de vecina',roam_need_id_carrier:'Faltan el identificador de celda y la portadora.',roam_need_la:'La celda primaria necesita un área de localización.',roam_unsaved:'Cambiado, aún sin guardar.',roam_confirm_save:'¿Guardar los ajustes de roaming y reiniciar la estación?',
+    roam_brew_off:'Brew no está configurado: el roaming entre estaciones está apagado, las celdas de esta estación siguen funcionando.',roam_link_up:'conectado',roam_link_down:'sin conexión',roam_ext:'Funciones del servidor',roam_feat_roam:'Roaming',roam_feat_calls:'Llamadas',roam_feat_cells:'Celdas',roam_feat_groups:'Grupos',roam_feat_net:'Multi Network',roam_feat_other:'Otras',
+    roam_dbm_hint:'En la radio (término de potencia 0): sin acceso por debajo de {fail} dBm, celda abandonable por debajo de {fast} dBm, mejorable por debajo de {slow} dBm (cláusula 18.3.4.5; Docs/cell-reselection.md).',
+    roam_help_fast_th:'FAST_RESELECT_THRESHOLD (cláusula 18.5.4): por debajo (C1 en dB sobre el nivel de acceso) la celda servidora es «abandonable» y la radio pasa a una vecina mejor en la histéresis rápida, también durante una llamada. 0-30 dB en pasos de 2; por defecto 10.',
+    roam_help_slow_th:'SLOW_RESELECT_THRESHOLD_ABOVE_FAST (cláusula 18.5.4): se suma al umbral rápido. Por debajo de la suma la celda servidora es «mejorable» y una radio en reposo pasa a una vecina mejor en la histéresis lenta. Por defecto 20 (= 30 dB con rápido 10). Valores altos hacen que la radio busque casi siempre.',
+    roam_help_fast_hy:'FAST_RESELECT_HYSTERESIS (cláusula 18.5.4): cuánto mejor debe ser una vecina cuando la celda servidora es abandonable. Por defecto 6 dB. Valores pequeños con umbrales altos hacen que las radios vayan y vuelvan.',
+    roam_help_slow_hy:'SLOW_RESELECT_HYSTERESIS (cláusula 18.5.4): cuánto mejor debe ser una vecina cuando la celda servidora es mejorable. Por defecto 10 dB.',
+    roam_help_presence:'Segundos de silencio antes de que la estación envíe a una radio un D-LOCATION UPDATE COMMAND (cláusula 16.4.4) para comprobar que sigue ahí; sin respuesta aparece como no disponible. Con varias celdas en un área de localización el comando se envía en todas. 0 = apagado. Por defecto 30.',
+    roam_help_n_id:'Identificador de celda CA (5 bits, tabla 18.64): único en la lista de esta celda. Las celdas hermanas toman los primeros libres.',
+    roam_help_n_carrier:'Número de portadora principal de la vecina (12 bits). Con otro plan de banda pon también la extensión de portadora.',
+    roam_help_n_ext:'Extensión del número de portadora (tabla 18.64): banda, desplazamiento, separación dúplex y modo inverso de la vecina, solo si difieren de esta celda.',
+    roam_help_n_types:'Tipos de reselección admitidos (tabla 18.22). Registro anticipado: la radio puede registrarse para la vecina en U-PREPARE en esta celda (útil con las celdas de la estación y con el traspaso por Brew). Acelerada recomendada: la radio cambia más rápido, pero entonces no anuncia tipo 1/2 (cláusula 18.3.4.7.5).',
+    roam_help_n_sync:'Celda vecina sincronizada (tabla 18.64): solo si ambas celdas comparten temporización (p. ej. con GPS). SDR separados no lo están.',
+    roam_help_n_load:'Carga de celda CA (tabla 18.64): de 0 baja a 3 alta. Las radios pueden preferir una celda menos cargada.',
+    roam_help_n_la:'Área de localización de la vecina. Vacío si es la misma que la de esta celda; una distinta hace que las radios se registren al pasar allí (cláusula 18.3.4.7.1a).',
+    roam_help_n_rxlev:'Nivel mínimo de acceso RX de la vecina (cláusula 18.5.12). Vacío: las radios suponen el mismo que esta celda (tabla 18.64, nota 2).',
+    roam_help_n_txpwr:'Potencia de transmisión máxima de la radio en la vecina (tabla 18.57), la usa la radio para C2. Vacío: igual que esta celda.',
     cells_title:'Celdas',cells_help:'Cada SDR adicional ejecuta una celda más. Elige una portadora libre; sus frecuencias salen del plan de banda de la celda principal. La estación se reinicia para aplicar los cambios.',
-    cells_carrier:'Portadora',cells_cc:'Código de color',cells_add:'Añadir celda',cells_remove:'Quitar',cells_cell:'Celda {n}',cells_radios:'{n} radio(s)',
+    cells_carrier:'Portadora',cells_cc:'Código de color',cells_la_help:'Área de localización de la nueva celda. Vacío = la misma que la celda principal. Con un área propia la radio se registra en cada cambio de celda (TS 100 392-2 cláusula 18.3.4.7.1a).',cells_add:'Añadir celda',cells_remove:'Quitar',cells_cell:'Celda {n}',cells_radios:'{n} radio(s)',
     cells_net_local:'local',cells_net_up:'núcleo conectado',cells_net_down:'núcleo desconectado',
     cells_single:'Celda única',rf_cells_note:'Elige una celda para ver su SDR en esta página.',cells_linked:'Celdas enlazadas',cells_independent:'Celdas independientes',
     cells_need_fields:'Hacen falta el dispositivo y la portadora.',cells_confirm_add:'¿Añadir esta celda? La estación se reinicia.',cells_confirm_remove:'¿Quitar la celda {n}? La estación se reinicia.',
@@ -8372,6 +8620,7 @@ const LANGS={
     cfg_help_custom_duplex:'Separación de dúplex en MHz (p. ej. 7,6). Vacío = usar el id de tabla. Si lo rellenas, manda sobre el id.',
     cfg_help_freq_offset:'Offset fino de portadora en Hz (±6250 / ±12500). Normalmente 0.',
     cfg_help_reverse:'Invierte el sentido UL/DL del dúplex. Raro; déjalo apagado salvo que tu plan lo exija.',
+    cfg_rxlev_min:'Nivel mín. de acceso (dBm)',cfg_rxlev_default:'Por defecto (−110)',cfg_help_rxlev_min:'RXLEV_ACCESS_MIN en SYSINFO (ETSI tabla 21.65): las radios por debajo de este nivel no pueden usar la celda, y un valor más alto hace que reseleccionen antes una vecina mejor. −125 a −50 dBm en pasos de 5 dB; por defecto −110. Usa el mismo valor en las estaciones vecinas o ajústalo por vecina. Ver Docs/cell-reselection.md.',cfg_migration:'Migración admitida',cfg_help_migration:'Detalles de servicio en SYSINFO: esta celda admite migración (ETSI 18.5.2.1), para radios de otra red (otro MCC/MNC). Las radios de otra red solo se aceptan si [multi_network] está activo y lista su red: reciben una (V)ASSI (ETSI 16.4.1.1 b, 16.4.7). Si no, todo registro migrante se rechaza con la causa 12 “Migration not supported”. Se activa solo mientras [multi_network] está activo. Apagado por defecto.',cfg_migration_auto:'Activa sola: [multi_network] está habilitado.',
     cfg_help_hw_device:'Cadena SoapySDR del dispositivo (viene de Setup). Cambia el SDR en Setup, no aquí.',
     cfg_help_ppm:'Corrección de frecuencia en PPM (coma o punto). Suele ser 0, pero los SDR clónicos pueden desviarse 1–2 kHz: las Sepura registran igual, las Hytera nunca encuentran la celda. Mide con un RTL-SDR y tools/carrier-offset.py (Docs/carrier-accuracy.md); una estación que transmite baja necesita un valor positivo.',
     cfg_help_rx_ant:'Puerto de antena RX del driver. Vacío = default del dispositivo.',
@@ -11499,7 +11748,7 @@ function closeMobileSidebar(){
 }
 
 // ── Page navigation ───────────────────────────────────────────────────────
-const PAGE_TITLES={stations:'stations',dgna:'dgna',calls:'calls',lastheard:'lastheard',log:'log',sdslog:'sdslog',rf:'rf',health:'health',asterisk:'asterisk',dapnet:'dapnet',echolink:'echolink',meshcom:'meshcom',geoalarm:'geoalarm',telegram:'telegram',lst_dispatch:'lst_dispatch',setup:'setup',config:'config',system:'system',network:'network'};
+const PAGE_TITLES={stations:'stations',dgna:'dgna',calls:'calls',lastheard:'lastheard',log:'log',sdslog:'sdslog',rf:'rf',health:'health',asterisk:'asterisk',dapnet:'dapnet',echolink:'echolink',meshcom:'meshcom',geoalarm:'geoalarm',telegram:'telegram',lst_dispatch:'lst_dispatch',setup:'setup',config:'config',roaming:'roaming',system:'system',network:'network'};
 function showPage(name,el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
@@ -11507,6 +11756,7 @@ function showPage(name,el){
   if(el)el.classList.add('active');
   else{const nav=document.getElementById('nav-'+name);if(nav)nav.classList.add('active');}
   document.getElementById('topbar-title').textContent=t(name)||name;
+  if(name==='roaming')loadCells();
   if(name==='stations'){loadBtsInfoLegacy();loadCells();loadDualCarrier();refreshProfileSelects();}
   if(name==='dgna'){syncDgnaAttachmentModePicker();renderDgnaPage();}
   if(name==='sdslog'){loadSdsLog();}
@@ -11528,6 +11778,7 @@ function showPage(name,el){
   if(name==='config'){loadConfig();loadVisualConfig();loadSdsCommands();loadWx();}
   if(name==='security'){loadSecurity();}
   if(name==='telegram'){loadTelegram();}
+  if(name==='roaming'){loadRoaming();}
   if(name==='system'){loadSystemInfo();loadConfigProfiles();loadLiveSds();loadBrightness();loadOtaChannel();startServiceStatusPolling();loadDashboardAuth();loadDashboardPorts();
     // Avoid a fresh GitHub stampede on every System visit — badge uses cache ≤90s.
     if(!otaLastCheck||otaLastCheck.check_failed)checkUpdate();
@@ -13894,6 +14145,10 @@ function handleMsg(msg){
     case 'ms_cell':
       if(state.ms[msg.issi]){state.ms[msg.issi].cell=msg.cell;renderStations();}
       break;
+    case 'ms_moved_away':
+      // Still on the cell it left: it went to another station (a sibling cell's ms_cell moves the row).
+      if(state.ms[msg.issi]&&(state.ms[msg.issi].cell??0)===msg.cell){delete state.ms[msg.issi];delete state.secByIssi[msg.issi];renderStations();renderDgnaPage();}
+      break;
     case 'ms_rssi':
       if(state.ms[msg.issi]){state.ms[msg.issi].rssi_dbfs=msg.rssi_dbfs;state.ms[msg.issi]._last_seen_ts=Date.now();}
       scheduleStationsRender();break;
@@ -15575,7 +15830,7 @@ const CFG_HELP_BY_ID={
   'vc-tx-freq':'cfg_help_tx','vc-rx-freq':'cfg_help_rx','vc-colour':'cfg_help_colour',
   'vc-dual-carrier':'cfg_dual_help','vc-secondary-carrier':'cfg_dual_help',
   'vc-main-carrier':'cfg_help_main_carrier','vc-freq-band':'cfg_help_freq_band','vc-duplex-id':'cfg_help_duplex_id',
-  'vc-custom-duplex':'cfg_help_custom_duplex','vc-freq-offset':'cfg_help_freq_offset','vc-reverse':'cfg_help_reverse',
+  'vc-custom-duplex':'cfg_help_custom_duplex','vc-freq-offset':'cfg_help_freq_offset','vc-reverse':'cfg_help_reverse','vc-rxlev-min':'cfg_help_rxlev_min','vc-migration':'cfg_help_migration',
   'vc-device':'cfg_help_hw_device','vc-ppm':'cfg_help_ppm','vc-rx-ant':'cfg_help_rx_ant','vc-tx-ant':'cfg_help_tx_ant',
   'vc-rx-lna':'cfg_help_gain','vc-rx-tia':'cfg_help_gain','vc-rx-pga':'cfg_help_gain',
   'vc-tx-pad':'cfg_help_gain','vc-tx-iamp':'cfg_help_gain','vc-tx-dac':'cfg_help_gain','vc-tx-mixer':'cfg_help_gain','vc-tx-pga':'cfg_help_gain',
@@ -15586,6 +15841,10 @@ const CFG_HELP_BY_ID={
   'vc-brew-tls':'cfg_help_brew_tls','vc-brew-user':'cfg_help_brew_user','vc-brew-pass':'cfg_help_brew_pass',
   'vc-brew-reconnect':'cfg_help_brew_reconnect','vc-brew-sds':'cfg_help_brew_sds','vc-brew-rssi':'cfg_help_brew_rssi',
   'vc-brew-lip':'cfg_help_brew_lip','vc-brew-lip-issi':'cfg_help_brew_lip_issi',
+  'rm-fast-th':'roam_help_fast_th','rm-slow-th':'roam_help_slow_th','rm-fast-hy':'roam_help_fast_hy','rm-slow-hy':'roam_help_slow_hy',
+  'rm-rxlev':'cfg_help_rxlev_min','rm-migration':'cfg_help_migration','rm-presence':'roam_help_presence',
+  'rm-n-id':'roam_help_n_id','rm-n-carrier':'roam_help_n_carrier','rm-n-ext':'roam_help_n_ext','rm-n-types':'roam_help_n_types','rm-n-sync':'roam_help_n_sync',
+  'rm-n-load':'roam_help_n_load','rm-n-la':'roam_help_n_la','rm-n-rxlev':'roam_help_n_rxlev','rm-n-txpwr':'roam_help_n_txpwr',
 };
 let cfgHelpPop=null,cfgHelpBtn=null;
 function closeCfgHelp(){
@@ -15710,6 +15969,7 @@ function collectVisualConfig(){
     system_wide_services:!!document.getElementById('vc-syswide')?.checked,
     late_entry_supported:document.getElementById('vc-late-entry')?!!document.getElementById('vc-late-entry').checked:true,
     voice_service:!!document.getElementById('vc-voice')?.checked,
+    migration:!!document.getElementById('vc-migration')?.checked,
   };
   const dualOn=!!document.getElementById('vc-dual-carrier')?.checked;
   cell_info.dual_carrier_enabled=dualOn;
@@ -15724,6 +15984,8 @@ function collectVisualConfig(){
   }
   const customDuplex=mhzFieldToHz('vc-custom-duplex'); if(customDuplex!==null)cell_info.custom_duplex_spacing=customDuplex;
   const tz=vcStr('vc-tz'); if(tz)cell_info.timezone=tz;
+  // Empty = omit key (server prunes TOML -> -110 dBm default).
+  const rxlev=vcNum('vc-rxlev-min'); if(rxlev!==null)cell_info.rxlev_access_min_dbm=rxlev;
   // Timers: empty = omit key (server prunes TOML → engine defaults). Explicit 0 kept where valid.
   const ht=vcNum('vc-hangtime'); if(ht!==null)cell_info.hangtime_secs=ht;
   const ct=vcNum('vc-call-timeout'); if(ct!==null)cell_info.call_timeout_secs=ct;
@@ -15787,7 +16049,8 @@ function fillVisualConfig(d,opts){
   vcSet('vc-call-timeout',cell.call_timeout_secs); vcSet('vc-ul-inact',cell.ul_inactivity_secs);
   vcSet('vc-t351',cell.periodic_registration_secs);
   syncAllVcTimerResets();
-  vcSet('vc-syswide',!!cell.system_wide_services); vcSet('vc-late-entry',cell.late_entry_supported!==false); vcSet('vc-voice',cell.voice_service!==false);
+  vcSet('vc-syswide',!!cell.system_wide_services); vcSet('vc-late-entry',cell.late_entry_supported!==false); vcSet('vc-voice',cell.voice_service!==false); vcSet('vc-migration',!!cell.migration);
+  vcSet('vc-rxlev-min',cell.rxlev_access_min_dbm!=null?String(cell.rxlev_access_min_dbm):'');
   vcSet('vc-recovery',!!(d&&d.recovery&&d.recovery.enabled));
   vcSet('vc-local-ssi',formatLocalSsiRanges(cell.local_ssi_ranges));
   const net=d?.net_info||{}; vcSet('vc-mcc',net.mcc); vcSet('vc-mnc',net.mnc);
@@ -18152,10 +18415,10 @@ function renderRfCells(cells,siteLinked){
     c.device?('SDR '+c.device):''].concat(carriers).filter(Boolean).join(' · ');
   setText('rf-cell-detail',detail);
 }
-// Keep the per-cell grid and RF list fresh (cell state, radio counts) while either page is open.
+// Keep the per-cell grid, RF list and Cells card fresh (cell state, radio counts) while one of their pages is open.
 setInterval(()=>{
-  const home=document.getElementById('page-stations'),rfp=document.getElementById('page-rf');
-  if((home&&home.classList.contains('active'))||(rfp&&rfp.classList.contains('active')))loadCells();
+  const home=document.getElementById('page-stations'),rfp=document.getElementById('page-rf'),rmp=document.getElementById('page-roaming');
+  if([home,rfp,rmp].some(p=>p&&p.classList.contains('active')))loadCells();
 },15000);
 async function cellsScan(){
   const msg=document.getElementById('cells-msg');
@@ -18176,6 +18439,451 @@ async function cellsPost(path,body){
     if(msg)msg.textContent=txt;
   }catch(e){if(msg)msg.textContent=String(e);}
 }
+// ── Roaming page: cells + LA, neighbour lists per cell, reselection, presence (/api/roaming) ──
+let roamData=null,roamEditIdx=null;
+const ROAM_SERVICES=['registration','deregistration','system_wide_services','voice_service','circuit_mode_data_service','sndcp_service','aie_service','advanced_link','priority_cell','no_minimum_mode','migration'];
+function roamDbOpts(id,from,to,step){
+  const el=document.getElementById(id);if(!el||el.options.length)return;
+  for(let v=from;v<=to;v+=step){const o=document.createElement('option');o.value=String(v);o.textContent=String(v);el.appendChild(o);}
+}
+function roamInitSelects(){
+  ['rm-fast-th','rm-slow-th','rm-fast-hy','rm-slow-hy'].forEach(id=>roamDbOpts(id,0,30,2));
+  const rx=document.getElementById('rm-rxlev');
+  if(rx&&!rx.options.length){
+    rx.innerHTML='<option value="">'+escHtml(t('cfg_rxlev_default'))+'</option>';
+    for(let v=-125;v<=-50;v+=5)rx.innerHTML+='<option value="'+v+'">'+v+'</option>';
+  }
+  const nrx=document.getElementById('rm-n-rxlev');
+  if(nrx){
+    nrx.innerHTML='<option value="">'+escHtml(t('roam_same_as_cell'))+'</option>';
+    for(let c=0;c<=15;c++)nrx.innerHTML+='<option value="'+c+'">'+(-125+5*c)+' dBm</option>';
+  }
+  const pw=document.getElementById('rm-n-txpwr');
+  if(pw){
+    pw.innerHTML='<option value="">'+escHtml(t('roam_same_as_cell'))+'</option>';
+    for(let c=1;c<=7;c++)pw.innerHTML+='<option value="'+c+'">'+(10+5*c)+' dBm</option>';
+  }
+  const ty=document.getElementById('rm-n-types');
+  if(ty)ty.innerHTML=[0,1,2,3].map(v=>'<option value="'+v+'">'+v+' — '+escHtml(t('roam_types_'+v))+'</option>').join('');
+}
+async function loadRoaming(){
+  roamInitSelects();
+  setText('roam-msg','');
+  try{
+    const r=await fetch('/api/roaming',{credentials:'same-origin'});
+    if(!r.ok){setText('roam-msg',await r.text());return;}
+    roamData=await r.json();
+  }catch(e){setText('roam-msg',String(e));return;}
+  const d=roamData;
+  vcSet('rm-fast-th',String(d.reselect.fast_threshold_db));
+  vcSet('rm-slow-th',String(d.reselect.slow_threshold_db));
+  vcSet('rm-fast-hy',String(d.reselect.fast_hysteresis_db));
+  vcSet('rm-slow-hy',String(d.reselect.slow_hysteresis_db));
+  vcSet('rm-rxlev',d.rxlev_access_min_dbm!=null?String(d.rxlev_access_min_dbm):'');
+  roamMnShow(!!d.multi_network_enabled);
+  vcSet('rm-presence',String(d.presence_check_secs));
+  roamNetEdits=[];
+  roamRenderBrew();roamRenderCells();roamRenderNetworks();
+  const sel=document.getElementById('rm-ncell');
+  if(sel){
+    const keep=sel.value;
+    sel.innerHTML=d.cells.map(c=>'<option value="'+c.id+'">'+escHtml(t('cells_cell',{n:c.id}))+(c.primary?' ★':'')+'</option>').join('');
+    if(keep!==''&&d.cells.some(c=>String(c.id)===keep))sel.value=keep;
+  }
+  roamCloseEditor();roamRenderNeighbours();roamDbmHint();
+  try{installCfgHelp();}catch{}
+}
+function roamRenderBrew(){
+  const b=roamData.brew,el=document.getElementById('roam-brew');if(!el)return;
+  if(!b.configured){el.textContent=t('roam_brew_off');return;}
+  const wasOpen=!!el.querySelector('details[open]');
+  const on=b.extensions.filter(x=>x.offered).length;
+  const cat={'bts-info':'roam_feat_roam','handover-v1':'roam_feat_roam','ms-cell':'roam_feat_roam','ms-moved':'roam_feat_roam','ms-reselection':'roam_feat_roam','call-restore':'roam_feat_calls','call-handoff':'roam_feat_calls','cell-directory':'roam_feat_cells','group-access':'roam_feat_groups','issi-check':'roam_feat_net','mni':'roam_feat_net'};
+  const order=['roam_feat_roam','roam_feat_calls','roam_feat_cells','roam_feat_groups','roam_feat_net','roam_feat_other'];
+  const ext=order.map(k=>{
+    const xs=b.extensions.filter(x=>(cat[x.name]||'roam_feat_other')===k);
+    return xs.length?'<div class="roam-feat-cat">'+escHtml(t(k))+'</div><div class="roam-feat-row">'+xs.map(x=>'<span class="roam-feat"><i class="'+(x.offered?'on':'off')+'"></i>'+escHtml(x.name)+'</span>').join('')+'</div>':'';
+  }).join('');
+  el.innerHTML='<b>Brew</b> '+escHtml(b.login||'')+' · '+escHtml(t(b.link_up?'roam_link_up':'roam_link_down'))+
+    '<details class="roam-feats"'+(wasOpen?' open':'')+'><summary>'+escHtml(t('roam_ext'))+' <span style="color:var(--muted)">'+on+'/'+b.extensions.length+'</span></summary><div>'+ext+'</div></details>';
+}
+function roamRenderCells(){
+  const tb=document.getElementById('roam-cells-tbody');if(!tb)return;
+  const primaryLa=roamData.cells[0].location_area;
+  tb.innerHTML=roamData.cells.map(c=>{
+    const la=c.primary||c.location_area_own?String(c.location_area):'';
+    return '<tr><td data-label="'+escHtmlAttr(t('roam_th_cell'))+'">'+escHtml(t('cells_cell',{n:c.id}))+(c.primary?' ★':'')+'</td>'+
+      '<td data-label="'+escHtmlAttr(t('roam_th_global'))+'">'+escHtml(c.global_id||'—')+'</td>'+
+      '<td data-label="'+escHtmlAttr(t('cells_carrier'))+'">'+roamCarrier(c.main_carrier,c.carrier_ext)+'</td>'+
+      '<td data-label="CC">'+c.colour_code+'</td>'+
+      '<td data-label="LA"><input type="number" class="form-input" style="width:100px" min="0" max="16383" id="rm-la-'+c.id+'" value="'+escHtmlAttr(la)+'"'+
+      (c.primary?'':' placeholder="'+escHtmlAttr(String(primaryLa))+'"')+'></td>'+
+      '<td data-label="'+escHtmlAttr(t('roam_th_network'))+'"><select class="form-input" id="rm-cnet-'+c.id+'">'+
+      roamNetList().map(n=>'<option value="'+escHtmlAttr(n.name)+'"'+(n.name===c.network?' selected':'')+'>'+escHtml(roamNetLabel(n))+'</option>').join('')+
+      '</select></td></tr>';
+  }).join('');
+}
+let roamNetEdits=[];
+// Networks as they will be after saving: the configured ones with the pending edits applied.
+function roamNetList(){
+  let l=(roamData.networks||[]).map(n=>Object.assign({},n));
+  roamNetEdits.forEach(e=>{
+    l=l.filter(n=>n.name!==e.name);
+    if(!e.remove)l.push({name:e.name,mcc:e.mcc,mnc:e.mnc,via:e.via||null,mode:e.via?'via':'local',pending:true});
+  });
+  if(roamNetEdits.some(e=>!e.remove)&&!roamData.networks_explicit)l.forEach(n=>{if(n.name==='default')n.name='home';});
+  return l;
+}
+function roamNetLabel(n){return n.name+' ('+n.mcc+'/'+n.mnc+')';}
+function roamNetReached(n){
+  if(n.mode==='via')return t('roam_net_via',{net:n.via});
+  if(n.mode==='core')return t('roam_net_core')+(n.host?' · '+n.host:'');
+  return t('roam_net_local');
+}
+function roamRenderNetworks(){
+  const tb=document.getElementById('roam-nets-tbody');if(!tb||!roamData)return;
+  const list=roamNetList();
+  tb.innerHTML=list.map(n=>{
+    // The primary cell's network stays (it is the root `network`); every other one can go.
+    const primaryNet=((document.getElementById('rm-cnet-0')||{}).value)||roamData.cells[0].network;
+    return '<tr><td data-label="'+escHtmlAttr(t('roam_net_name'))+'"><b>'+escHtml(n.name)+'</b>'+(n.pending?' <span style="color:var(--muted)">'+escHtml(t('roam_net_pending'))+'</span>':'')+'</td>'+
+      '<td data-label="MCC">'+n.mcc+'</td><td data-label="MNC">'+n.mnc+'</td>'+
+      '<td data-label="'+escHtmlAttr(t('roam_net_reached'))+'">'+escHtml(roamNetReached(n))+'</td>'+
+      '<td data-label="'+escHtmlAttr(t('roam_net_server'))+'">'+roamNetCheck(n)+'</td>'+
+      '<td>'+(n.name===primaryNet||!roamData.networks_explicit&&!n.pending?'':'<button class="btn" onclick="roamNetRemove(\''+escHtmlAttr(n.name)+'\')">'+escHtml(t('cells_remove'))+'</button>')+'</td></tr>';
+  }).join('');
+  roamRenderServerNets(list);
+  const via=document.getElementById('rm-net-via');
+  if(via){
+    const cores=list.filter(n=>n.mode==='core');
+    via.innerHTML=cores.map(n=>'<option value="'+escHtmlAttr(n.name)+'">'+escHtml(t('roam_net_via',{net:n.name}))+'</option>').join('')+
+      '<option value="">'+escHtml(t('roam_net_local'))+'</option>';
+  }
+  roamData.cells.forEach(c=>{
+    const sel=document.getElementById('rm-cnet-'+c.id);if(!sel)return;
+    const keep=sel.value;
+    sel.innerHTML=list.map(n=>'<option value="'+escHtmlAttr(n.name)+'">'+escHtml(roamNetLabel(n))+'</option>').join('');
+    const fallback=(document.getElementById('rm-cnet-0')||{}).value||roamData.cells[0].network;
+    sel.value=list.some(n=>n.name===keep)?keep:(keep==='default'&&list.some(n=>n.name==='home')?'home':(list.some(n=>n.name===fallback)?fallback:list[0].name));
+  });
+}
+// What the primary network's Brew server says about a network (SERVICE_NETWORKS, extension mni).
+function roamNetCheck(n){
+  const sn=roamData.server_networks;
+  let c=n.server_check;
+  // A network added on the page but not saved yet: check it here the same way.
+  if(n.pending&&sn&&(n.via===sn.via||n.via==='home'&&!roamData.networks_explicit)){
+    const l=(sn.networks||[]).find(x=>x.mcc===n.mcc&&x.mnc===n.mnc);
+    c=(sn.this.mcc===n.mcc&&sn.this.mnc===n.mnc)||(l&&l.up)?'ok':(l?'down':'unknown');
+  }
+  if(c==='ok')return '<span style="color:var(--accent)">✓ '+escHtml(t('roam_net_chk_ok'))+'</span>';
+  if(c==='down')return '<span style="color:var(--warn)">⚠ '+escHtml(t('roam_net_chk_down'))+'</span>';
+  if(c==='unknown')return '<span style="color:var(--danger)">⚠ '+escHtml(t('roam_net_chk_unknown'))+'</span>';
+  if(c==='not_server_network')return '<span style="color:var(--danger)">⚠ '+escHtml(t('roam_net_chk_own',{mni:sn.this.mcc+'/'+sn.this.mnc}))+'</span>';
+  return '<span style="color:var(--muted)">–</span>';
+}
+function roamRenderServerNets(list){
+  const tb=document.getElementById('roam-srvnets-tbody'),help=document.getElementById('roam-srvnets-help');
+  if(!tb||!help)return;
+  const sn=roamData.server_networks;
+  if(!sn){help.textContent=t('roam_srvnets_none');tb.innerHTML='';return;}
+  help.textContent=t('roam_srvnets_help',{mni:sn.this.mcc+'/'+sn.this.mnc});
+  const rows=(sn.networks||[]);
+  if(!rows.length){tb.innerHTML='<tr><td style="color:var(--muted)">'+escHtml(t('roam_srvnets_empty'))+'</td></tr>';return;}
+  tb.innerHTML=rows.map((n,i)=>{
+    const have=list.find(x=>x.mcc===n.mcc&&x.mnc===n.mnc);
+    return '<tr><td data-label="'+escHtmlAttr(t('roam_net_name'))+'"><b>'+escHtml(n.name)+'</b></td>'+
+      '<td data-label="MCC">'+n.mcc+'</td><td data-label="MNC">'+n.mnc+'</td>'+
+      '<td>'+(n.up?'<span style="color:var(--accent)">'+escHtml(t('roam_srvnets_up'))+'</span>':'<span style="color:var(--warn)">'+escHtml(t('roam_srvnets_down'))+'</span>')+'</td>'+
+      '<td>'+(have?'<span style="color:var(--muted)">'+escHtml(t('roam_srvnets_have',{net:have.name}))+'</span>':
+        '<button class="btn" onclick="roamSrvNetAdd('+i+')"><span class="btn-icon" data-icon="add"></span>'+escHtml(t('roam_net_add'))+'</button>')+'</td></tr>';
+  }).join('');
+}
+// Adds a network the Brew server reaches, with its MCC/MNC, reached via the server's network.
+function roamSrvNetAdd(i){
+  const sn=roamData.server_networks;const n=sn&&sn.networks[i];if(!n)return;
+  let name=(n.name||'').replace(/[^A-Za-z0-9_-]+/g,'_').replace(/^_+|_+$/g,'')||('net'+n.mcc+'_'+n.mnc);
+  if(roamNetList().some(x=>x.name===name))name=name+'_'+n.mnc;
+  const via=roamData.networks_explicit?sn.via:'home';
+  roamNetEdits=roamNetEdits.filter(e=>e.name!==name);
+  roamNetEdits.push({name:name,mcc:n.mcc,mnc:n.mnc,via:via});
+  roamRenderNetworks();
+}
+function roamNetAdd(){
+  const v=id=>(document.getElementById(id)||{}).value||'';
+  const name=v('rm-net-name').trim(),mcc=parseInt(v('rm-net-mcc'),10),mnc=parseInt(v('rm-net-mnc'),10);
+  if(!/^[A-Za-z0-9_-]+$/.test(name)||!isFinite(mcc)||!isFinite(mnc)){setText('roam-msg',t('roam_net_need'));return;}
+  let via=v('rm-net-via');
+  // A classic station's Brew link becomes the network "home" when the first network is added.
+  if(via==='default')via='home';
+  roamNetEdits=roamNetEdits.filter(e=>e.name!==name);
+  roamNetEdits.push({name:name,mcc:mcc,mnc:mnc,via:via||null});
+  ['rm-net-name','rm-net-mcc','rm-net-mnc'].forEach(id=>vcSet(id,''));
+  roamRenderNetworks();
+}
+function roamNetRemove(name){
+  // A network with its own server takes its [brew] login with it; cells on a removed network
+  // fall back to the primary cell's network in the same save (a network needs a cell).
+  const n=roamNetList().find(x=>x.name===name);
+  if(n&&n.mode==='core'&&!confirm(t('roam_net_confirm_core',{net:name})))return;
+  const pending=roamNetEdits.some(e=>e.name===name&&!e.remove);
+  roamNetEdits=roamNetEdits.filter(e=>e.name!==name);
+  if(!pending)roamNetEdits.push({name:name,remove:true});
+  roamRenderNetworks();
+}
+function roamCell(){
+  const sel=document.getElementById('rm-ncell');
+  const id=sel&&sel.value!==''?parseInt(sel.value,10):0;
+  return roamData.cells.find(c=>c.id===id)||roamData.cells[0];
+}
+function roamServicesText(d){
+  if(!d)return t('roam_services_none');
+  const on=ROAM_SERVICES.filter(k=>d[k]);
+  return on.length?on.map(k=>t('roam_svc_'+k)).join(', '):t('roam_services_none');
+}
+function roamRenderNeighbours(){
+  if(!roamData)return;
+  const c=roamCell();
+  const own=document.getElementById('rm-own-list'),row=document.getElementById('rm-own-row');
+  if(row)row.style.display=c.primary?'none':'';
+  if(own)own.checked=c.primary||c.own_list;
+  const editable=c.primary||c.own_list;
+  const rows=(editable?c.neighbours:[]).map((n,i)=>'<tr><td data-label="ID">'+n.cell_identifier_ca+'</td>'+
+    '<td data-label="'+escHtmlAttr(t('cells_carrier'))+'">'+roamCarrier(n.main_carrier_number,n.main_carrier_number_extension!=null?n.main_carrier_number_extension:c.carrier_ext)+'</td>'+
+    '<td data-label="LA">'+(n.location_area!=null?n.location_area:'—')+'</td>'+
+    '<td data-label="'+escHtmlAttr(t('roam_th_server'))+'">'+roamServerCell(n,c)+'</td>'+
+    '<td data-label="'+escHtmlAttr(t('roam_th_types'))+'">'+n.cell_reselection_types_supported+' — '+escHtml(t('roam_types_'+n.cell_reselection_types_supported))+'</td>'+
+    '<td data-label="'+escHtmlAttr(t('roam_th_services'))+'">'+escHtml(roamServicesText(n.bs_service_details))+'</td>'+
+    '<td data-label="'+escHtmlAttr(t('th_actions'))+'"><button class="btn btn-sm" onclick="roamEdit('+i+')">'+escHtml(t('roam_edit'))+'</button> '+
+    '<button class="btn btn-sm" onclick="roamDelete('+i+')">'+escHtml(t('cells_remove'))+'</button></td></tr>');
+  const auto=(c.siblings||[]).map(s=>'<tr style="color:var(--muted)"><td data-label="ID">'+s.cell_identifier_ca+'</td>'+
+    '<td data-label="'+escHtmlAttr(t('cells_carrier'))+'">'+roamCarrier(s.main_carrier_number,(roamData.cells.find(x=>x.main_carrier===s.main_carrier_number)||c).carrier_ext)+'</td>'+
+    '<td data-label="LA">'+(s.location_area!=null?s.location_area:'—')+'</td>'+
+    '<td colspan="4">'+escHtml(t('roam_auto_sibling'))+'</td></tr>');
+  const tb=document.getElementById('roam-nb-tbody');
+  if(tb)tb.innerHTML=rows.concat(auto).join('')||'<tr><td colspan="7" style="color:var(--muted)">'+escHtml(t('roam_nb_none'))+'</td></tr>';
+  const count=(editable?c.neighbours.length:0)+(c.siblings||[]).length;
+  setText('roam-nb-count',t('roam_nb_count',{n:count}));
+  roamRenderDirectory();
+}
+// ── Server cell directory (brew-server extension cell-directory) ──
+// Same downlink band and offset (bits 9-4 of the band plan); duplex spacing and reverse operation
+// (bits 3-0) only set the uplink and may differ between a neighbour entry and the cell's own.
+function roamSameBand(a,b){return a!=null&&b!=null&&(a&0x3f0)===(b&0x3f0);}
+// The directory entry a neighbour entry of cell c names: same network, carrier, band plan and LA.
+// An element the entry leaves out is the serving cell's own (TS 100 392-2 table 18.64 notes 1, 2).
+function roamMatch(n,c){
+  const dir=roamData&&roamData.directory;if(!dir)return null;
+  const ext=n.main_carrier_number_extension!=null?n.main_carrier_number_extension:c.carrier_ext;
+  const mcc=n.mcc!=null?n.mcc:roamData.mcc,mnc=n.mnc!=null?n.mnc:roamData.mnc;
+  const la=n.location_area!=null?n.location_area:c.location_area;
+  return dir.find(e=>e.mcc===mcc&&e.mnc===mnc&&e.carrier===n.main_carrier_number&&roamSameBand(e.carrier_ext,ext)&&e.location_area===la)||null;
+}
+// Whether directory cell e lists cell c as its neighbour (null = it did not report its list). An
+// absent LA in its entry is e's own.
+function roamListsCell(e,c){
+  if(!e.neighbours)return null;
+  return e.neighbours.some(x=>x.mcc===roamData.mcc&&x.mnc===roamData.mnc&&x.carrier===c.main_carrier&&roamSameBand(x.carrier_ext,c.carrier_ext)&&(x.location_area!=null?x.location_area:e.location_area)===c.location_area);
+}
+// Where neighbour entry n of cell c differs from what the cell e broadcasts. An absent element means
+// "same as the serving cell" (table 18.64 note 2), so the serving cell's own value is compared then.
+function roamDiffs(n,c,e){
+  const out=[];
+  const rx=n.minimum_rx_access_level!=null?-125+5*n.minimum_rx_access_level:c.rxlev_access_min_dbm;
+  if(e.rxlev_access_min_dbm!=null&&rx!==e.rxlev_access_min_dbm)out.push(t('roam_diff_rxlev',{list:rx,cell:e.rxlev_access_min_dbm}));
+  const pw=n.maximum_ms_transmit_power!=null?10+5*n.maximum_ms_transmit_power:c.ms_txpwr_max_dbm;
+  if(e.ms_txpwr_max_dbm!=null&&pw!=null&&pw!==e.ms_txpwr_max_dbm)out.push(t('roam_diff_txpwr',{list:pw,cell:e.ms_txpwr_max_dbm}));
+  if(e.service_details){
+    const d=n.bs_service_details||roamData.service_details||{};
+    const bad=ROAM_SERVICES.filter(k=>(k in e.service_details)&&!!d[k]!==!!e.service_details[k]);
+    if(bad.length)out.push(t('roam_diff_services',{list:bad.map(k=>t('roam_svc_'+k)).join(', ')}));
+  }
+  return out;
+}
+// Downlink frequency of a carrier on an absolute band plan ("main carrier number extension"):
+// band x 100 MHz + carrier x 25 kHz + offset (bits 5-4: 0, +6.25, -6.25, +12.5 kHz), clause 21.4.4.1.
+function roamMhz(carrier,ext){
+  if(ext==null||carrier==null)return '';
+  const off=[0,6.25,-6.25,12.5][(ext>>4)&3];
+  const khz=((ext>>6)&15)*100000+carrier*25+off;
+  return (khz/1000).toFixed(5).replace(/0{1,2}$/,'')+' MHz';
+}
+// "1530 · 438.250 MHz", the band plan number as a tooltip.
+function roamCarrier(carrier,ext){
+  const f=roamMhz(carrier,ext);
+  return '<span'+(ext!=null?' title="ext '+ext+'"':'')+'>'+carrier+(f?' · <span style="white-space:nowrap">'+f+'</span>':'')+'</span>';
+}
+function roamDot(online){return '<span style="color:'+(online?'var(--ok,#2a9d4b)':'var(--muted)')+'">●</span> ';}
+function roamServerCell(n,c){
+  if(!roamData.directory)return '<span style="color:var(--muted)">—</span>';
+  const e=roamMatch(n,c);
+  if(!e)return '<span style="color:var(--muted)">'+escHtml(t('roam_dir_unknown'))+'</span>';
+  let h=roamDot(e.online)+escHtml(e.id)+(e.online?'':' <span style="color:var(--muted)">'+escHtml(t('roam_offline'))+'</span>');
+  const warn=[];
+  if(roamListsCell(e,c)===false)warn.push(t('roam_not_mutual',{id:e.id}));
+  roamDiffs(n,c,e).forEach(x=>warn.push(x));
+  warn.forEach(w=>{h+='<div style="color:var(--warn,#c98a00);font-size:12px">⚠ '+escHtml(w)+'</div>';});
+  return h;
+}
+function roamRenderDirectory(){
+  const tb=document.getElementById('roam-dir-tbody');if(!tb||!roamData)return;
+  const dir=roamData.directory;
+  const offered=((roamData.brew||{}).extensions||[]).some(x=>x.name==='cell-directory'&&x.offered);
+  const pick=document.getElementById('rm-n-pick'),pickRow=document.getElementById('rm-n-pick-row');
+  if(pickRow)pickRow.style.display=dir&&dir.length?'':'none';
+  if(pick&&dir)pick.innerHTML='<option value="">—</option>'+dir.map((e,i)=>'<option value="'+i+'">'+escHtml(e.id+' · '+e.carrier+' · '+roamMhz(e.carrier,e.carrier_ext)+' · LA '+e.location_area+(e.online?'':' · '+t('roam_offline')))+'</option>').join('');
+  if(!dir){tb.innerHTML='';setText('roam-dir-note',t(offered?'roam_dir_wait':'roam_dir_off'));return;}
+  setText('roam-dir-note',t('roam_dir_count',{n:dir.length}));
+  const own=c=>c.primary||c.own_list?c.neighbours:[];
+  tb.innerHTML=dir.map((e,i)=>{
+    const by=roamData.cells.filter(c=>own(c).some(n=>roamMatch(n,c)===e)).map(c=>t('cells_cell',{n:c.id}));
+    const back=roamData.cells.filter(c=>roamListsCell(e,c)===true).map(c=>t('cells_cell',{n:c.id}));
+    // Already a neighbour of the selected cell: edit that entry instead of adding a second one.
+    const sel=roamCell(),listed=own(sel).findIndex(n=>roamMatch(n,sel)===e);
+    const lv=(e.rxlev_access_min_dbm!=null?e.rxlev_access_min_dbm+' dBm':'—')+' / '+(e.ms_txpwr_max_dbm!=null?e.ms_txpwr_max_dbm+' dBm':'—');
+    return '<tr><td data-label="'+escHtmlAttr(t('roam_th_global'))+'"><b>'+escHtml(e.id)+'</b></td>'+
+      '<td data-label="'+escHtmlAttr(t('roam_th_state'))+'"><span style="white-space:nowrap">'+roamDot(e.online)+escHtml(t(e.online?'roam_online':'roam_offline'))+'</span></td>'+
+      '<td data-label="'+escHtmlAttr(t('cells_carrier'))+'">'+roamCarrier(e.carrier,e.carrier_ext)+'</td>'+
+      '<td data-label="LA">'+e.location_area+'</td>'+
+      '<td data-label="'+escHtmlAttr(t('roam_th_levels'))+'">'+escHtml(lv)+'</td>'+
+      '<td data-label="'+escHtmlAttr(t('roam_th_listed_here'))+'">'+escHtml(by.length?by.join(', '):t('roam_dir_none'))+'</td>'+
+      '<td data-label="'+escHtmlAttr(t('roam_th_lists_us'))+'">'+escHtml(e.neighbours?(back.length?back.join(', '):t('roam_dir_none')):'—')+'</td>'+
+      '<td data-label="'+escHtmlAttr(t('th_actions'))+'">'+(listed>=0?'<button class="btn btn-sm" onclick="roamEditListed('+listed+')">'+escHtml(t('roam_edit'))+'</button>':'<button class="btn btn-sm" onclick="roamAddFromDir('+i+')">'+escHtml(t('roam_dir_add'))+'</button>')+'</td></tr>';
+  }).join('')||'<tr><td colspan="8" style="color:var(--muted)">'+escHtml(t('roam_dir_empty'))+'</td></tr>';
+}
+// Fill the open editor from directory cell i: carrier, band plan, LA, network when foreign, the
+// levels and services the cell broadcasts.
+function roamPick(i){
+  const e=roamData&&roamData.directory&&roamData.directory[parseInt(i,10)];if(!e)return;
+  vcSet('rm-n-carrier',String(e.carrier));vcSet('rm-n-ext',String(e.carrier_ext));vcSet('rm-n-la',String(e.location_area));
+  const foreign=e.mcc!==roamData.mcc||e.mnc!==roamData.mnc;
+  vcSet('rm-n-mcc',foreign?String(e.mcc):'');vcSet('rm-n-mnc',foreign?String(e.mnc):'');
+  vcSet('rm-n-rxlev',e.rxlev_access_min_dbm!=null?String((e.rxlev_access_min_dbm+125)/5):'');
+  vcSet('rm-n-txpwr',e.ms_txpwr_max_dbm!=null?String((e.ms_txpwr_max_dbm-10)/5):'');
+  if(e.service_details)document.querySelectorAll('#rm-n-services input[data-svc]').forEach(el=>{const k=el.getAttribute('data-svc');if(k in e.service_details)el.checked=!!e.service_details[k];});
+}
+function roamEditListed(j){
+  roamEdit(j);
+  const ed=document.getElementById('roam-editor');if(ed&&ed.scrollIntoView)ed.scrollIntoView({behavior:'smooth',block:'center'});
+}
+function roamAddFromDir(i){
+  roamNew();
+  const pick=document.getElementById('rm-n-pick');if(pick)pick.value=String(i);
+  roamPick(i);
+  const ed=document.getElementById('roam-editor');if(ed&&ed.scrollIntoView)ed.scrollIntoView({behavior:'smooth',block:'center'});
+}
+function roamToggleOwn(){
+  const c=roamCell(),own=document.getElementById('rm-own-list');
+  c.own_list=!!(own&&own.checked);
+  if(!c.own_list)c.neighbours=[];
+  roamCloseEditor();roamRenderNeighbours();
+}
+function roamEdit(i){
+  const c=roamCell(),n=c.neighbours[i];if(!n)return;
+  roamEditIdx=i;roamFillEditor(n);
+  setText('roam-editor-title',t('roam_edit_title',{n:n.cell_identifier_ca}));
+}
+function roamNew(){
+  const c=roamCell();
+  if(!c.primary&&!c.own_list){c.own_list=true;c.neighbours=[];}
+  const used=c.neighbours.map(n=>n.cell_identifier_ca).concat((c.siblings||[]).map(s=>s.cell_identifier_ca));
+  let id=0;while(used.includes(id)&&id<31)id++;
+  roamEditIdx=-1;
+  roamFillEditor({cell_identifier_ca:id,cell_reselection_types_supported:2,neighbor_cell_synchronized:false,cell_load_ca:0,main_carrier_number:'',
+    bs_service_details:Object.assign({},roamData.service_details)});
+  setText('roam-editor-title',t('roam_new_title'));
+  roamRenderNeighbours();
+}
+function roamFillEditor(n){
+  const v=x=>x==null?'':String(x);
+  vcSet('rm-n-id',v(n.cell_identifier_ca));vcSet('rm-n-carrier',v(n.main_carrier_number));vcSet('rm-n-ext',v(n.main_carrier_number_extension));
+  vcSet('rm-n-types',v(n.cell_reselection_types_supported));vcSet('rm-n-load',v(n.cell_load_ca));vcSet('rm-n-la',v(n.location_area));
+  vcSet('rm-n-mcc',v(n.mcc));vcSet('rm-n-mnc',v(n.mnc));vcSet('rm-n-rxlev',v(n.minimum_rx_access_level));vcSet('rm-n-txpwr',v(n.maximum_ms_transmit_power));
+  const sync=document.getElementById('rm-n-sync');if(sync)sync.checked=!!n.neighbor_cell_synchronized;
+  const pick=document.getElementById('rm-n-pick');if(pick)pick.value='';
+  const d=n.bs_service_details||{};
+  const box=document.getElementById('rm-n-services');
+  if(box)box.innerHTML=ROAM_SERVICES.map(k=>'<label style="cursor:pointer;white-space:nowrap"><input type="checkbox" data-svc="'+k+'"'+(d[k]?' checked':'')+'> '+escHtml(t('roam_svc_'+k))+'</label>').join('');
+  const ed=document.getElementById('roam-editor');if(ed)ed.style.display='';
+}
+function roamCloseEditor(){
+  roamEditIdx=null;
+  const ed=document.getElementById('roam-editor');if(ed)ed.style.display='none';
+}
+function roamApplyEntry(){
+  const c=roamCell();
+  const num=id=>{const el=document.getElementById(id);if(!el||el.value==='')return null;const n=parseInt(el.value,10);return isFinite(n)?n:null;};
+  const n={
+    cell_identifier_ca:num('rm-n-id'),cell_reselection_types_supported:num('rm-n-types'),
+    neighbor_cell_synchronized:!!(document.getElementById('rm-n-sync')||{}).checked,
+    cell_load_ca:num('rm-n-load'),main_carrier_number:num('rm-n-carrier'),
+  };
+  if(n.cell_identifier_ca==null||n.main_carrier_number==null){setText('roam-msg',t('roam_need_id_carrier'));return;}
+  const opt={main_carrier_number_extension:'rm-n-ext',location_area:'rm-n-la',mcc:'rm-n-mcc',mnc:'rm-n-mnc',minimum_rx_access_level:'rm-n-rxlev',maximum_ms_transmit_power:'rm-n-txpwr'};
+  Object.keys(opt).forEach(k=>{const x=num(opt[k]);if(x!=null)n[k]=x;});
+  const d={};
+  document.querySelectorAll('#rm-n-services input[data-svc]').forEach(el=>{if(el.checked)d[el.getAttribute('data-svc')]=true;});
+  n.bs_service_details=d;
+  const old=roamEditIdx!=null&&roamEditIdx>=0?c.neighbours[roamEditIdx]:null;
+  if(old){
+    // Keep fields the page does not edit.
+    ['subscriber_class','timeshare_cell_information_or_security_parameters','tdma_frame_offset'].forEach(k=>{if(old[k]!=null)n[k]=old[k];});
+    c.neighbours[roamEditIdx]=n;
+  }else c.neighbours.push(n);
+  c.own_list=true;
+  setText('roam-msg',t('roam_unsaved'));
+  roamCloseEditor();roamRenderNeighbours();
+}
+function roamDelete(i){
+  const c=roamCell();c.neighbours.splice(i,1);
+  setText('roam-msg',t('roam_unsaved'));
+  roamCloseEditor();roamRenderNeighbours();
+}
+function roamDbmHint(){
+  const rx=document.getElementById('rm-rxlev'),f=document.getElementById('rm-fast-th'),s=document.getElementById('rm-slow-th');
+  if(!rx||!f||!s)return;
+  const base=rx.value===''?-110:parseInt(rx.value,10),fast=parseInt(f.value,10)||0,slow=fast+(parseInt(s.value,10)||0);
+  setText('roam-dbm-hint',t('roam_dbm_hint',{fail:base,fast:base+fast,slow:base+slow}));
+}
+// Multi Network switch next to the Networks heading: [multi_network] enabled. While on, the
+// cells announce migration by themselves (TS 100 392-2 18.5.2.1), so the migration box follows.
+function roamMnShow(on){
+  const sw=document.getElementById('rm-mn-enabled');if(sw)sw.checked=on;
+  const st=document.getElementById('rm-mn-state');if(st){st.dataset.i18n=on?'roam_mn_on':'roam_mn_off';st.textContent=t(st.dataset.i18n);}
+  const mig=document.getElementById('rm-migration');
+  if(mig&&roamData){mig.checked=!!roamData.migration||on;mig.disabled=on;mig.title=on?t('cfg_migration_auto'):'';}
+}
+async function roamMnToggle(el){
+  const on=!!el.checked;
+  roamMnShow(on);
+  if(!await roamSave({multi_network_enabled:on}))roamMnShow(!!(roamData&&roamData.multi_network_enabled));
+}
+async function roamSave(extra){
+  if(!roamData)return false;
+  const num=id=>{const el=document.getElementById(id);if(!el||el.value==='')return null;const n=parseInt(el.value,10);return isFinite(n)?n:null;};
+  const body={
+    reselect:{fast_threshold_db:num('rm-fast-th'),slow_threshold_db:num('rm-slow-th'),fast_hysteresis_db:num('rm-fast-hy'),slow_hysteresis_db:num('rm-slow-hy')},
+    rxlev_access_min_dbm:num('rm-rxlev'),
+    migration:(()=>{const m=document.getElementById('rm-migration')||{};return m.disabled?!!(roamData&&roamData.migration):!!m.checked;})(),
+    presence_check_secs:num('rm-presence')||0,
+    cells:roamData.cells.map(c=>{
+      const e={id:c.id,location_area:num('rm-la-'+c.id),neighbours:c.primary?c.neighbours:(c.own_list?c.neighbours:null)};
+      const net=(document.getElementById('rm-cnet-'+c.id)||{}).value;
+      if(net&&net!==c.network)e.network=net;
+      return e;
+    }),
+  };
+  if(roamNetEdits.length)body.networks=roamNetEdits;
+  if(extra&&typeof extra==='object'&&!(extra instanceof Event))Object.assign(body,extra);
+  if(body.cells[0].location_area==null){setText('roam-msg',t('roam_need_la'));return false;}
+  if(!confirm(t('roam_confirm_save')))return false;
+  try{
+    const r=await fetch('/api/roaming',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    setText('roam-msg',await r.text());
+    return r.ok;
+  }catch(e){setText('roam-msg',String(e));return false;}
+}
+['rm-rxlev','rm-fast-th','rm-slow-th'].forEach(id=>document.addEventListener('change',e=>{if(e.target&&e.target.id===id)roamDbmHint();}));
 function cellsAdd(){
   const device=(document.getElementById('cells-device')||{}).value||'';
   const carrier=parseInt((document.getElementById('cells-carrier')||{}).value,10);
@@ -18184,6 +18892,8 @@ function cellsAdd(){
   if(!confirm(t('cells_confirm_add')))return;
   const body={device:device.trim(),main_carrier:carrier};
   if(ccRaw!=='')body.colour_code=parseInt(ccRaw,10);
+  const laRaw=(document.getElementById('cells-la')||{}).value;
+  if(laRaw!=='')body.location_area=parseInt(laRaw,10);
   cellsPost('/api/cells/add',body);
 }
 function cellsRemove(id){

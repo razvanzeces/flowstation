@@ -191,6 +191,16 @@ fn parse_digest_challenge(header: &str) -> HashMap<String, String> {
 
 /// Build an Authorization header for HTTP Digest Auth
 /// Find the first occurrence of `needle` in `hay`.
+/// Split an `X-Brew-Extensions` header value ("bts-info, handover-v1") into its names.
+fn parse_brew_extensions(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || hay.len() < needle.len() {
         return None;
@@ -320,6 +330,8 @@ pub struct WebSocketTransport {
     ping_seq: u64,
     /// Brew protocol version reported by server in last HTTP connect response (0 = v0/unknown)
     server_brew_version: u8,
+    /// Brew extensions offered by the server in the last WebSocket upgrade response
+    server_brew_extensions: Vec<String>,
 }
 
 impl WebSocketTransport {
@@ -334,6 +346,7 @@ impl WebSocketTransport {
             last_ping_id: None,
             ping_seq: 0,
             server_brew_version: 0,
+            server_brew_extensions: Vec::new(),
         }
     }
 
@@ -557,6 +570,22 @@ impl NetworkTransport for WebSocketTransport {
             ),
         }
 
+        // Brew extensions (not part of Brew as TetraPack / BrandMeister speak it) are only used
+        // when the server offers them on this very upgrade; a reconnect to another server starts
+        // from none.
+        self.server_brew_extensions = response
+            .headers()
+            .get("x-brew-extensions")
+            .and_then(|v| v.to_str().ok())
+            .map(parse_brew_extensions)
+            .unwrap_or_default();
+        if !self.server_brew_extensions.is_empty() {
+            tracing::info!(
+                "WebSocketTransport: server offers Brew extensions {:?}",
+                self.server_brew_extensions
+            );
+        }
+
         tracing::debug!("WebSocketTransport: WebSocket connected");
 
         // Set non-blocking for polling and TCP_NODELAY as recommended
@@ -745,5 +774,21 @@ impl NetworkTransport for WebSocketTransport {
 
     fn server_brew_version(&self) -> u8 {
         self.server_brew_version
+    }
+
+    fn server_brew_extensions(&self) -> &[String] {
+        &self.server_brew_extensions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_brew_extensions;
+
+    #[test]
+    fn brew_extensions_header_is_split_into_names() {
+        assert_eq!(parse_brew_extensions("bts-info"), vec!["bts-info"]);
+        assert_eq!(parse_brew_extensions(" bts-info , handover-v1,"), vec!["bts-info", "handover-v1"]);
+        assert!(parse_brew_extensions("").is_empty());
     }
 }

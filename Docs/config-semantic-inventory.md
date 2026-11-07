@@ -42,6 +42,7 @@ Apply = combinar Cell × Brew opcional → fusionar en `config.toml` → validar
 | `cell_info.freq_offset` | i16 | req | 0 / ±6250 / 12500 | Sí |
 | `cell_info.reverse_operation` | bool | req | UL por encima de DL | Sí |
 | `cell_info.ms_txpwr_max_cell` | u8 | 4 | Potencia máx MS 0–7 | Sí |
+| `cell_info.rxlev_access_min_dbm` | i16 | -110 | RXLEV_ACCESS_MIN (dBm, tabla 21.65) −125…−50 en pasos de 5 | Sí |
 | `cell_info.colour_code` | u8 | 0 | Colour code SYNC | Sí |
 
 **Validación clave:** `tx_freq`/`rx_freq` deben coincidir con DL/UL derivados de `FreqInfo` (banda + carrier + duplex ± reverse).
@@ -121,5 +122,5 @@ Apply = combinar Cell × Brew opcional → fusionar en `config.toml` → validar
 1. Backend Soapy coherente.
 2. `secondary_carrier ≠ main_carrier`.
 3. Frecuencias Soapy ↔ `FreqInfo`; dual-carrier passband + sample_rate.
-4. `ms_txpwr_max_cell` 0–7; timezone IANA; ≤7 vecinos únicos.
+4. `ms_txpwr_max_cell` 0–7; `rxlev_access_min_dbm` −125…−50 en pasos de 5; timezone IANA; ≤7 vecinos únicos.
 5. Claves desconocidas → reject en parsing.

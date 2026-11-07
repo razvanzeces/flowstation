@@ -24,9 +24,9 @@ use toml::Value;
 
 use crate::bluestation::{CellInfoDto, CfgCellInfo, CfgSoapySdr, SoapySdrDto, cell_dto_to_cfg, soapy_dto_to_cfg, soapy_dto_unknown_keys};
 
-/// `[cell_info]` keys that may not be overridden per cell. Neighbour lists are derived from the
-/// sibling cells, and SDS remote control is a station-wide function owned by the primary cell.
-const NON_OVERRIDABLE_CELL_KEYS: &[&str] = &["neighbor_cells_ca", "sds_command_control"];
+/// `[cell_info]` keys that may not be overridden per cell: SDS remote control is a station-wide
+/// function owned by the primary cell.
+const NON_OVERRIDABLE_CELL_KEYS: &[&str] = &["sds_command_control"];
 
 /// One additional cell (SDR) of a multi-cell station.
 #[derive(Debug, Clone)]
@@ -75,7 +75,14 @@ pub fn parse_extra_cells(raw_cells: Option<Value>, primary_cell_info: &toml::Tab
         }
 
         let mut merged = primary_cell_info.clone();
-        for (key, value) in dto.cell_info.unwrap_or_default() {
+        let mut overrides = dto.cell_info.unwrap_or_default();
+        // A cell's own neighbour list (`[[cells.cell_info.neighbor_cells_ca]]`); without one it
+        // advertises only its sibling cells (added by `add_sibling_neighbours`).
+        let neighbours = match overrides.remove("neighbor_cells_ca") {
+            Some(v) => crate::bluestation::parsing::parse_neighbour_list(v, &format!("cells[{i}].cell_info.neighbor_cells_ca"))?,
+            None => Vec::new(),
+        };
+        for (key, value) in overrides {
             if NON_OVERRIDABLE_CELL_KEYS.contains(&key.as_str()) {
                 return Err(format!("cells[{i}].cell_info.{key} cannot be set per cell"));
             }
@@ -99,9 +106,11 @@ pub fn parse_extra_cells(raw_cells: Option<Value>, primary_cell_info: &toml::Tab
             None => None,
         };
 
+        let mut cell = cell_dto_to_cfg(cell_dto);
+        cell.neighbor_cells_ca = neighbours;
         cells.push(CfgExtraCell {
             id: CellId(dto.id),
-            cell: cell_dto_to_cfg(cell_dto),
+            cell,
             soapysdr,
             network: dto.network,
         });
@@ -253,6 +262,10 @@ colour_code = 2
         assert!(cell.is_multi_cell() && cfg.is_multi_cell());
         assert_eq!(cell.net.mcc, cfg.net.mcc);
         cell.validate().unwrap();
+        let primary = cfg.cell.main_carrier;
+        assert!(cfg.is_station_carrier(primary) && cfg.is_station_carrier(1525), "the primary knows its siblings");
+        assert!(cell.is_station_carrier(primary) && cell.is_station_carrier(1525), "an extra cell knows its siblings");
+        assert!(!cell.is_station_carrier(1600) && !cfg.is_station_carrier(1600), "another station's carrier");
 
         assert!(cfg.for_extra_cell(CellId(2)).is_none());
     }
@@ -294,8 +307,59 @@ location_area = 2
         assert_eq!(added.cell_reselection_types_supported, 3, "announced and unannounced");
         assert_eq!(added.main_carrier_number_extension, None, "same band plan");
         assert_eq!(added.maximum_ms_transmit_power, None, "same max power");
+        assert_eq!(added.minimum_rx_access_level, None, "same RX access level");
         assert_eq!(cfg.cell.neighbor_cells_ca[0].cell_reselection_types_supported, 1, "configured entry untouched");
         assert_eq!(cfg.for_extra_cell(CellId(2)).unwrap().cell.neighbor_cells_ca.len(), 2);
+    }
+
+    #[test]
+    fn an_extra_cell_may_have_its_own_neighbour_list() {
+        let mut cfg = parse(
+            r#"
+[[cell_info.neighbor_cells_ca]]
+cell_identifier_ca = 0
+cell_reselection_types_supported = 2
+neighbor_cell_synchronized = false
+cell_load_ca = 0
+main_carrier_number = 1530
+
+[[cells]]
+id = 1
+[cells.cell_info]
+main_carrier = 1525
+[[cells.cell_info.neighbor_cells_ca]]
+cell_identifier_ca = 4
+cell_reselection_types_supported = 1
+neighbor_cell_synchronized = false
+cell_load_ca = 0
+main_carrier_number = 1540
+location_area = 7
+[cells.cell_info.neighbor_cells_ca.bs_service_details]
+registration = true
+voice_service = true
+"#,
+        )
+        .unwrap();
+        cfg.add_sibling_neighbours();
+        cfg.validate().unwrap();
+        let carriers = |c: &crate::bluestation::CfgCellInfo| c.neighbor_cells_ca.iter().map(|n| n.main_carrier_number).collect::<Vec<_>>();
+        assert_eq!(carriers(&cfg.cell), vec![1530, 1525], "primary: its own list plus the sibling");
+        assert_eq!(carriers(&cfg.extra_cells[0].cell), vec![1540, 1521], "cell 1: its own list plus the sibling");
+        let own = &cfg.extra_cells[0].cell.neighbor_cells_ca[0];
+        assert_eq!((own.cell_identifier_ca, own.location_area), (4, Some(7)));
+        assert!(own.bs_service_details.as_ref().is_some_and(|d| d.registration && d.voice_service && !d.migration));
+    }
+
+    #[test]
+    fn a_bad_neighbour_list_of_an_extra_cell_is_rejected() {
+        let entry = |id: u8, carrier: u16| {
+            format!("[[cells.cell_info.neighbor_cells_ca]]\ncell_identifier_ca = {id}\ncell_reselection_types_supported = 1\nneighbor_cell_synchronized = false\ncell_load_ca = 0\nmain_carrier_number = {carrier}\n")
+        };
+        let base = "[[cells]]\nid = 1\n[cells.cell_info]\nmain_carrier = 1525\n";
+        let dup = format!("{base}{}{}", entry(1, 1540), entry(1, 1541));
+        assert!(parse(&dup).unwrap().validate().unwrap_err().contains("duplicate cell_identifier_ca"));
+        let own = format!("{base}{}", entry(1, 1525));
+        assert!(parse(&own).unwrap().validate().unwrap_err().contains("own main_carrier"));
     }
 
     #[test]
@@ -321,6 +385,28 @@ location_area = 2
         assert_eq!(back.main_carrier_number, 1521);
         assert_eq!(back.main_carrier_number_extension, Some((4 << 6) | (0 << 4) | (4 << 1)), "primary's plan, offset 0");
         cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn sibling_with_another_rx_access_level_is_described_to_radios() {
+        // Primary -75 dBm (code 10, table 21.65), the extra cell keeps the -110 dBm default
+        // (code 3) by overriding the inherited value.
+        let mut cfg = parse(
+            "rxlev_access_min_dbm = -75\n[[cells]]\nid = 1\n[cells.cell_info]\nmain_carrier = 1525\nrxlev_access_min_dbm = -110\n",
+        )
+        .unwrap();
+        cfg.add_sibling_neighbours();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.cell.neighbor_cells_ca[0].minimum_rx_access_level, Some(3), "18.5.12");
+        assert_eq!(cfg.extra_cells[0].cell.neighbor_cells_ca[0].minimum_rx_access_level, Some(10));
+    }
+
+    #[test]
+    fn extra_cell_inherits_rx_access_level_and_bad_override_is_rejected() {
+        let cfg = parse("rxlev_access_min_dbm = -80\n[[cells]]\nid = 1\n[cells.cell_info]\nmain_carrier = 1525\n").unwrap();
+        assert_eq!(cfg.extra_cells[0].cell.rxlev_access_min(), 9, "inherited from [cell_info]");
+        let cfg = parse("[[cells]]\nid = 1\n[cells.cell_info]\nmain_carrier = 1525\nrxlev_access_min_dbm = -77\n").unwrap();
+        assert!(cfg.validate().unwrap_err().contains("rxlev_access_min_dbm"));
     }
 
     #[test]

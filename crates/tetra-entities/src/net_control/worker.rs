@@ -109,28 +109,11 @@ impl<T: NetworkTransport> ControlWorker<T> {
         }
     }
 
-    /// Determine which entity should handle a given command.
-    /// Placeholder routing — will be extended as real commands are defined.
+    /// Determine which entity should handle a given command. The mapping lives on
+    /// `ControlCommand` so every command ingress (remote worker, dashboard, etc.) uses
+    /// the same routing policy.
     fn route_control_command(command: &ControlCommand) -> TetraEntity {
-        match command {
-            ControlCommand::SendSds { .. } => TetraEntity::Cmce,
-            ControlCommand::SendRawSdsType4 { .. } => TetraEntity::Cmce,
-            ControlCommand::KickMs { .. } => TetraEntity::Cmce,
-            // DGNA is a Mobility Management procedure: group attach/detach state and the
-            // D-ATTACH/DETACH GROUP IDENTITY send path both live in the MM entity.
-            ControlCommand::Dgna { .. } => TetraEntity::Mm,
-            // SCK OTAR is an MM procedure (D-OTAR SCK PROVIDE), keyed by the subscriber's K.
-            ControlCommand::OtarSck { .. } => TetraEntity::Mm,
-            ControlCommand::RestartService => TetraEntity::Cmce,
-            ControlCommand::ShutdownService => TetraEntity::Cmce,
-            ControlCommand::AddLiveSds { .. } => TetraEntity::Cmce,
-            ControlCommand::DeleteLiveSds { .. } => TetraEntity::Cmce,
-            ControlCommand::ClearLiveSds => TetraEntity::Cmce,
-            ControlCommand::ClearEmergency { .. } => TetraEntity::Cmce,
-            ControlCommand::AmbienceListen { .. } => TetraEntity::Cmce,
-            ControlCommand::CommandA { .. } => TetraEntity::Mm,
-            ControlCommand::TestCmdB { .. } => TetraEntity::Cmce,
-        }
+        command.target_entity()
     }
 
     /// Drain pending responses from all entity dispatchers and send them
@@ -188,6 +171,25 @@ mod tests {
     #[test]
     fn test_route_command_a_to_mm() {
         let target = ControlWorker::<MockTransport>::route_control_command(&ControlCommand::CommandA { handle: 1, parameter: 1 });
+        assert_eq!(target, TetraEntity::Mm);
+    }
+
+    #[test]
+    fn test_route_otar_sck_to_mm() {
+        let target =
+            ControlWorker::<MockTransport>::route_control_command(&ControlCommand::OtarSck { issi: 200 });
+        assert_eq!(target, TetraEntity::Mm);
+    }
+
+    #[test]
+    fn test_route_dgna_to_mm() {
+        let target = ControlWorker::<MockTransport>::route_control_command(&ControlCommand::Dgna {
+            issi: 200,
+            gssi: 1001,
+            mnemonic: None,
+            attachment_mode: 0,
+            attach: true,
+        });
         assert_eq!(target, TetraEntity::Mm);
     }
 

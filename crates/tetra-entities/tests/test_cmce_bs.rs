@@ -17,7 +17,7 @@ use tetra_pdus::cmce::pdus::{
     u_setup::USetup, u_tx_ceased::UTxCeased, u_tx_demand::UTxDemand,
 };
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
-use tetra_saps::control::call_control::{CallControl, NetworkCircuitCall};
+use tetra_saps::control::call_control::{CallControl, NetworkCircuitCall, NetworkRestoredCall};
 use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 use tetra_saps::control::enums::communication_type::CommunicationType;
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
@@ -325,11 +325,12 @@ fn build_u_disconnect_msg(sender_issi: u32, call_id: u16) -> SapMsg {
     lcmc_ind(sender_issi, sdu)
 }
 
-/// Helper: build a U-CALL RESTORE for `call_id`, optionally asking for the floor.
+/// Helper: build a U-CALL RESTORE for `call_id`, optionally asking for the floor ("request to
+/// transmit/send data" 0 asks to transmit, 1 lets another MS transmit, table 14.74).
 fn build_u_call_restore_msg(sender_issi: u32, call_id: u16, other_party_ssi: u32, request_to_transmit: bool) -> SapMsg {
     let u_call_restore = UCallRestore {
         call_identifier: call_id,
-        request_to_transmit_send_data: request_to_transmit,
+        request_to_transmit_send_data: !request_to_transmit,
         other_party_type_identifier: 1, // SSI
         other_party_short_number_address: None,
         other_party_ssi: Some(other_party_ssi as u64),
@@ -364,6 +365,25 @@ fn dl_pdu_type(sdu: &BitBuffer) -> Option<CmcePduTypeDl> {
     CmcePduTypeDl::try_from(sdu.peek_bits(5)?).ok()
 }
 
+/// The D-CALL RESTORE sent to `issi` and the (carrier, timeslot) of the channel allocation that
+/// goes with it, if any.
+fn d_call_restore_to(msgs: &[SapMsg], issi: u32) -> Option<(DCallRestore, Option<(u16, usize)>)> {
+    msgs.iter().find_map(|msg| {
+        let SapMsgInner::LcmcMleUnitdataReq(prim) = &msg.msg else {
+            return None;
+        };
+        if msg.dest != TetraEntity::Mle || prim.main_address.ssi != issi || dl_pdu_type(&prim.sdu) != Some(CmcePduTypeDl::DCallRestore) {
+            return None;
+        }
+        let mut sdu = prim.sdu.clone();
+        let pdu = DCallRestore::from_bitbuf(&mut sdu).expect("Failed to parse DCallRestore");
+        let chan = prim.chan_alloc.as_ref().map(|c| {
+            (c.carrier.expect("carrier"), c.timeslots.iter().position(|&t| t).expect("timeslot") + 1)
+        });
+        Some((pdu, chan))
+    })
+}
+
 fn find_lcmc_req(msgs: &[SapMsg], address_issi: u32, pdu_type: CmcePduTypeDl) -> Option<(BitBuffer, Option<UlDlAssignment>)> {
     msgs.iter().find_map(|msg| {
         if msg.dest != TetraEntity::Mle {
@@ -389,6 +409,24 @@ fn first_d_setup_call_id(msgs: &[SapMsg], called_issi: u32) -> u16 {
     let (mut sdu, _) = find_lcmc_req(msgs, called_issi, CmcePduTypeDl::DSetup).expect("Expected D-SETUP to called ISSI");
     let d_setup = DSetup::from_bitbuf(&mut sdu).expect("Failed to parse DSetup");
     d_setup.call_identifier
+}
+
+/// (carrier, timeslot) of the channel allocation sent with the first D-SETUP to `gssi`.
+fn d_setup_channel(msgs: &[SapMsg], gssi: u32) -> (u16, usize) {
+    msgs.iter()
+        .find_map(|msg| match &msg.msg {
+            SapMsgInner::LcmcMleUnitdataReq(prim)
+                if msg.dest == TetraEntity::Mle
+                    && prim.main_address.ssi == gssi
+                    && dl_pdu_type(&prim.sdu) == Some(CmcePduTypeDl::DSetup) =>
+            {
+                prim.chan_alloc.as_ref().map(|c| {
+                    (c.carrier.expect("carrier"), c.timeslots.iter().position(|&t| t).expect("timeslot") + 1)
+                })
+            }
+            _ => None,
+        })
+        .expect("D-SETUP with channel allocation")
 }
 
 fn connected_simplex_individual_call(calling_issi: u32, called_issi: u32) -> (ComponentTest, u16, Vec<SapMsg>) {
@@ -2648,9 +2686,12 @@ fn test_group_call_restore_grant_notifies_umac_floor_grant() {
     test.run_stack(Some(1));
     let msgs = test.dump_sinks();
 
-    let (mut sdu, _) = find_lcmc_req(&msgs, TEST_ISSI, CmcePduTypeDl::DCallRestore).expect("Expected D-CALL RESTORE to the restoring MS");
+    let (mut sdu, chan) =
+        find_lcmc_req(&msgs, TEST_ISSI, CmcePduTypeDl::DCallRestore).expect("Expected D-CALL RESTORE to the restoring MS");
     let d_call_restore = DCallRestore::from_bitbuf(&mut sdu).expect("Failed to parse DCallRestore");
     assert_eq!(d_call_restore.call_identifier, call_id);
+    assert_eq!(d_call_restore.new_call_identifier, None, "same call identifier, no new one");
+    assert!(chan.is_some(), "U-plane goes on: a channel allocation must accompany it (clause 14.5.2.2.4)");
     assert_eq!(
         d_call_restore.transmission_grant,
         TransmissionGrant::Granted.into_raw() as u8,
@@ -2979,6 +3020,73 @@ fn test_affiliate_during_active_group_call_emits_late_entry_snapshot() {
     );
 }
 
+/// A radio that arrives on a cell during a group call is registered first (answer to the
+/// station's D-LOCATION UPDATE COMMAND, which already joins it to the call), then does its own
+/// roaming registration and attaches its groups again (clause 16.4.1.1 a)). The late-entry
+/// D-SETUP sent before that is ignored by the radio, so the re-attach must repeat it at once
+/// instead of leaving the radio until the periodic one (field test 2026-11-02, F1).
+#[test]
+fn test_reattach_during_active_group_call_repeats_late_entry_d_setup() {
+    debug::setup_logging_verbose();
+
+    let gssi = 334;
+    let issi = 2200704;
+    let brew_uuid = uuid::Uuid::parse_str("c1a1e03c-0489-4106-a246-5ccddf75e65b").unwrap();
+    let mut test = ComponentTest::from_config(brew_test_config(), Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+
+    // Re-attach without a call on the group: nothing to send.
+    register_subscriber(&mut test, issi, gssi);
+    let affiliate = || SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Mm,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
+            issi,
+            groups: vec![gssi],
+            action: BrewSubscriberAction::Affiliate,
+        }),
+    };
+    test.submit_message(affiliate());
+    test.run_stack(Some(1));
+    assert_eq!(count_d_setups(&test.dump_sinks()), 0, "no call on the group, no D-SETUP");
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
+            brew_uuid,
+            source_issi: 2200107,
+            dest_gssi: gssi,
+            priority: 1,
+        }),
+    });
+    test.run_stack(Some(2));
+    let mut ready = test.dump_sinks();
+    for r in extract_d_setup_reporters(&mut ready) {
+        if r.get_state() == TxState::Pending {
+            r.mark_transmitted();
+        }
+    }
+
+    // The radio attaches the group it is already counted in once more.
+    test.submit_message(affiliate());
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(count_d_setups(&msgs) > 0, "re-attach during the call must repeat the late-entry D-SETUP at once");
+    assert!(
+        !msgs.iter().any(|m| matches!(
+            &m.msg,
+            SapMsgInner::CmceCallControl(CallControl::OngoingGroupCall { .. } | CallControl::GroupListenersAvailable { .. })
+        )),
+        "a re-attach is no new listener for Brew or the LST console"
+    );
+}
+
 /// Mid-QSO deaffiliate of the last listener must Hold (not End) so re-Affiliate can late-enter.
 #[test]
 fn test_deaffiliate_last_listener_holds_network_call() {
@@ -3070,9 +3178,11 @@ fn test_site_linked_restore_from_sibling_cell_matches_group() {
     test.run_stack(Some(1));
     let msgs = test.dump_sinks();
 
-    let (mut sdu, _) = find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).expect("D-CALL RESTORE, not D-RELEASE");
-    let restore = DCallRestore::from_bitbuf(&mut sdu).expect("Failed to parse DCallRestore");
-    assert_eq!(restore.call_identifier, call_id, "the radio adopts this cell's call id");
+    let (restore, chan) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE, not D-RELEASE");
+    // Clause 14.5.2.2.4: the identifier the radio knows, and this cell's as the new one.
+    assert_eq!(restore.call_identifier, sibling_call_id);
+    assert_eq!(restore.new_call_identifier, Some(call_id as u64), "the radio adopts this cell's call id");
+    assert!(chan.is_some(), "sent to the call's traffic channel");
 }
 
 /// An MS that reselected mid individual (private) call restores with the sibling cell's call id;
@@ -3110,7 +3220,9 @@ fn test_site_linked_restore_from_sibling_cell_matches_individual() {
     let (mut sdu, _) = find_lcmc_req(&msgs, CALLED, CmcePduTypeDl::DCallRestore)
         .expect("D-CALL RESTORE, not D-RELEASE — the private call is matched by the ISSI pair");
     let restore = DCallRestore::from_bitbuf(&mut sdu).expect("parse DCallRestore");
-    assert_eq!(restore.call_identifier, call_id, "the radio adopts this cell's local call id");
+    // Clause 14.5.1.2.4 / table 14.6: the identifier the radio restores, this cell's as the new one.
+    assert_eq!(restore.call_identifier, sibling_call_id);
+    assert_eq!(restore.new_call_identifier, Some(call_id as u64), "the radio adopts this cell's local call id");
 }
 
 /// Multi-cell individual-call handover, target side: the site switch pre-provisions a restoring
@@ -3169,25 +3281,27 @@ fn test_site_handover_preprovisions_individual_leg_and_restores_with_channel() {
     let (mut sdu, chan) = find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore)
         .expect("D-CALL RESTORE, not D-RELEASE — the pre-provisioned leg is matched by the ISSI pair");
     let restore = DCallRestore::from_bitbuf(&mut sdu).expect("parse DCallRestore");
-    assert_ne!(
-        restore.call_identifier, SIBLING_CALL_ID,
-        "the radio is moved onto this cell's pre-provisioned call id, not the sibling cell's"
-    );
+    // Clause 14.5.1.2.4 / table 14.6: the identifier the radio restores, this cell's as the new one.
+    assert_eq!(restore.call_identifier, SIBLING_CALL_ID);
+    let new_id = restore.new_call_identifier.expect("this cell's call id as the new call identifier");
+    assert_ne!(new_id, SIBLING_CALL_ID as u64, "the radio is moved onto this cell's pre-provisioned call id");
     assert!(
         chan.is_some(),
         "cross-cell restore must carry a channel allocation to move the MS onto this cell's traffic channel"
     );
 }
 
-/// Without site linking an unknown call identifier is still rejected (single-cell behaviour).
+/// Without Brew an unknown call identifier is still rejected (single-cell behaviour): no other
+/// cell shares the call.
 #[test]
-fn test_restore_with_unknown_call_id_rejected_when_not_site_linked() {
+fn test_restore_with_unknown_call_id_rejected_without_brew() {
     debug::setup_logging_verbose();
 
-    let mut test = ComponentTest::from_config(brew_test_config(), Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    let config = ComponentTest::get_default_test_config(StackMode::Bs);
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
     test.populate_entities(
         vec![TetraEntity::Cmce],
-        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew, TetraEntity::Mm],
     );
 
     register_subscriber(&mut test, TEST_ISSI, TEST_GSSI);
@@ -3199,6 +3313,720 @@ fn test_restore_with_unknown_call_id_rejected_when_not_site_linked() {
     test.run_stack(Some(1));
     let msgs = test.dump_sinks();
     assert!(find_lcmc_req(&msgs, 1_000_777, CmcePduTypeDl::DCallRestore).is_none());
+    assert!(find_lcmc_req(&msgs, 1_000_777, CmcePduTypeDl::DRelease).is_some(), "rejected at once");
+    assert!(!msgs.iter().any(|m| matches!(m.msg, SapMsgInner::MmRequestLocationUpdate { .. })));
+}
+
+// ── Restore after reselection between separate stations on one Brew network ──────────────────
+// TS 100 392-2 clause 18.4.1.4.7 (U-RESTORE) / 14.7.2.2 (U-CALL RESTORE): the MS restores its
+// group call on the new cell; clause 14.7.1.3 lets D-CALL RESTORE give it this cell's call id.
+
+const MOVER: u32 = 1_000_777;
+
+fn brew_restore_test() -> ComponentTest {
+    let mut test = ComponentTest::from_config(brew_test_config(), Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew, TetraEntity::Mm],
+    );
+    test
+}
+
+fn network_call_start(test: &mut ComponentTest, brew_uuid: uuid::Uuid, gssi: u32) {
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
+            brew_uuid,
+            source_issi: 2_200_107,
+            dest_gssi: gssi,
+            priority: 0,
+        }),
+    });
+}
+
+fn mm_update(test: &mut ComponentTest, issi: u32, groups: Vec<u32>, action: BrewSubscriberAction) {
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Mm,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate { issi, groups, action }),
+    });
+}
+
+fn held(msgs: &[SapMsg], gssi: u32) -> bool {
+    msgs.iter().any(|m| {
+        matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::NetworkCallHold { dest_gssi, .. }) if *dest_gssi == gssi)
+    })
+}
+
+fn lu_requested(msgs: &[SapMsg], issi: u32) -> bool {
+    msgs.iter()
+        .any(|m| m.dest == TetraEntity::Mm && matches!(m.msg, SapMsgInner::MmRequestLocationUpdate { issi: i } if i == issi))
+}
+
+/// Separate Brew station, group call already running here (another local radio listens): the MS
+/// brings the other station's call id and is restored into the local call by GSSI.
+#[test]
+fn test_brew_restore_from_other_station_matches_group() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+
+    register_subscriber(&mut test, TEST_ISSI, TEST_GSSI);
+    test.submit_message(build_u_setup_msg(TEST_ISSI, TEST_GSSI));
+    test.run_stack(Some(1));
+    let call_id = first_d_setup_call_id(&test.dump_sinks(), TEST_GSSI);
+
+    mm_update(&mut test, MOVER, vec![], BrewSubscriberAction::Register);
+    test.run_stack(Some(1));
+    test.dump_sinks();
+    test.config.state_write().subscribers.register(MOVER);
+
+    test.submit_message(build_u_call_restore_msg(MOVER, call_id + 100, TEST_GSSI, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+
+    let (restore, _) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE, not D-RELEASE");
+    assert_eq!(restore.call_identifier, call_id + 100);
+    assert_eq!(restore.new_call_identifier, Some(call_id as u64), "the radio adopts this cell's call id");
+    assert!(!lu_requested(&msgs, MOVER), "a registered radio needs no location update");
+}
+
+/// Same location area, call already running here: the restore is answered at once, and the
+/// radio, which has no registration on this station, is asked to register (clause 16).
+#[test]
+fn test_brew_restore_into_running_call_asks_unregistered_radio_to_register() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+
+    register_subscriber(&mut test, TEST_ISSI, TEST_GSSI);
+    test.submit_message(build_u_setup_msg(TEST_ISSI, TEST_GSSI));
+    test.run_stack(Some(1));
+    let call_id = first_d_setup_call_id(&test.dump_sinks(), TEST_GSSI);
+
+    test.submit_message(build_u_call_restore_msg(MOVER, call_id + 100, TEST_GSSI, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).is_some());
+    assert!(lu_requested(&msgs, MOVER));
+}
+
+/// Call identifiers are per station: the identifier the radio brings can belong to a local call
+/// to another group. The radio is restored into the call to its own group, not that one.
+#[test]
+fn test_brew_restore_ignores_call_id_of_another_group() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    const OTHER_GSSI: u32 = 92;
+
+    register_subscriber(&mut test, TEST_ISSI, OTHER_GSSI);
+    test.submit_message(build_u_setup_msg(TEST_ISSI, OTHER_GSSI));
+    test.run_stack(Some(1));
+    let other_call = first_d_setup_call_id(&test.dump_sinks(), OTHER_GSSI);
+
+    register_subscriber(&mut test, 1_000_002, TEST_GSSI);
+    test.submit_message(build_u_setup_msg(1_000_002, TEST_GSSI));
+    test.run_stack(Some(1));
+    let own_call = first_d_setup_call_id(&test.dump_sinks(), TEST_GSSI);
+    assert_ne!(own_call, other_call);
+
+    test.config.state_write().subscribers.register(MOVER);
+    test.submit_message(build_u_call_restore_msg(MOVER, other_call, TEST_GSSI, false));
+    test.run_stack(Some(1));
+    let (restore, _) = d_call_restore_to(&test.dump_sinks(), MOVER).expect("restored");
+    assert_eq!(restore.call_identifier, other_call);
+    assert_eq!(restore.new_call_identifier, Some(own_call as u64));
+}
+
+/// Without Brew the same mismatch is refused instead of joining the wrong group's call.
+#[test]
+fn test_restore_refuses_call_id_of_another_group_without_brew() {
+    debug::setup_logging_verbose();
+    let config = ComponentTest::get_default_test_config(StackMode::Bs);
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew, TetraEntity::Mm],
+    );
+    register_subscriber(&mut test, TEST_ISSI, 92);
+    test.submit_message(build_u_setup_msg(TEST_ISSI, 92));
+    test.run_stack(Some(1));
+    let other_call = first_d_setup_call_id(&test.dump_sinks(), 92);
+
+    test.submit_message(build_u_call_restore_msg(MOVER, other_call, TEST_GSSI, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).is_none());
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_some());
+}
+
+// ── Individual call restore between separate stations (milestone 5a) ──────────────────────
+// TS 100 392-2 clause 14.5.1.2.4: an MS in an individual call restores it on the new cell with
+// U-CALL RESTORE (old call identifier, other party, basic service information point-to-point).
+// The station asks the network for the call (`call-restore`) and answers with D-CALL RESTORE on a
+// traffic channel of its own, the old identifier kept and its own as the new one.
+
+const RESTORE_PEER: u32 = 2_200_107;
+const OLD_CALL_ID: u16 = 4321;
+
+fn p2p_call_restore(issi: u32, other_may_transmit: bool) -> SapMsg {
+    p2p_call_restore_of(issi, OLD_CALL_ID, other_may_transmit)
+}
+
+fn p2p_call_restore_of(issi: u32, call_identifier: u16, other_may_transmit: bool) -> SapMsg {
+    let pdu = UCallRestore {
+        call_identifier,
+        request_to_transmit_send_data: other_may_transmit,
+        other_party_type_identifier: 1,
+        other_party_short_number_address: None,
+        other_party_ssi: Some(RESTORE_PEER as u64),
+        other_party_extension: None,
+        basic_service_information: Some(BasicServiceInformation {
+            circuit_mode_type: CircuitModeType::TchS,
+            encryption_flag: false,
+            communication_type: CommunicationType::P2p,
+            slots_per_frame: None,
+            speech_service: Some(0),
+        }),
+        facility: None,
+        dm_ms_address: None,
+        proprietary: None,
+    };
+    let mut sdu = BitBuffer::new_autoexpand(80);
+    pdu.to_bitbuf(&mut sdu).unwrap();
+    sdu.seek(0);
+    lcmc_ind(issi, sdu)
+}
+
+fn restore_answer(issi: u32, call: Option<NetworkRestoredCall>) -> SapMsg {
+    SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::IndividualCallRestoreAnswer {
+            issi,
+            peer: RESTORE_PEER,
+            call,
+        }),
+    }
+}
+
+fn moved_call(duplex: bool, floor_issi: Option<u32>) -> NetworkRestoredCall {
+    NetworkRestoredCall {
+        brew_uuid: uuid::Uuid::parse_str("5a7c22f6-5c8c-4008-ac84-6fb79023888f").unwrap(),
+        simplex_duplex: duplex,
+        priority: 0,
+        floor_issi,
+    }
+}
+
+fn restore_requests(msgs: &[SapMsg]) -> Vec<(u32, u32)> {
+    msgs.iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::CmceCallControl(CallControl::IndividualCallRestoreRequest { issi, peer }) => Some((*issi, *peer)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Restore `MOVER`'s individual call after the network answered `call`; returns all messages.
+fn restore_moved_call(other_may_transmit: bool, call: NetworkRestoredCall) -> Vec<SapMsg> {
+    let mut test = brew_restore_test();
+    test.config.state_write().subscribers.register(MOVER);
+    test.submit_message(p2p_call_restore(MOVER, other_may_transmit));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+    test.submit_message(restore_answer(MOVER, Some(call)));
+    test.run_stack(Some(1));
+    test.dump_sinks()
+}
+
+/// Not held here: the station asks the network instead of refusing at once, and refuses only when
+/// no answer came within its 2 s (well inside the MS's T306 of at least 4 s).
+#[test]
+fn test_brew_restore_of_unknown_individual_call_asks_the_network() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    test.config.state_write().subscribers.register(MOVER);
+    test.submit_message(p2p_call_restore(MOVER, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert_eq!(restore_requests(&msgs), vec![(MOVER, RESTORE_PEER)]);
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_none(), "waits for the network");
+    assert!(!msgs.iter().any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::GroupListenersAvailable { .. }))));
+
+    // A repeated U-CALL RESTORE does not ask again.
+    test.submit_message(p2p_call_restore(MOVER, false));
+    test.run_stack(Some(100));
+    let msgs = test.dump_sinks();
+    assert!(restore_requests(&msgs).is_empty());
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_none());
+
+    test.run_stack(Some(60));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_some(), "refused after 2 s without an answer");
+}
+
+/// Call identifiers are per station: the identifier the MS brings from the station it left can be
+/// a local call here between two other radios. That call is not the MS's; the station asks the
+/// network as for any other unknown call and leaves the local call alone.
+#[test]
+fn test_restore_with_an_identifier_used_here_by_another_call_asks_the_network() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    let (remote_issi, local_issi) = (2_200_699, 2_200_769);
+    test.config.state_write().subscribers.register(local_issi);
+    test.config.state_write().subscribers.register(MOVER);
+    let brew_uuid = uuid::Uuid::parse_str("a9661625-c1f2-42bb-b256-c44e14677307").unwrap();
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest {
+            brew_uuid,
+            call: NetworkCircuitCall {
+                source_issi: remote_issi,
+                destination: local_issi,
+                number: String::new(),
+                priority: 0,
+                service: 0,
+                mode: 0,
+                duplex: 1,
+                method: 0,
+                communication: 0,
+                grant: 0,
+                permission: 0,
+                timeout: 0,
+                ownership: 0,
+                queued: 0,
+            },
+        }),
+    });
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (mut setup_sdu, _) = find_lcmc_req(&msgs, local_issi, CmcePduTypeDl::DSetup).expect("D-SETUP to the local radio");
+    let local_call_id = DSetup::from_bitbuf(&mut setup_sdu).unwrap().call_identifier;
+    test.submit_message(build_u_connect_msg(local_issi, local_call_id, true));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.submit_message(p2p_call_restore_of(MOVER, local_call_id, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert_eq!(restore_requests(&msgs), vec![(MOVER, RESTORE_PEER)], "asks the network");
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_none(), "not refused at once");
+    assert!(find_lcmc_req(&msgs, local_issi, CmcePduTypeDl::DRelease).is_none(), "the local call runs on");
+}
+
+/// Multi-cell station (milestone 7): a cell of a linked station asks the site switch the same way
+/// for an individual call it does not hold (the call may run with the network from a sibling
+/// cell), and restores it on a channel here when the switch moves it.
+#[test]
+fn test_site_linked_restore_of_unknown_individual_call_asks_the_switch() {
+    debug::setup_logging_verbose();
+    let mut config = brew_test_config();
+    config.site_linked = true;
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew, TetraEntity::Mm],
+    );
+    test.config.state_write().subscribers.register(MOVER);
+    test.submit_message(p2p_call_restore(MOVER, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert_eq!(restore_requests(&msgs), vec![(MOVER, RESTORE_PEER)], "asks the switch");
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_none(), "waits for the answer");
+
+    test.submit_message(restore_answer(MOVER, Some(moved_call(true, None))));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (restore, chan) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE, not D-RELEASE");
+    assert_eq!(restore.call_identifier, OLD_CALL_ID);
+    assert!(restore.new_call_identifier.is_some() && chan.is_some());
+    assert!(msgs.iter().any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady { .. }))));
+}
+
+/// The field case of 2026-10-30 (duplex, BS1 → BS2): D-CALL RESTORE keeps the old identifier,
+/// gives this station's as the new one, grants (duplex) and sends the MS to a traffic channel here;
+/// the voice of the call is then bridged to the network.
+#[test]
+fn test_network_moved_duplex_call_is_restored_on_a_channel_here() {
+    debug::setup_logging_verbose();
+    let call = moved_call(true, None);
+    let msgs = restore_moved_call(false, call);
+    let (restore, chan) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE, not D-RELEASE");
+    // Even with the request bit clear: "not granted" is only applicable for simplex calls.
+    let (relaxed, _) = d_call_restore_to(&restore_moved_call(true, call), MOVER).expect("D-CALL RESTORE");
+    assert_eq!(relaxed.transmission_grant, TransmissionGrant::Granted.into_raw() as u8);
+    assert_eq!(restore.call_identifier, OLD_CALL_ID, "clause 14.5.1.2.4: the identifier the MS restores");
+    let new_id = restore.new_call_identifier.expect("this station's identifier as the new one") as u16;
+    assert_ne!(new_id, OLD_CALL_ID);
+    assert!(chan.is_some(), "the U-plane is switched on, so a channel allocation accompanies it");
+    assert_eq!(restore.transmission_grant, TransmissionGrant::Granted.into_raw() as u8, "a duplex call is always granted");
+    assert!(msgs.iter().any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::Open(_)))));
+    let media = msgs.iter().find_map(|m| match &m.msg {
+        SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady { brew_uuid, call_id, .. }) => Some((*brew_uuid, *call_id)),
+        _ => None,
+    });
+    assert_eq!(media, Some((call.brew_uuid, new_id)));
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_none());
+}
+
+/// Simplex with the other party talking: the MS is "granted to another user" so it hears the
+/// peer, even when it did not ask to transmit.
+#[test]
+fn test_network_moved_simplex_call_with_the_peer_talking_is_granted_to_the_other_user() {
+    debug::setup_logging_verbose();
+    for other_may_transmit in [true, false] {
+        let msgs = restore_moved_call(other_may_transmit, moved_call(false, Some(RESTORE_PEER)));
+        let (restore, chan) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE");
+        assert_eq!(restore.transmission_grant, TransmissionGrant::GrantedToOtherUser.into_raw() as u8);
+        assert!(chan.is_some());
+        assert!(msgs.iter().any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::RemoteFloorGranted { .. }))));
+    }
+}
+
+/// Simplex with the other party talking and the MS asking to transmit: it assumes its request is
+/// queued (clause 14.5.1.2.4), so the station queues it and grants it once the peer stops.
+#[test]
+fn test_network_moved_simplex_request_while_the_peer_talks_is_granted_when_the_peer_stops() {
+    debug::setup_logging_verbose();
+    let call = moved_call(false, Some(RESTORE_PEER));
+    let mut test = brew_restore_test();
+    test.config.state_write().subscribers.register(MOVER);
+    test.submit_message(p2p_call_restore(MOVER, false));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+    test.submit_message(restore_answer(MOVER, Some(call)));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (restore, _) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE");
+    assert_eq!(restore.transmission_grant, TransmissionGrant::GrantedToOtherUser.into_raw() as u8);
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSimplexIdle {
+            brew_uuid: call.brew_uuid,
+            grant: 0,
+            permission: 0,
+        }),
+    });
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (mut sdu, _) = find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DTxGranted).expect("D-TX GRANTED for the queued request");
+    let granted = DTxGranted::from_bitbuf(&mut sdu).unwrap();
+    assert_eq!(granted.transmission_grant, TransmissionGrant::Granted.into_raw() as u8);
+}
+
+/// Simplex with the floor free: an MS that asks to transmit gets it, one that does not is
+/// "not granted".
+#[test]
+fn test_network_moved_simplex_call_with_a_free_floor_follows_the_request() {
+    debug::setup_logging_verbose();
+    let to_brew = |msgs: &[SapMsg]| {
+        msgs.iter()
+            .filter_map(|m| match &m.msg {
+                SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSimplexGranted { .. }) => Some("granted"),
+                SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSimplexIdle { .. }) => Some("idle"),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // Floor free on the network: granted, and the other party is told this MS talks.
+    let msgs = restore_moved_call(false, moved_call(false, None));
+    let (restore, _) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE");
+    assert_eq!(restore.transmission_grant, TransmissionGrant::Granted.into_raw() as u8);
+    assert_eq!(to_brew(&msgs), vec!["granted"]);
+    // It talked before the break and goes on: the network already knows.
+    let msgs = restore_moved_call(false, moved_call(false, Some(MOVER)));
+    assert_eq!(d_call_restore_to(&msgs, MOVER).unwrap().0.transmission_grant, TransmissionGrant::Granted.into_raw() as u8);
+    assert!(to_brew(&msgs).is_empty());
+    // It talked and does not go on: its permission ended, the floor is free for the other party.
+    let msgs = restore_moved_call(true, moved_call(false, Some(MOVER)));
+    let (restore, _) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE");
+    assert_eq!(restore.transmission_grant, TransmissionGrant::NotGranted.into_raw() as u8);
+    assert_eq!(to_brew(&msgs), vec!["idle"]);
+    // Neither talked: nothing to tell.
+    let msgs = restore_moved_call(true, moved_call(false, None));
+    assert_eq!(d_call_restore_to(&msgs, MOVER).unwrap().0.transmission_grant, TransmissionGrant::NotGranted.into_raw() as u8);
+    assert!(to_brew(&msgs).is_empty());
+}
+
+/// No call on the network: refused (D-RELEASE, which MLE turns into D-RESTORE-FAIL).
+#[test]
+fn test_restore_the_network_has_no_call_for_is_refused() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    test.config.state_write().subscribers.register(MOVER);
+    test.submit_message(p2p_call_restore(MOVER, false));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+    test.submit_message(restore_answer(MOVER, None));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_some());
+    assert!(d_call_restore_to(&msgs, MOVER).is_none());
+}
+
+/// The answer came after the MS was refused: the call the network moved here is released there.
+#[test]
+fn test_a_late_network_answer_releases_the_moved_call() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    test.config.state_write().subscribers.register(MOVER);
+    test.submit_message(p2p_call_restore(MOVER, false));
+    test.run_stack(Some(160));
+    test.dump_sinks();
+    let call = moved_call(true, None);
+    test.submit_message(restore_answer(MOVER, Some(call)));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(d_call_restore_to(&msgs, MOVER).is_none());
+    let released = msgs.iter().find_map(|m| match &m.msg {
+        SapMsgInner::CmceCallControl(CallControl::NetworkCircuitRelease { brew_uuid, cause }) => Some((*brew_uuid, *cause)),
+        _ => None,
+    });
+    assert_eq!(released, Some((call.brew_uuid, DisconnectCause::CallRestorationOfTheOtherUserFailed.into_raw() as u8)));
+}
+
+/// A local-only group (inside `local_ssi_ranges`) is never shared over Brew: a call with the same
+/// GSSI here is a different call, so an unknown call id is rejected.
+#[test]
+fn test_brew_restore_rejected_for_local_only_group() {
+    debug::setup_logging_verbose();
+    use tetra_core::ranges::SortedDisjointSsiRanges;
+
+    let mut config = brew_test_config();
+    config.cell.local_ssi_ranges = SortedDisjointSsiRanges::from_vec_tuple(vec![(0, 100)]);
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew, TetraEntity::Mm],
+    );
+
+    register_subscriber(&mut test, TEST_ISSI, TEST_GSSI);
+    test.submit_message(build_u_setup_msg(TEST_ISSI, TEST_GSSI));
+    test.run_stack(Some(1));
+    let call_id = first_d_setup_call_id(&test.dump_sinks(), TEST_GSSI);
+
+    test.submit_message(build_u_call_restore_msg(MOVER, call_id + 100, TEST_GSSI, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).is_none());
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_some());
+}
+
+/// The milestone 0 baseline: Brew holds the group call as pending inbound because nobody on this
+/// station listens yet. The restore must not be rejected; it brings the call up and is answered
+/// once the call runs here.
+#[test]
+fn test_brew_restore_promotes_pending_network_call() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    let gssi = 330;
+    let brew_uuid = uuid::Uuid::parse_str("d2b2e03c-0489-4106-a246-5ccddf75e657").unwrap();
+
+    // The network call arrives first and is held (no local listener).
+    network_call_start(&mut test, brew_uuid, gssi);
+    test.run_stack(Some(1));
+    assert!(held(&test.dump_sinks(), gssi));
+
+    // The radio arrives (registered here already, different LA) and restores with the old id.
+    mm_update(&mut test, MOVER, vec![], BrewSubscriberAction::Register);
+    test.config.state_write().subscribers.register(MOVER);
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.submit_message(build_u_call_restore_msg(MOVER, 4321, gssi, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_none(), "not rejected");
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).is_none(), "no call to restore into yet");
+    assert!(
+        msgs.iter().any(|m| m.dest == TetraEntity::Brew
+            && matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::GroupListenersAvailable { gssi: g }) if *g == gssi)),
+        "the restoring radio is the first listener: Brew promotes the held call"
+    );
+    assert!(!lu_requested(&msgs, MOVER));
+
+    // Brew promotes: the call comes up and the parked restore is answered with the new id.
+    network_call_start(&mut test, brew_uuid, gssi);
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+    assert!(!held(&msgs, gssi), "the restore counts as a listener");
+    let call_id = first_d_setup_call_id(&msgs, gssi);
+    let (restore, chan) = d_call_restore_to(&msgs, MOVER).expect("D-CALL RESTORE once the call is up");
+    assert_eq!(restore.call_identifier, 4321);
+    assert_eq!(restore.new_call_identifier, Some(call_id as u64));
+    // Someone talks on the network: the listener's U-plane goes on to receive, and a layer 2
+    // channel allocation must accompany the D-CALL RESTORE (clause 14.5.2.2.4).
+    assert_eq!(restore.transmission_grant, TransmissionGrant::GrantedToOtherUser.into_raw() as u8);
+    let (carrier, ts) = chan.expect("channel allocation with the restore");
+    let (setup_carrier, setup_ts) = d_setup_channel(&msgs, gssi);
+    assert_eq!((carrier, ts), (setup_carrier, setup_ts), "the call's traffic channel");
+}
+
+/// A listener restoring between two overs (nobody talks): "not granted", the U-plane stays off,
+/// and the radio is still sent to the call's traffic channel, which clause 14.5.2.2.4 allows.
+#[test]
+fn test_brew_restore_between_overs_is_not_granted_but_sent_to_the_channel() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+
+    register_subscriber(&mut test, TEST_ISSI, TEST_GSSI);
+    test.submit_message(build_u_setup_msg(TEST_ISSI, TEST_GSSI));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let call_id = first_d_setup_call_id(&msgs, TEST_GSSI);
+    let channel = d_setup_channel(&msgs, TEST_GSSI);
+    test.submit_message(build_u_tx_ceased_msg(TEST_ISSI, call_id));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.config.state_write().subscribers.register(MOVER);
+    test.submit_message(build_u_call_restore_msg(MOVER, call_id + 100, TEST_GSSI, false));
+    test.run_stack(Some(1));
+    let (restore, chan) = d_call_restore_to(&test.dump_sinks(), MOVER).expect("restored");
+    assert_eq!(restore.transmission_grant, TransmissionGrant::NotGranted.into_raw() as u8);
+    assert_eq!(chan, Some(channel));
+}
+
+/// Same location area: the radio did not register here (clause 16), so the cell asks it to
+/// (D-LOCATION UPDATE COMMAND via MM). Its registration moves the ISSI to this station on Brew.
+#[test]
+fn test_brew_restore_from_unregistered_radio_requests_location_update() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    let gssi = 331;
+
+    test.submit_message(build_u_call_restore_msg(MOVER, 4321, gssi, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(lu_requested(&msgs, MOVER), "unknown radio is asked to register");
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_none());
+
+    // It registers and reports its group; the network then hands over the call.
+    mm_update(&mut test, MOVER, vec![], BrewSubscriberAction::Register);
+    test.config.state_write().subscribers.register(MOVER);
+    mm_update(&mut test, MOVER, vec![gssi], BrewSubscriberAction::Affiliate);
+    test.run_stack(Some(1));
+    test.dump_sinks();
+    let brew_uuid = uuid::Uuid::parse_str("e3c3e03c-0489-4106-a246-5ccddf75e657").unwrap();
+    network_call_start(&mut test, brew_uuid, gssi);
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).is_some());
+}
+
+/// Nothing comes up in time: the restore is rejected (MLE answers D-RESTORE-FAIL) and the
+/// listener count it added is gone again, so a later network call is held as before.
+#[test]
+fn test_brew_restore_times_out_and_drops_its_listener() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    let gssi = 332;
+    test.config.state_write().subscribers.register(MOVER);
+    mm_update(&mut test, MOVER, vec![], BrewSubscriberAction::Register);
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.submit_message(build_u_call_restore_msg(MOVER, 4321, gssi, false));
+    test.run_stack(Some(300));
+    assert!(find_lcmc_req(&test.dump_sinks(), MOVER, CmcePduTypeDl::DRelease).is_none(), "still waiting after ~4 s");
+    test.run_stack(Some(100));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DRelease).is_some(), "rejected after 5 s");
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).is_none());
+
+    let brew_uuid = uuid::Uuid::parse_str("f4d4e03c-0489-4106-a246-5ccddf75e657").unwrap();
+    network_call_start(&mut test, brew_uuid, gssi);
+    test.run_stack(Some(1));
+    assert!(held(&test.dump_sinks(), gssi), "no listener left behind");
+}
+
+/// The listener a restore added lasts as long as the restored call; an MM affiliation to the group
+/// in between takes it over (counted once), so the radio keeps getting later calls.
+#[test]
+fn test_brew_restore_listener_ends_with_call_unless_affiliated() {
+    debug::setup_logging_verbose();
+    for affiliate in [false, true] {
+        let mut test = brew_restore_test();
+        let gssi = 333;
+        let first = uuid::Uuid::parse_str("a5e5e03c-0489-4106-a246-5ccddf75e657").unwrap();
+        test.config.state_write().subscribers.register(MOVER);
+        mm_update(&mut test, MOVER, vec![], BrewSubscriberAction::Register);
+        test.run_stack(Some(1));
+
+        test.submit_message(build_u_call_restore_msg(MOVER, 4321, gssi, false));
+        test.run_stack(Some(1));
+        network_call_start(&mut test, first, gssi);
+        test.run_stack(Some(2));
+        let msgs = test.dump_sinks();
+        let call_id = first_d_setup_call_id(&msgs, gssi);
+        assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).is_some());
+
+        if affiliate {
+            mm_update(&mut test, MOVER, vec![gssi], BrewSubscriberAction::Affiliate);
+            test.run_stack(Some(1));
+        }
+        // The network ends the call; it is released after hang time.
+        test.submit_message(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Brew,
+            dest: TetraEntity::Cmce,
+            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid: first }),
+        });
+        test.run_stack(Some(2000));
+        let msgs = test.dump_sinks();
+        assert!(find_lcmc_req(&msgs, gssi, CmcePduTypeDl::DRelease).is_some(), "call {} released", call_id);
+
+        let second = uuid::Uuid::parse_str("b6f6e03c-0489-4106-a246-5ccddf75e657").unwrap();
+        network_call_start(&mut test, second, gssi);
+        test.run_stack(Some(1));
+        let msgs = test.dump_sinks();
+        assert_eq!(held(&msgs, gssi), !affiliate, "affiliated={affiliate}");
+
+        if affiliate {
+            // Counted once: deaffiliating leaves no listener behind.
+            mm_update(&mut test, MOVER, vec![gssi], BrewSubscriberAction::Deaffiliate);
+            test.run_stack(Some(1));
+            assert!(held(&test.dump_sinks(), gssi), "single count, last listener gone");
+        }
+    }
+}
+
+/// Deregistering the radio drops a parked restore and its listener.
+#[test]
+fn test_brew_restore_dropped_on_deregister() {
+    debug::setup_logging_verbose();
+    let mut test = brew_restore_test();
+    let gssi = 334;
+    test.config.state_write().subscribers.register(MOVER);
+    mm_update(&mut test, MOVER, vec![], BrewSubscriberAction::Register);
+    test.run_stack(Some(1));
+
+    test.submit_message(build_u_call_restore_msg(MOVER, 4321, gssi, false));
+    test.run_stack(Some(1));
+    mm_update(&mut test, MOVER, vec![], BrewSubscriberAction::Deregister);
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    let brew_uuid = uuid::Uuid::parse_str("c7a7e03c-0489-4106-a246-5ccddf75e657").unwrap();
+    network_call_start(&mut test, brew_uuid, gssi);
+    test.run_stack(Some(2));
+    assert!(held(&test.dump_sinks(), gssi), "its listener is gone");
+
+    // Someone else brings the call up: the gone radio's restore must not be answered.
+    register_subscriber(&mut test, TEST_ISSI, gssi);
+    network_call_start(&mut test, brew_uuid, gssi);
+    test.run_stack(Some(2));
+    let msgs = test.dump_sinks();
+    first_d_setup_call_id(&msgs, gssi);
+    assert!(find_lcmc_req(&msgs, MOVER, CmcePduTypeDl::DCallRestore).is_none());
 }
 
 /// Multi-cell: a raised-priority local group call tells the site switch its priority right before
@@ -3237,4 +4065,723 @@ fn test_site_linked_group_call_reports_priority_to_switch() {
         .position(|cc| matches!(cc, CallControl::FloorGranted { .. }))
         .expect("FloorGranted sent to the switch");
     assert!(prio < grant, "priority comes first");
+}
+
+/// Network over on `gssi` whose talker `talker` is registered here (it was heard through the
+/// network and then came to this cell unannounced). Returns the test and the call id.
+fn network_over_of_moved_talker(gssi: u32, talker: u32, listener: u32, brew_uuid: uuid::Uuid) -> (ComponentTest, u16) {
+    let mut test = ComponentTest::from_config(brew_test_config(), Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew],
+    );
+    register_subscriber(&mut test, listener, gssi);
+    register_subscriber(&mut test, talker, gssi);
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
+            brew_uuid,
+            source_issi: talker,
+            dest_gssi: gssi,
+            priority: 0,
+        }),
+    });
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let call_id = msgs
+        .iter()
+        .find_map(|msg| match &msg.msg {
+            SapMsgInner::CmceCallControl(CallControl::NetworkCallReady { brew_uuid: u, call_id, .. }) if *u == brew_uuid => {
+                Some(*call_id)
+            }
+            _ => None,
+        })
+        .expect("Expected the network over to become ready");
+    (test, call_id)
+}
+
+fn local_floor_granted_to(msgs: &[SapMsg], dest: TetraEntity, issi: u32) -> bool {
+    msgs.iter().any(|m| {
+        m.dest == dest && matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::FloorGranted { source_issi, .. }) if *source_issi == issi)
+    })
+}
+
+/// The old station's late end of the over: must not take the floor from the talker here.
+fn end_old_session_keeps_over(test: &mut ComponentTest, gssi: u32, brew_uuid: uuid::Uuid) {
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+    });
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(
+        find_lcmc_req(&msgs, gssi, CmcePduTypeDl::DTxCeased).is_none(),
+        "the old session's end must not end the moved talker's over here"
+    );
+    assert!(
+        !msgs.iter().any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::FloorReleased { .. }))),
+        "the old session's end must not release the floor here"
+    );
+}
+
+/// Case C: a talker heard here through the network comes over unannounced and presses PTT again
+/// (U-SETUP, late entry). It keeps its floor (TS 100 392-2 clause 14.5.2.2.1 a)); another
+/// member still gets "granted to another user".
+#[test]
+fn test_moved_network_talker_late_entry_keeps_floor() {
+    debug::setup_logging_verbose();
+    let gssi = 340;
+    let talker = 3400001;
+    let listener = 3400002;
+    let brew_uuid = uuid::Uuid::from_u128(0x3400);
+    let (mut test, call_id) = network_over_of_moved_talker(gssi, talker, listener, brew_uuid);
+
+    test.submit_message(build_u_setup_msg(listener, gssi));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (mut sdu, _) = find_lcmc_req(&msgs, listener, CmcePduTypeDl::DConnect).expect("Expected D-CONNECT to the listener");
+    let d_connect = DConnect::from_bitbuf(&mut sdu).unwrap();
+    assert_eq!(d_connect.transmission_grant, TransmissionGrant::GrantedToOtherUser);
+    assert!(!local_floor_granted_to(&msgs, TetraEntity::Brew, listener));
+
+    test.submit_message(build_u_setup_msg(talker, gssi));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (mut sdu, _) = find_lcmc_req(&msgs, talker, CmcePduTypeDl::DConnect).expect("Expected D-CONNECT to the talker");
+    let d_connect = DConnect::from_bitbuf(&mut sdu).unwrap();
+    assert_eq!(d_connect.call_identifier, call_id);
+    assert_eq!(d_connect.transmission_grant, TransmissionGrant::Granted, "the moved talker keeps its floor");
+    assert!(local_floor_granted_to(&msgs, TetraEntity::Umac, talker), "UMAC must arm UL inactivity");
+    assert!(local_floor_granted_to(&msgs, TetraEntity::Brew, talker), "the over now goes out from here");
+
+    end_old_session_keeps_over(&mut test, gssi, brew_uuid);
+}
+
+/// Case C with U-TX DEMAND: the moved talker is granted at once instead of being queued.
+#[test]
+fn test_moved_network_talker_tx_demand_is_granted() {
+    debug::setup_logging_verbose();
+    let gssi = 341;
+    let talker = 3410001;
+    let listener = 3410002;
+    let brew_uuid = uuid::Uuid::from_u128(0x3410);
+    let (mut test, call_id) = network_over_of_moved_talker(gssi, talker, listener, brew_uuid);
+
+    test.submit_message(build_u_tx_demand_msg(listener, call_id));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (mut sdu, _) = find_lcmc_req(&msgs, listener, CmcePduTypeDl::DTxGranted).expect("Expected D-TX GRANTED to the listener");
+    let granted = DTxGranted::from_bitbuf(&mut sdu).unwrap();
+    assert_eq!(granted.transmission_grant, TransmissionGrant::RequestQueued.into_raw() as u8);
+
+    test.submit_message(build_u_tx_demand_msg(talker, call_id));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (mut sdu, _) = find_lcmc_req(&msgs, talker, CmcePduTypeDl::DTxGranted).expect("Expected D-TX GRANTED to the talker");
+    let granted = DTxGranted::from_bitbuf(&mut sdu).unwrap();
+    assert_eq!(granted.transmission_grant, TransmissionGrant::Granted.into_raw() as u8);
+    assert!(local_floor_granted_to(&msgs, TetraEntity::Umac, talker));
+    assert!(local_floor_granted_to(&msgs, TetraEntity::Brew, talker));
+
+    end_old_session_keeps_over(&mut test, gssi, brew_uuid);
+}
+
+/// Restore by the network talker: granted as before, and now also the old session is forgotten.
+#[test]
+fn test_moved_network_talker_restore_forgets_old_session() {
+    debug::setup_logging_verbose();
+    let gssi = 342;
+    let talker = 3420001;
+    let listener = 3420002;
+    let brew_uuid = uuid::Uuid::from_u128(0x3420);
+    let (mut test, call_id) = network_over_of_moved_talker(gssi, talker, listener, brew_uuid);
+
+    test.submit_message(build_u_call_restore_msg(talker, call_id, gssi, true));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (restore, _) = d_call_restore_to(&msgs, talker).expect("Expected D-CALL RESTORE to the talker");
+    assert_eq!(restore.transmission_grant, TransmissionGrant::Granted.into_raw() as u8);
+    assert!(local_floor_granted_to(&msgs, TetraEntity::Brew, talker));
+
+    end_old_session_keeps_over(&mut test, gssi, brew_uuid);
+}
+
+fn site_area_members(issi: u32, groups: Option<Vec<u32>>) -> SapMsg {
+    SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::SiteAreaMembers { issi, groups }),
+    }
+}
+
+/// Multi-cell, one location area: a radio registered on a sibling cell may be here without
+/// registering (TS 100 392-2 clause 18.3.4.7.1a), so the switch makes it a listener of its groups
+/// here; a network call to such a group runs here, and ends when the last such listener goes.
+#[test]
+fn test_site_area_member_makes_a_group_call_run_on_this_cell() {
+    debug::setup_logging_verbose();
+    let gssi = 230;
+    let mut config = brew_test_config();
+    config.site_linked = true;
+    let mut test = ComponentTest::from_config(config, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew, TetraEntity::Mm],
+    );
+    test.submit_message(site_area_members(MOVER, Some(vec![gssi])));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(
+        msgs.iter()
+            .any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::GroupListenersAvailable { gssi: g }) if *g == gssi)),
+        "the group has a listener here now"
+    );
+    // A repeat changes nothing (counted once).
+    test.submit_message(site_area_members(MOVER, Some(vec![gssi])));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
+            brew_uuid: uuid::Uuid::new_v4(),
+            source_issi: 2300010,
+            dest_gssi: gssi,
+            priority: 1,
+        }),
+    });
+    test.run_stack(Some(5));
+    test.dump_sinks();
+    assert!(test.get_shared_config().state_read().active_call_ts.contains_key(&gssi), "call runs here");
+
+    test.submit_message(site_area_members(MOVER, None));
+    test.run_stack(Some(5));
+    test.dump_sinks();
+    assert!(
+        !test.get_shared_config().state_read().active_call_ts.contains_key(&gssi),
+        "no listener left: the call ends here"
+    );
+}
+
+// ── Calls between two radios across a station change (extension `call-handoff`) ──────────────
+// Both radios on one station, one goes to another: this station keeps the call and hands the
+// leg that stays to the network, which gives it to the other station for the radio's U-CALL
+// RESTORE (TS 100 392-2 clause 14.5.1.2.4). The other way round, a radio comes to the station of
+// its peer: the station joins both legs into a local call.
+
+const HANDOFF_A: u32 = 2_320_972;
+const HANDOFF_B: u32 = 2_320_980;
+
+fn handoff_test(extensions: &[&str]) -> ComponentTest {
+    let mut test = ComponentTest::from_config(brew_test_config(), Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(
+        vec![TetraEntity::Cmce],
+        vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew, TetraEntity::Mm],
+    );
+    test.config.state_write().brew_server_extensions = extensions.iter().map(|e| e.to_string()).collect();
+    test
+}
+
+const HANDOFF_EXTENSIONS: [&str; 4] = ["bts-info", "handover-v1", "call-restore", "call-handoff"];
+
+/// A local individual call `HANDOFF_A` -> `HANDOFF_B`, connected; returns the call id and the
+/// opened circuits as (carrier, ts).
+fn local_call_for_handoff(test: &mut ComponentTest, duplex: bool) -> (u16, Vec<(u16, u8)>) {
+    test.config.state_write().subscribers.register(HANDOFF_A);
+    test.config.state_write().subscribers.register(HANDOFF_B);
+    test.submit_message(build_individual_u_setup_msg_with_mode(HANDOFF_A, HANDOFF_B, duplex));
+    test.run_stack(Some(1));
+    let call_id = first_d_setup_call_id(&test.dump_sinks(), HANDOFF_B);
+    test.submit_message(build_u_connect_msg(HANDOFF_B, call_id, duplex));
+    test.run_stack(Some(1));
+    let mut slots = opened(&test.dump_sinks());
+    slots.sort_unstable();
+    slots.dedup();
+    (call_id, slots)
+}
+
+fn opened(msgs: &[SapMsg]) -> Vec<(u16, u8)> {
+    msgs.iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::CmceCallControl(CallControl::Open(c)) => Some((c.carrier_num, c.ts)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn opened_circuits(msgs: &[SapMsg]) -> Vec<tetra_saps::control::call_control::Circuit> {
+    msgs.iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::CmceCallControl(CallControl::Open(c)) => Some(c.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn ul_inactivity(test: &mut ComponentTest, (carrier_num, ts): (u16, u8)) {
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Umac,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::UlInactivityTimeout { carrier_num, ts }),
+    });
+}
+
+fn handoff_request(issi: u32, peer: u32) -> SapMsg {
+    SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::IndividualCallHandoffRequest { issi, peer }),
+    }
+}
+
+fn handoff_answers(msgs: &[SapMsg]) -> Vec<(u32, u32, Option<tetra_saps::control::call_control::HandedOffCall>)> {
+    msgs.iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::CmceCallControl(CallControl::IndividualCallHandoffAnswer { issi, peer, call }) => Some((*issi, *peer, *call)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn media_ready(msgs: &[SapMsg]) -> Vec<(uuid::Uuid, u8)> {
+    msgs.iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady { brew_uuid, ts, .. }) => Some((*brew_uuid, *ts)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn network_releases(msgs: &[SapMsg]) -> Vec<(uuid::Uuid, u8)> {
+    msgs.iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitRelease { brew_uuid, cause }) if m.dest == TetraEntity::Brew => {
+                Some((*brew_uuid, *cause))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn released_slots(msgs: &[SapMsg]) -> Vec<(u16, u8)> {
+    msgs.iter()
+        .filter_map(|m| match &m.msg {
+            SapMsgInner::CmceCallControl(CallControl::CloseSlot { carrier_num, ts, .. }) => Some((*carrier_num, *ts)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The slot of `issi`'s leg in a local duplex call: the one whose D-SETUP / D-CONNECT went to it.
+fn duplex_slots_of(slots: &[(u16, u8)]) -> ((u16, u8), (u16, u8)) {
+    assert_eq!(slots.len(), 2, "a local duplex call has two traffic channels: {slots:?}");
+    (slots[0], slots[1])
+}
+
+/// Direction 1, duplex: the radio that leaves loses its uplink, the call is held instead of
+/// released, and the network's handoff request bridges the leg that stays.
+#[test]
+fn test_handoff_holds_a_local_duplex_call_and_bridges_the_staying_leg() {
+    debug::setup_logging_verbose();
+    let mut test = handoff_test(&HANDOFF_EXTENSIONS);
+    let (call_id, slots) = local_call_for_handoff(&mut test, true);
+    let (first, second) = duplex_slots_of(&slots);
+
+    // One leg goes silent (the radio is on its way to the other station): held, not released.
+    for slot in [first, second] {
+        ul_inactivity(&mut test, slot);
+        test.run_stack(Some(1));
+        let msgs = test.dump_sinks();
+        assert!(find_lcmc_req(&msgs, HANDOFF_A, CmcePduTypeDl::DRelease).is_none(), "held, not released");
+        assert!(find_lcmc_req(&msgs, HANDOFF_B, CmcePduTypeDl::DRelease).is_none(), "held, not released");
+    }
+
+    // B restores on the other station; the network asks for the call.
+    test.submit_message(handoff_request(HANDOFF_B, HANDOFF_A));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let answers = handoff_answers(&msgs);
+    assert_eq!(answers.len(), 1);
+    let call = answers[0].2.expect("the call is handed over");
+    assert_eq!((call.calling_issi, call.simplex_duplex, call.floor_issi), (HANDOFF_A, true, None));
+    // A stays on its own channel, its downlink now from the network.
+    let reopened = opened_circuits(&msgs);
+    assert_eq!(reopened.len(), 1, "only the staying leg is reopened: {reopened:?}");
+    assert_eq!(reopened[0].dl_media_source, tetra_saps::control::call_control::CircuitDlMediaSource::SwMI);
+    assert_eq!(reopened[0].peer_ts, None);
+    let stay = (reopened[0].carrier_num, reopened[0].ts);
+    assert_eq!(media_ready(&msgs), vec![(call.brew_uuid, stay.1)]);
+    // B's channel here ends, without signalling to either radio.
+    let gone = if stay == first { second } else { first };
+    assert!(released_slots(&msgs).contains(&gone), "B's channel is closed: {:?}", released_slots(&msgs));
+    for issi in [HANDOFF_A, HANDOFF_B] {
+        assert!(find_lcmc_req(&msgs, issi, CmcePduTypeDl::DRelease).is_none());
+    }
+
+    // The hold is over: the call stays past the 8 s.
+    test.run_stack(Some(8 * 72 + 20));
+    let msgs = test.dump_sinks();
+    assert!(find_lcmc_req(&msgs, HANDOFF_A, CmcePduTypeDl::DRelease).is_none(), "the bridged call runs on");
+    let _ = call_id;
+}
+
+/// Without the server's `call-handoff` the old behaviour stays: the silent leg ends the call, and
+/// a handoff request gets no call.
+#[test]
+fn test_without_call_handoff_a_silent_duplex_leg_releases_the_call() {
+    debug::setup_logging_verbose();
+    let mut test = handoff_test(&["bts-info", "handover-v1", "call-restore"]);
+    let (call_id, slots) = local_call_for_handoff(&mut test, true);
+    ul_inactivity(&mut test, slots[0]);
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (mut sdu, _) = find_lcmc_req(&msgs, HANDOFF_A, CmcePduTypeDl::DRelease).expect("released");
+    assert_eq!(DRelease::from_bitbuf(&mut sdu).unwrap().call_identifier, call_id);
+
+    let mut test = handoff_test(&["bts-info", "handover-v1", "call-restore"]);
+    local_call_for_handoff(&mut test, true);
+    test.submit_message(handoff_request(HANDOFF_B, HANDOFF_A));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert_eq!(handoff_answers(&msgs), vec![(HANDOFF_B, HANDOFF_A, None)]);
+    assert!(opened(&msgs).is_empty());
+}
+
+/// A held call nobody takes over ends after 8 s, as the silent leg would have ended it before.
+#[test]
+fn test_a_held_call_without_handoff_ends_after_the_hold() {
+    debug::setup_logging_verbose();
+    let mut test = handoff_test(&HANDOFF_EXTENSIONS);
+    let (call_id, slots) = local_call_for_handoff(&mut test, true);
+    ul_inactivity(&mut test, slots[1]);
+    test.run_stack(Some(7 * 72));
+    assert!(find_lcmc_req(&test.dump_sinks(), HANDOFF_A, CmcePduTypeDl::DRelease).is_none(), "still held at 7 s");
+    test.run_stack(Some(2 * 72));
+    let msgs = test.dump_sinks();
+    let (mut sdu, _) = find_lcmc_req(&msgs, HANDOFF_A, CmcePduTypeDl::DRelease).expect("released after the hold");
+    let release = DRelease::from_bitbuf(&mut sdu).unwrap();
+    assert_eq!((release.call_identifier, release.disconnect_cause), (call_id, DisconnectCause::ExpiryOfTimer));
+}
+
+/// No such call, the wrong peer, or one party asking for itself: no call.
+#[test]
+fn test_a_handoff_request_for_another_pair_gets_no_call() {
+    debug::setup_logging_verbose();
+    let mut test = handoff_test(&HANDOFF_EXTENSIONS);
+    local_call_for_handoff(&mut test, true);
+    for (issi, peer) in [(HANDOFF_B, 1234), (4321, HANDOFF_A), (HANDOFF_A, HANDOFF_A)] {
+        test.submit_message(handoff_request(issi, peer));
+        test.run_stack(Some(1));
+        let msgs = test.dump_sinks();
+        assert_eq!(handoff_answers(&msgs), vec![(issi, peer, None)]);
+        assert!(opened(&msgs).is_empty() && media_ready(&msgs).is_empty());
+    }
+}
+
+/// Direction 1, simplex: the talker leaves. Its permission ended at the break (clause
+/// 14.5.1.2.4): the radio that stays is told the transmission ceased, and the call is handed over
+/// with the floor free on the one channel both used.
+#[test]
+fn test_handoff_of_a_simplex_call_ends_the_leaving_talkers_floor() {
+    debug::setup_logging_verbose();
+    let mut test = handoff_test(&HANDOFF_EXTENSIONS);
+    let (_call_id, slots) = local_call_for_handoff(&mut test, false);
+    assert_eq!(slots.len(), 1, "a local simplex call shares one channel");
+    // The caller has the floor after the connect (it pressed PTT to call).
+    test.submit_message(handoff_request(HANDOFF_A, HANDOFF_B));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let call = handoff_answers(&msgs)[0].2.expect("handed over");
+    assert_eq!((call.calling_issi, call.simplex_duplex, call.floor_issi), (HANDOFF_A, false, None));
+    assert!(find_lcmc_req(&msgs, HANDOFF_B, CmcePduTypeDl::DTxCeased).is_some(), "B hears the talker is gone");
+    let reopened = opened_circuits(&msgs);
+    assert_eq!(reopened.iter().map(|c| (c.carrier_num, c.ts)).collect::<Vec<_>>(), slots);
+    assert_eq!(reopened[0].dl_media_source, tetra_saps::control::call_control::CircuitDlMediaSource::SwMI);
+    assert!(released_slots(&msgs).is_empty(), "the channel stays for B");
+    assert_eq!(media_ready(&msgs), vec![(call.brew_uuid, slots[0].1)]);
+}
+
+/// A call over Brew from `remote` (another station) to `HANDOFF_B` here, connected.
+fn network_call_for_join(test: &mut ComponentTest, remote: u32, duplex: bool) -> (u16, uuid::Uuid, (u16, u8)) {
+    test.config.state_write().subscribers.register(HANDOFF_B);
+    let brew_uuid = uuid::Uuid::parse_str("0b5f1d2e-9a47-4c1e-8c55-3e1f00c0ffee").unwrap();
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest {
+            brew_uuid,
+            call: NetworkCircuitCall {
+                source_issi: remote,
+                destination: HANDOFF_B,
+                number: String::new(),
+                priority: 0,
+                service: 0,
+                mode: 0,
+                duplex: duplex as u8,
+                method: 0,
+                communication: 0,
+                grant: TransmissionGrant::NotGranted.into_raw() as u8,
+                permission: 0,
+                timeout: 0,
+                ownership: 0,
+                queued: 0,
+            },
+        }),
+    });
+    test.run_stack(Some(1));
+    let setup = test.dump_sinks();
+    let call_id = first_d_setup_call_id(&setup, HANDOFF_B);
+    let mut slots = opened(&setup);
+    test.submit_message(build_u_connect_msg(HANDOFF_B, call_id, duplex));
+    test.run_stack(Some(1));
+    slots.extend(opened(&test.dump_sinks()));
+    test.submit_message(SapMsg {
+        sap: Sap::Control,
+        src: TetraEntity::Brew,
+        dest: TetraEntity::Cmce,
+        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectConfirm {
+            brew_uuid,
+            grant: TransmissionGrant::Granted.into_raw() as u8,
+            permission: 0,
+        }),
+    });
+    test.run_stack(Some(1));
+    slots.extend(opened(&test.dump_sinks()));
+    (call_id, brew_uuid, *slots.first().expect("B's channel"))
+}
+
+/// U-CALL RESTORE of a point-to-point call from `issi` with `peer` (clause 14.5.1.2.4).
+fn p2p_restore(issi: u32, call_identifier: u16, peer: u32, other_may_transmit: bool) -> SapMsg {
+    let pdu = UCallRestore {
+        call_identifier,
+        request_to_transmit_send_data: other_may_transmit,
+        other_party_type_identifier: 1,
+        other_party_short_number_address: None,
+        other_party_ssi: Some(peer as u64),
+        other_party_extension: None,
+        basic_service_information: Some(BasicServiceInformation {
+            circuit_mode_type: CircuitModeType::TchS,
+            encryption_flag: false,
+            communication_type: CommunicationType::P2p,
+            slots_per_frame: None,
+            speech_service: Some(0),
+        }),
+        facility: None,
+        dm_ms_address: None,
+        proprietary: None,
+    };
+    let mut sdu = BitBuffer::new_autoexpand(80);
+    pdu.to_bitbuf(&mut sdu).unwrap();
+    sdu.seek(0);
+    lcmc_ind(issi, sdu)
+}
+
+/// Direction 2, duplex: the radio on the other station comes here, to its peer, and restores the
+/// call. Both legs are joined into a local call: the radio gets its own channel cross-routed with
+/// B's, and the network call ends with "SwMI requested disconnection".
+#[test]
+fn test_a_radio_coming_to_its_peer_is_joined_into_a_local_duplex_call() {
+    debug::setup_logging_verbose();
+    let mut test = handoff_test(&HANDOFF_EXTENSIONS);
+    let (call_id, brew_uuid, b_slot) = network_call_for_join(&mut test, HANDOFF_A, true);
+    test.config.state_write().subscribers.register(HANDOFF_A);
+
+    test.submit_message(p2p_restore(HANDOFF_A, 77, HANDOFF_B, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(restore_requests(&msgs).is_empty(), "nothing to ask the network");
+    let (restore, chan) = d_call_restore_to(&msgs, HANDOFF_A).expect("D-CALL RESTORE");
+    assert_eq!(restore.call_identifier, 77);
+    assert_eq!(restore.new_call_identifier, Some(call_id as u64), "the radio adopts this station's call id");
+    assert_eq!(restore.transmission_grant, TransmissionGrant::Granted.into_raw() as u8, "duplex: always granted");
+    let (_, a_ts) = chan.expect("a channel of its own");
+    assert_ne!(a_ts as u8, b_slot.1, "duplex: its own channel");
+    // Both channels cross-routed locally.
+    let circuits = opened_circuits(&msgs);
+    let loopback = tetra_saps::control::call_control::CircuitDlMediaSource::LocalLoopback;
+    let a = circuits.iter().find(|c| c.ts == a_ts as u8).expect("A's channel opened");
+    let b = circuits.iter().find(|c| (c.carrier_num, c.ts) == b_slot).expect("B's channel reopened");
+    assert_eq!((a.dl_media_source, a.peer_ts), (loopback, Some(b.ts)));
+    assert_eq!((b.dl_media_source, b.peer_ts), (loopback, Some(a.ts)));
+    assert_eq!(network_releases(&msgs), vec![(brew_uuid, DisconnectCause::SwmiRequestedDisconnection.into_raw() as u8)]);
+    assert!(find_lcmc_req(&msgs, HANDOFF_B, CmcePduTypeDl::DRelease).is_none(), "B notices nothing");
+}
+
+/// Direction 2, simplex: both legs share B's channel; the arriving radio that asks to talk gets
+/// the floor there.
+#[test]
+fn test_a_radio_coming_to_its_peer_is_joined_into_a_local_simplex_call() {
+    debug::setup_logging_verbose();
+    let mut test = handoff_test(&HANDOFF_EXTENSIONS);
+    let (call_id, brew_uuid, b_slot) = network_call_for_join(&mut test, HANDOFF_A, false);
+    test.config.state_write().subscribers.register(HANDOFF_A);
+
+    test.submit_message(p2p_restore(HANDOFF_A, 77, HANDOFF_B, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (restore, chan) = d_call_restore_to(&msgs, HANDOFF_A).expect("D-CALL RESTORE");
+    assert_eq!(restore.new_call_identifier, Some(call_id as u64));
+    assert_eq!(chan.map(|(_, ts)| ts as u8), Some(b_slot.1), "simplex: B's channel");
+    let circuits = opened_circuits(&msgs);
+    assert_eq!(circuits.len(), 1);
+    assert_eq!(circuits[0].dl_media_source, tetra_saps::control::call_control::CircuitDlMediaSource::LocalLoopback);
+    assert_eq!(network_releases(&msgs), vec![(brew_uuid, DisconnectCause::SwmiRequestedDisconnection.into_raw() as u8)]);
+}
+
+/// Without `call-handoff` the arriving radio's restore goes to the network as before.
+#[test]
+fn test_without_call_handoff_a_radio_coming_to_its_peer_asks_the_network() {
+    debug::setup_logging_verbose();
+    let mut test = handoff_test(&["bts-info", "handover-v1", "call-restore"]);
+    network_call_for_join(&mut test, HANDOFF_A, true);
+    test.config.state_write().subscribers.register(HANDOFF_A);
+    test.submit_message(p2p_restore(HANDOFF_A, 77, HANDOFF_B, false));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert_eq!(restore_requests(&msgs), vec![(HANDOFF_A, HANDOFF_B)]);
+    assert!(network_releases(&msgs).is_empty());
+}
+
+// ── Group access (Brew server `group-access` rules) ─────────────────────────────────────────────
+
+fn limit_group(test: &mut ComponentTest, rule: tetra_config::bluestation::BrewGroupAccess) {
+    test.config.state_write().brew_group_access.insert(rule.gssi, rule);
+}
+
+fn group_access_test() -> ComponentTest {
+    let mut test = ComponentTest::new(StackMode::Bs, Some(TdmaTime { h: 0, m: 1, f: 1, t: 1 }));
+    test.populate_entities(vec![TetraEntity::Cmce], vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew]);
+    test
+}
+
+fn d_release_cause_to(msgs: &[SapMsg], issi: u32) -> Option<DisconnectCause> {
+    let (mut sdu, _) = find_lcmc_req(msgs, issi, CmcePduTypeDl::DRelease)?;
+    Some(DRelease::from_bitbuf(&mut sdu).expect("Failed to parse DRelease").disconnect_cause)
+}
+
+/// A radio the group does not admit, or a listener-only one, cannot start a call on it: the
+/// U-SETUP is answered with D-RELEASE (clause 14.5.1.1; cause value "Requested service not
+/// available", table 14.55, chosen by us) and no call is set up. An emergency call passes.
+#[test]
+fn test_group_access_refuses_setup_from_radios_that_may_not_talk() {
+    debug::setup_logging_verbose();
+    use tetra_config::bluestation::BrewGroupAccess;
+    const OUTSIDER: u32 = TEST_ISSI + 1;
+    const LISTENER: u32 = TEST_ISSI + 2;
+    let mut test = group_access_test();
+    for issi in [TEST_ISSI, OUTSIDER, LISTENER] {
+        register_subscriber(&mut test, issi, TEST_GSSI);
+    }
+    limit_group(&mut test, BrewGroupAccess { gssi: TEST_GSSI, block: true, issis: vec![OUTSIDER], rx_only: true, rx_only_issis: vec![LISTENER] });
+
+    for issi in [OUTSIDER, LISTENER] {
+        test.submit_message(build_u_setup_msg(issi, TEST_GSSI));
+        test.run_stack(Some(1));
+        let msgs = test.dump_sinks();
+        assert_eq!(d_release_cause_to(&msgs, issi), Some(DisconnectCause::RequestedServiceNotAvailable), "{issi}");
+        assert_eq!(count_d_setups(&msgs), 0, "no call for {issi}");
+    }
+
+    // An emergency call is never limited.
+    test.submit_message(build_u_setup_msg_prio(LISTENER, TEST_GSSI, 15));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    assert!(d_release_cause_to(&msgs, LISTENER).is_none());
+    assert!(find_lcmc_req(&msgs, TEST_GSSI, CmcePduTypeDl::DSetup).is_some(), "emergency call set up");
+}
+
+/// A listener-only radio joining a running call listens: its individually addressed D-CONNECT
+/// says "not allowed to request for transmission" (clause 14.8.43, table 14.81) and does not
+/// grant it the floor, even in hangtime. A radio the group does not admit is refused.
+#[test]
+fn test_group_access_listener_joins_running_call_without_the_floor() {
+    debug::setup_logging_verbose();
+    use tetra_config::bluestation::BrewGroupAccess;
+    const LISTENER: u32 = TEST_ISSI + 1;
+    const TALKER: u32 = TEST_ISSI + 2;
+    const OUTSIDER: u32 = TEST_ISSI + 3;
+    let mut test = group_access_test();
+    for issi in [TEST_ISSI, LISTENER, TALKER, OUTSIDER] {
+        register_subscriber(&mut test, issi, TEST_GSSI);
+    }
+    limit_group(&mut test, BrewGroupAccess { gssi: TEST_GSSI, block: true, issis: vec![OUTSIDER], rx_only: true, rx_only_issis: vec![LISTENER] });
+
+    test.submit_message(build_u_setup_msg(TEST_ISSI, TEST_GSSI));
+    test.run_stack(Some(1));
+    let call_id = first_d_setup_call_id(&test.dump_sinks(), TEST_GSSI);
+
+    let joined = |test: &mut ComponentTest, issi: u32| -> DConnect {
+        test.submit_message(build_u_setup_msg(issi, TEST_GSSI));
+        test.run_stack(Some(1));
+        let (mut sdu, _) = find_lcmc_req(&test.dump_sinks(), issi, CmcePduTypeDl::DConnect).expect("D-CONNECT to the joiner");
+        DConnect::from_bitbuf(&mut sdu).expect("Failed to parse DConnect")
+    };
+    let listener = joined(&mut test, LISTENER);
+    assert_eq!(listener.call_identifier, call_id);
+    assert_eq!(listener.transmission_grant, TransmissionGrant::GrantedToOtherUser);
+    assert!(listener.transmission_request_permission, "not allowed to request for transmission");
+
+    test.submit_message(build_u_setup_msg(OUTSIDER, TEST_GSSI));
+    test.run_stack(Some(1));
+    assert_eq!(d_release_cause_to(&test.dump_sinks(), OUTSIDER), Some(DisconnectCause::RequestedServiceNotAvailable));
+
+    // Hangtime: a talker joining gets the floor as before, a listener does not.
+    test.submit_message(build_u_tx_ceased_msg(TEST_ISSI, call_id));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+    let listener = joined(&mut test, LISTENER);
+    assert_eq!(listener.transmission_grant, TransmissionGrant::NotGranted);
+    assert!(listener.transmission_request_permission);
+    let talker = joined(&mut test, TALKER);
+    assert_eq!(talker.transmission_grant, TransmissionGrant::Granted);
+    assert!(!talker.transmission_request_permission);
+}
+
+/// A U-TX DEMAND from a radio that may not talk is answered "transmission not granted" to that
+/// radio alone and the call goes on (clause 14.5.2.2.1 b), table 14.80); nobody else hears of
+/// it. With the rules lifted the same radio gets the floor.
+#[test]
+fn test_group_access_tx_demand_from_listener_is_not_granted() {
+    debug::setup_logging_verbose();
+    use tetra_config::bluestation::BrewGroupAccess;
+    const LISTENER: u32 = TEST_ISSI + 1;
+    let mut test = group_access_test();
+    for issi in [TEST_ISSI, LISTENER] {
+        register_subscriber(&mut test, issi, TEST_GSSI);
+    }
+    // RX only without a list: every radio listens only. The call was set up before the rule.
+    test.submit_message(build_u_setup_msg(TEST_ISSI, TEST_GSSI));
+    test.run_stack(Some(1));
+    let call_id = first_d_setup_call_id(&test.dump_sinks(), TEST_GSSI);
+    test.submit_message(build_u_tx_ceased_msg(TEST_ISSI, call_id));
+    test.run_stack(Some(1));
+    test.dump_sinks();
+    limit_group(&mut test, BrewGroupAccess { gssi: TEST_GSSI, rx_only: true, ..Default::default() });
+
+    test.submit_message(build_u_tx_demand_msg(LISTENER, call_id));
+    test.run_stack(Some(1));
+    let msgs = test.dump_sinks();
+    let (mut sdu, _) = find_lcmc_req(&msgs, LISTENER, CmcePduTypeDl::DTxGranted).expect("D-TX GRANTED to the radio");
+    let answer = DTxGranted::from_bitbuf(&mut sdu).expect("Failed to parse DTxGranted");
+    assert_eq!(answer.call_identifier, call_id);
+    assert_eq!(answer.transmission_grant, TransmissionGrant::NotGranted.into_raw() as u8);
+    assert!(find_lcmc_req(&msgs, TEST_GSSI, CmcePduTypeDl::DTxGranted).is_none(), "no group grant");
+    assert!(find_lcmc_req(&msgs, TEST_GSSI, CmcePduTypeDl::DRelease).is_none(), "the call goes on");
+    assert!(!msgs.iter().any(|m| matches!(&m.msg, SapMsgInner::CmceCallControl(CallControl::FloorGranted { .. }))));
+
+    test.config.state_write().brew_group_access.clear();
+    test.submit_message(build_u_tx_demand_msg(LISTENER, call_id));
+    test.run_stack(Some(1));
+    let (mut sdu, _) = find_lcmc_req(&test.dump_sinks(), LISTENER, CmcePduTypeDl::DTxGranted).expect("D-TX GRANTED");
+    assert_eq!(DTxGranted::from_bitbuf(&mut sdu).unwrap().transmission_grant, TransmissionGrant::Granted.into_raw() as u8);
 }

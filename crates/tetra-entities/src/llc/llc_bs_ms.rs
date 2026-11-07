@@ -99,6 +99,16 @@ impl Llc {
         self.config.config().cell.main_carrier
     }
 
+    /// Carrier a downlink PDU goes out on: the traffic channel it steals from, else the carrier of
+    /// its channel allocation, else the main carrier. A channel allocation for another cell
+    /// (announced type 1 cell reselection) names a carrier of that cell, not one of ours.
+    fn preferred_carrier(&self, stealing_slot: Option<(u16, u8)>, chan_alloc: Option<&CmceChanAllocReq>) -> u16 {
+        stealing_slot
+            .map(|(carrier, _)| carrier)
+            .or_else(|| chan_alloc.filter(|ca| !ca.cell_change).and_then(|ca| ca.carrier))
+            .unwrap_or_else(|| self.main_carrier())
+    }
+
     /// Schedule an ACK to be sent at a later time
     pub fn schedule_outgoing_ack(&mut self, dltime: TdmaTime, addr: TetraAddress, carrier_num: u16, ts: u8, ns: u8) {
         self.scheduled_out_acks.push_back(ScheduledOutAck {
@@ -222,11 +232,7 @@ impl Llc {
         pdu_buf.seek(0);
         tracing::debug!("-> {:?} sdu {}", pdu, pdu_buf.dump_bin());
 
-        let preferred_carrier = prim
-            .chan_alloc
-            .as_ref()
-            .and_then(|ca| ca.carrier)
-            .unwrap_or_else(|| self.main_carrier());
+        let preferred_carrier = self.preferred_carrier(prim.stealing_slot, prim.chan_alloc.as_ref());
         let sapmsg = SapMsg {
             sap: Sap::TmaSap,
             src: self.entity(),
@@ -244,6 +250,7 @@ impl Llc {
                 stealing_repeats_flag: None, // fixme
                 data_category: prim.data_class_info,
                 chan_alloc: prim.chan_alloc,
+                stealing_slot: prim.stealing_slot,
                 tx_reporter: prim.tx_reporter.take(),
             }),
         };
@@ -272,11 +279,7 @@ impl Llc {
             return;
         };
 
-        let preferred_carrier = prim
-            .chan_alloc
-            .as_ref()
-            .and_then(|ca| ca.carrier)
-            .unwrap_or_else(|| self.main_carrier());
+        let preferred_carrier = self.preferred_carrier(prim.stealing_slot, prim.chan_alloc.as_ref());
 
         // Traffic-channel responses may carry the TL-SDU on the BL-ACK itself.
         // This is required for U-Alert and other BL response payloads.
@@ -310,6 +313,7 @@ impl Llc {
                         stealing_repeats_flag: prim.stealing_repeats_flag,
                         data_category: prim.data_class_info,
                         chan_alloc: prim.chan_alloc,
+                        stealing_slot: prim.stealing_slot,
                         tx_reporter: prim.tx_reporter.take(),
                     }),
                 };
@@ -346,6 +350,7 @@ impl Llc {
                     stealing_repeats_flag: prim.stealing_repeats_flag,
                     data_category: prim.data_class_info,
                     chan_alloc: prim.chan_alloc,
+                    stealing_slot: prim.stealing_slot,
                     tx_reporter: prim.tx_reporter.take(),
                 }),
             };
@@ -418,6 +423,7 @@ impl Llc {
                 stealing_repeats_flag: prim.stealing_repeats_flag,
                 data_category: prim.data_class_info,
                 chan_alloc: prim.chan_alloc,
+                stealing_slot: prim.stealing_slot,
                 tx_reporter: Some(tx_reporter.clone()),
             }),
         };
@@ -865,6 +871,7 @@ impl Llc {
                         timeslots,
                         alloc_type: ChanAllocType::Replace,
                         ul_dl_assigned: UlDlAssignment::Both,
+                        cell_change: false,
                         carrier: Some(ack.carrier_num),
                     })
                 }
@@ -887,6 +894,7 @@ impl Llc {
                     stealing_repeats_flag: None,    // TODO FIXME
                     data_category: None,            // TODO FIXME
                     chan_alloc,
+                    stealing_slot: None,
                     tx_reporter: None, // By definition, no higher layer entity is interested
                 }),
             };

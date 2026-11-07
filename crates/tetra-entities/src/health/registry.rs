@@ -12,6 +12,21 @@ use std::time::Instant;
 
 use super::types::{DomainHealth, HealthDomain, HealthLevel, HealthSnapshot};
 
+/// The attached-radio count after `event`, kept by the telemetry fan-out from registration
+/// telemetry. Re-registrations of an already-known radio emit no `MsRegistration`, so the
+/// increments and decrements stay balanced; a radio that left for another cell or station
+/// without deregistering (`MsMovedAway`) is no longer attached here either.
+pub fn attached_radios_after(count: usize, event: &crate::net_telemetry::TelemetryEvent) -> usize {
+    use crate::net_telemetry::TelemetryEvent;
+    match event {
+        TelemetryEvent::MsRegistration { .. } => count + 1,
+        TelemetryEvent::MsDeregistration { .. } | TelemetryEvent::MsTimeoutDrop { .. } | TelemetryEvent::MsMovedAway { .. } => {
+            count.saturating_sub(1)
+        }
+        _ => count,
+    }
+}
+
 /// Tunables for turning raw counters into levels. Built from `[health]` config by the caller.
 #[derive(Debug, Clone, Copy)]
 pub struct HealthThresholds {
@@ -347,6 +362,28 @@ mod tests {
         let snap = reg.snapshot(&t);
         assert_eq!(snap.overall, HealthLevel::Critical);
         assert_eq!(snap.domains[3].level, HealthLevel::Critical);
+    }
+
+    #[test]
+    fn a_radio_that_moved_away_is_no_longer_counted() {
+        use crate::net_telemetry::TelemetryEvent;
+        // The field case: the radio goes to the other station and comes back. Without the
+        // MsMovedAway decrement the count stays one too high for good ("1 attached, silent").
+        let events = [
+            TelemetryEvent::MsRegistration { issi: 7 },
+            TelemetryEvent::MsMovedAway { issi: 7, cell: 0 },
+            TelemetryEvent::MsRegistration { issi: 7 },
+            TelemetryEvent::MsDeregistration { issi: 7 },
+        ];
+        let counts: Vec<usize> = events
+            .iter()
+            .scan(0, |n, e| {
+                *n = attached_radios_after(*n, e);
+                Some(*n)
+            })
+            .collect();
+        assert_eq!(counts, vec![1, 0, 1, 0]);
+        assert_eq!(attached_radios_after(0, &TelemetryEvent::MsMovedAway { issi: 7, cell: 0 }), 0);
     }
 
     #[test]

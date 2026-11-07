@@ -26,10 +26,11 @@ impl UPrepare {
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeUl::UPrepare)?;
 
-        // obit designates presence of the type2 element and/or the SDU
+        // The O-bit only announces the type 2 element; the SDU follows either way
+        // (Annex E.2.1 note 2, tables E.25 to E.27).
         let obit = delimiters::read_obit(buffer)?;
         let cell_identifier_ca = typed::parse_type2_generic(obit, buffer, 5, "cell_identifier_ca")?;
-        let sdu = if obit { sdu::read_rest(buffer) } else { None };
+        let sdu = sdu::read_rest(buffer);
 
         Ok(UPrepare { cell_identifier_ca, sdu })
     }
@@ -37,11 +38,8 @@ impl UPrepare {
     /// Serialize this PDU into the given BitBuffer.
     pub fn to_bitbuf(&self, buffer: &mut BitBuffer) -> Result<(), PduParseErr> {
         buffer.write_bits(MlePduTypeUl::UPrepare.into_raw(), 3);
-        let obit = self.cell_identifier_ca.is_some() || self.sdu.is_some();
+        let obit = self.cell_identifier_ca.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit {
-            return Ok(());
-        }
         typed::write_type2_generic(obit, buffer, self.cell_identifier_ca, 5);
         if let Some(ref s) = self.sdu {
             sdu::write(buffer, s);

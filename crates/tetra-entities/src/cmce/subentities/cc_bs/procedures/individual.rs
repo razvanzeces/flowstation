@@ -454,6 +454,7 @@ impl CcBsSubentity {
             carrier: Some(calling_carrier_num),
             timeslots: calling_timeslots,
             ul_dl_assigned: calling_ul_dl,
+            cell_change: false,
         };
         let chan_alloc_called = CmceChanAllocReq {
             usage: Some(called_usage),
@@ -461,6 +462,7 @@ impl CcBsSubentity {
             carrier: Some(called_carrier_num),
             timeslots: called_timeslots,
             ul_dl_assigned: called_ul_dl,
+            cell_change: false,
         };
         tracing::debug!(
             "P2P chan_alloc: calling ts={} usage={} slots={:?} ul_dl={}, called ts={} usage={} slots={:?} ul_dl={}",
