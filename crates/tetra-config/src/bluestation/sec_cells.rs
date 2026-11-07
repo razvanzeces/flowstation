@@ -36,12 +36,15 @@ pub struct CfgExtraCell {
     pub cell: CfgCellInfo,
     /// SDR settings for this cell. Required when the PHY backend is SoapySdr.
     pub soapysdr: Option<CfgSoapySdr>,
+    /// The `[networks]` entry this cell serves; `None` = the primary cell's network.
+    pub network: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ExtraCellDto {
     id: u8,
     enabled: Option<bool>,
+    network: Option<String>,
     cell_info: Option<toml::Table>,
     soapysdr: Option<SoapySdrDto>,
     #[serde(flatten)]
@@ -100,6 +103,7 @@ pub fn parse_extra_cells(raw_cells: Option<Value>, primary_cell_info: &toml::Tab
             id: CellId(dto.id),
             cell: cell_dto_to_cfg(cell_dto),
             soapysdr,
+            network: dto.network,
         });
     }
     Ok(cells)
