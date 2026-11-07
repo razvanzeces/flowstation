@@ -89,6 +89,20 @@ board in `/etc/uhd/uhd.conf`, or set
 `device = "driver=uhd,serial=XXXXXXX,fpga=/usr/share/uhd/images/b210_k7.bin"`. A USB 3 port or a
 powered hub is required.
 
+### Carrier accuracy (Hytera radios never find the cell)
+
+Clone boards can transmit a kilohertz or two off frequency. Sepura radios register anyway;
+**Hytera** radios do not: crossed antenna on the radio, not one access burst in the station
+log, and no codeplug setting fixes it. Measure the carrier with an RTL-SDR on any nearby
+computer and let the script tell you the `ppm_err` to set:
+
+```bash
+tools/carrier-offset.py 438.025        # the station's tx_freq
+```
+
+Aim for under 100 Hz (the ETSI base-station limit is 0.2 ppm). Details, calibration of the
+dongle itself and what the correction does to the uplink: [`Docs/carrier-accuracy.md`](Docs/carrier-accuracy.md).
+
 ---
 
 ## First login & Setup wizard
