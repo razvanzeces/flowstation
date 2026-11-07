@@ -47,6 +47,12 @@ the native codec). Suggested test with two Pluto+ and Brew enabled, in this orde
 - Hangtime handovers between cells (a cell's CMCE handling a network call start while its own call
   hangs, and a local PTT during a network call).
 
+## Several networks per station
+
+Cells can now be bound to different networks (`[networks]`, `Docs/networks.md`): each network has
+its own identity and core (or none), its own site switch hosted by its home cell, and radios move
+between networks by selecting one on the terminal. Not yet validated on air.
+
 ## Known limits (by design, documented)
 
 - Linking needs Brew or LST; without them each cell runs alone (Asterisk then primary-only).

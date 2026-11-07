@@ -7581,6 +7581,7 @@ const LANGS={
     registered_terminals:'Registered Radios',
     cells_title:'Cells',cells_help:"Each extra SDR runs one more cell. Pick a free carrier; its frequencies follow from the primary cell's band plan. The station restarts to apply changes.",
     cells_carrier:'Carrier',cells_cc:'Colour code',cells_add:'Add cell',cells_remove:'Remove',cells_cell:'Cell {n}',cells_radios:'{n} radio(s)',
+    cells_net_local:'local',cells_net_up:'core up',cells_net_down:'core down',
     cells_single:'Single cell',rf_cells_note:'Pick a cell to show its SDR on this page.',cells_linked:'Cells linked',cells_independent:'Independent cells',
     cells_need_fields:'Device and carrier are required.',cells_confirm_add:'Add this cell? The station restarts.',cells_confirm_remove:'Remove cell {n}? The station restarts.',
     bts_details:'TETRA BTS Details',bts_tx:'TX Freq',bts_rx:'RX Freq',bts_shift:'Duplex Shift',bts_rate:'Sample Rate',
@@ -8146,6 +8147,7 @@ const LANGS={
     "ui_language":"Idioma",
     cells_title:'Celdas',cells_help:'Cada SDR adicional ejecuta una celda más. Elige una portadora libre; sus frecuencias salen del plan de banda de la celda principal. La estación se reinicia para aplicar los cambios.',
     cells_carrier:'Portadora',cells_cc:'Código de color',cells_add:'Añadir celda',cells_remove:'Quitar',cells_cell:'Celda {n}',cells_radios:'{n} radio(s)',
+    cells_net_local:'local',cells_net_up:'núcleo conectado',cells_net_down:'núcleo desconectado',
     cells_single:'Celda única',rf_cells_note:'Elige una celda para ver su SDR en esta página.',cells_linked:'Celdas enlazadas',cells_independent:'Celdas independientes',
     cells_need_fields:'Hacen falta el dispositivo y la portadora.',cells_confirm_add:'¿Añadir esta celda? La estación se reinicia.',cells_confirm_remove:'¿Quitar la celda {n}? La estación se reinicia.',
     bts_ip:'IP BTS',offline:'SIN CONEXIÓN',online:'EN LÍNEA',reconnecting:'RECONECTANDO',
@@ -14224,7 +14226,14 @@ const tsCarrierInfo={};
 
 function fmtMhz(hz,dp){return(hz!=null&&isFinite(hz))?(hz/1e6).toFixed(dp==null?4:dp)+' MHz':'-';}
 function tsCarrierKey(carrierNum,ts){return String(carrierNum)+':'+String(ts);}
-// Cells from /api/cells ({id,primary,main_carrier,carriers:[num],colour_code,location_area,rf_state}).
+// Network a cell serves, for the Cells cards: empty on a classic single-network station, else
+// "<name> MCC/MNC" plus the core link state when the network has one.
+function cellNetLabel(c){
+  if(!c.network||c.network==='default')return '';
+  const link=c.link_up==null?t('cells_net_local'):(c.link_up?t('cells_net_up'):t('cells_net_down'));
+  return c.network+' '+c.mcc+'/'+c.mnc+' ('+link+')';
+}
+// Cells from /api/cells ({id,primary,main_carrier,carriers:[num],colour_code,location_area,rf_state,network,link_up}).
 // Empty until loaded (or on a single-cell station without the endpoint): the grid then shows the
 // primary's carriers only.
 let tsCells=[];
@@ -14304,7 +14313,7 @@ function renderTsGridCarrier(){
     let html=tsCells.map(c=>{
       c.carriers.forEach(n=>shown.add(n));
       const rf=c.rf_state||'starting';
-      const meta=['CC '+c.colour_code,'LA '+c.location_area,t('cells_radios',{n:c.registered_radios||0})].join(' · ');
+      const meta=[cellNetLabel(c),'CC '+c.colour_code,'LA '+c.location_area,t('cells_radios',{n:c.registered_radios||0})].filter(Boolean).join(' · ');
       return `<div class="ts-cell-group" data-cell="${c.id}">
         <div class="ts-cell-head"><span class="cell-name">${escHtml(t('cells_cell',{n:c.id}))}${c.primary?' ★':''}</span>
           <span class="cell-rf ${escHtmlAttr(rf)}" title="${escHtmlAttr(c.rf_detail||'')}">${escHtml(rf)}</span>
@@ -18106,7 +18115,7 @@ function renderCells(cells,siteLinked){
   list.innerHTML=cells.map(c=>{
     const rf=c.rf_state||'starting';
     const carriers=(c.carriers||[]).map(k=>'#'+k.carrier_num+' '+mhz(k.tx_freq_hz)+'/'+mhz(k.rx_freq_hz)+' MHz').join(' · ');
-    const meta=[carriers,'CC '+c.colour_code,'LA '+c.location_area,
+    const meta=[carriers,cellNetLabel(c),'CC '+c.colour_code,'LA '+c.location_area,
       t('cells_radios',{n:c.registered_radios}),c.device?('SDR '+c.device):''].filter(Boolean).join(' — ');
     const rm=c.primary?'':'<button class="btn btn-sm btn-danger" onclick="cellsRemove('+c.id+')">'+escHtml(t('cells_remove'))+'</button>';
     return '<div class="cell-row"><span class="cell-name">'+escHtml(t('cells_cell',{n:c.id}))+(c.primary?' ★':'')+'</span>'+
@@ -18139,7 +18148,7 @@ function renderRfCells(cells,siteLinked){
   }).join('');
   const c=cells.find(c=>c.id===rfSelCell);
   const carriers=(c.carriers||[]).map(k=>'#'+k.carrier_num+' TX '+mhz(k.tx_freq_hz)+' / RX '+mhz(k.rx_freq_hz));
-  const detail=[c.rf_state||'starting','CC '+c.colour_code,'LA '+c.location_area,t('cells_radios',{n:c.registered_radios}),
+  const detail=[c.rf_state||'starting',cellNetLabel(c),'CC '+c.colour_code,'LA '+c.location_area,t('cells_radios',{n:c.registered_radios}),
     c.device?('SDR '+c.device):''].concat(carriers).filter(Boolean).join(' · ');
   setText('rf-cell-detail',detail);
 }

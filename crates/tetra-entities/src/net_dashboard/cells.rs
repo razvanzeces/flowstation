@@ -32,6 +32,8 @@ fn cell_info(id: CellId, cfg: &SharedConfig, rf: Option<&crate::rf_status::RfSta
         carriers,
         mcc: c.net.mcc,
         mnc: c.net.mnc,
+        network: c.network.clone(),
+        link_up: c.brew.as_ref().map(|_| cfg.state_read().brew_link_up),
         colour_code: c.cell.colour_code,
         location_area: c.cell.location_area,
         neighbours: c.cell.neighbor_cells_ca.len() as u16,

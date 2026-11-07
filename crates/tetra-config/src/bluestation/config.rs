@@ -9,6 +9,7 @@ use crate::bluestation::{
 };
 
 use super::sec_brew::CfgBrew;
+use super::sec_networks::CfgNetwork;
 use super::sec_dashboard::CfgDashboard;
 use super::sec_lst_dispatch::CfgLstDispatch;
 use super::sec_telegram::CfgTelegram;
@@ -71,8 +72,18 @@ pub struct StackConfig {
     pub service_name: Option<String>,
 
     pub phy_io: CfgPhyIo,
+    /// Identity this cell broadcasts: `[net_info]`, or its network's MCC/MNC with `[networks]`.
     pub net: CfgNetInfo,
     pub cell: CfgCellInfo,
+
+    /// Every network the station serves, in name order. Without a `[networks]` section this is
+    /// the one implicit network (`[net_info]` + `[brew]`), named [`super::DEFAULT_NETWORK`].
+    pub networks: Vec<CfgNetwork>,
+    /// True when the file has a `[networks]` section (several networks, cells bound by name).
+    pub networks_explicit: bool,
+    /// Name of the network this cell serves (an entry of `networks`). On a per-cell config
+    /// `net` and `brew` are that network's.
+    pub network: String,
 
     /// Additional cells from `[[cells]]` (multi-cell: one SDR each). Empty for single-cell
     /// configs. The primary cell (id 0) is always `cell` + `phy_io.soapysdr`.
@@ -211,13 +222,23 @@ impl StackConfig {
     /// connections. WX runs on every cell (each answers its own radios' requests).
     pub fn for_extra_cell(&self, id: CellId) -> Option<StackConfig> {
         let extra = self.extra_cells.iter().find(|c| c.id == id)?;
+        let network = self.network_of_cell(id);
         let mut cfg = self.clone();
         cfg.cell = extra.cell.clone();
         cfg.phy_io.soapysdr = extra.soapysdr.clone();
-        cfg.site_linked = self.is_site_linked();
         cfg.cell_id = id;
         cfg.extra_cells = Vec::new();
-        cfg.asterisk.enabled = self.asterisk.enabled && self.is_site_linked();
+        // The cell serves its own network: its identity on air and its core (or none).
+        cfg.network = network.name.clone();
+        cfg.net = network.net.clone();
+        cfg.brew = network.brew.clone();
+        if cfg.network != self.network {
+            // LST dispatch belongs to the primary cell's network only.
+            cfg.lst_dispatch = None;
+        }
+        cfg.site_linked = self.network_is_linked(&network.name);
+        // The Asterisk bridge runs beside the primary stack and reaches the cells of its network.
+        cfg.asterisk.enabled = self.asterisk.enabled && cfg.site_linked && cfg.network == self.network;
         cfg.dapnet.enabled = false;
         cfg.geoalarm.enabled = false;
         cfg.tpg2200_action.enabled = false;
@@ -241,10 +262,12 @@ impl StackConfig {
         if self.extra_cells.is_empty() {
             return;
         }
-        let siblings: Vec<CfgCellInfo> = self.cells().iter().map(|(_, c, _)| (*c).clone()).collect();
+        let siblings: Vec<(CfgCellInfo, CfgNetInfo)> =
+            self.cells().iter().map(|(id, c, _)| ((*c).clone(), self.network_of_cell(*id).net)).collect();
+        let nets: Vec<CfgNetInfo> = self.cells().iter().map(|(id, _, _)| self.network_of_cell(*id).net).collect();
         let lists = std::iter::once(&mut self.cell).chain(self.extra_cells.iter_mut().map(|c| &mut c.cell));
-        for cell in lists {
-            for sibling in &siblings {
+        for (cell, cell_net) in lists.zip(nets.iter()) {
+            for (sibling, sibling_net) in &siblings {
                 let carrier = sibling.main_carrier;
                 if carrier == cell.main_carrier
                     || cell.neighbor_cells_ca.len() >= 7
@@ -263,8 +286,10 @@ impl StackConfig {
                     cell_load_ca: 0,
                     main_carrier_number: carrier,
                     main_carrier_number_extension: carrier_number_extension(sibling, cell),
-                    mcc: None,
-                    mnc: None,
+                    // A sibling on another of the station's networks is a foreign-network
+                    // neighbour: name its identity so a radio that selects that network finds it.
+                    mcc: (sibling_net.mcc != cell_net.mcc || sibling_net.mnc != cell_net.mnc).then_some(sibling_net.mcc),
+                    mnc: (sibling_net.mcc != cell_net.mcc || sibling_net.mnc != cell_net.mnc).then_some(sibling_net.mnc),
                     location_area: (sibling.location_area != cell.location_area).then_some(sibling.location_area),
                     maximum_ms_transmit_power: (sibling.ms_txpwr_max_cell != cell.ms_txpwr_max_cell)
                         .then_some(sibling.ms_txpwr_max_cell),
@@ -295,7 +320,69 @@ impl StackConfig {
     /// the site switch. The stack then reports every registration, group floor and call to its
     /// network slot (the switch applies the Brew routing rules before the real network sees it).
     pub fn is_site_linked(&self) -> bool {
-        self.site_linked || (!self.extra_cells.is_empty() && self.has_network_link())
+        self.site_linked || (self.cell_id.is_primary() && self.network_is_linked(&self.network))
+    }
+
+    // ── Networks ────────────────────────────────────────────────────────────────────────────
+
+    /// The network called `name`, if the station serves it.
+    pub fn network(&self, name: &str) -> Option<&CfgNetwork> {
+        self.networks.iter().find(|n| n.name == name)
+    }
+
+    /// The network a cell of this station serves. Only meaningful on the primary (parsed)
+    /// config, which knows every cell; a cell without a binding serves the primary's network.
+    /// A config built by hand with no `networks` entry serves the implicit one.
+    pub fn network_of_cell(&self, id: CellId) -> CfgNetwork {
+        let name = if id.is_primary() {
+            Some(self.network.as_str())
+        } else {
+            self.extra_cells.iter().find(|c| c.id == id).and_then(|c| c.network.as_deref())
+        };
+        name.and_then(|n| self.network(n))
+            .or_else(|| self.network(&self.network))
+            .or_else(|| self.networks.first())
+            .cloned()
+            .unwrap_or_else(|| CfgNetwork {
+                name: super::DEFAULT_NETWORK.to_owned(),
+                net: self.net.clone(),
+                brew: self.brew.clone(),
+            })
+    }
+
+    /// The cells serving network `name`, lowest id first (the primary comes first when it is one).
+    pub fn network_cells(&self, name: &str) -> Vec<CellId> {
+        let mut cells: Vec<CellId> = std::iter::once(CellId::PRIMARY)
+            .chain(self.extra_cells.iter().map(|c| c.id))
+            .filter(|&id| self.network_of_cell(id).name == name)
+            .collect();
+        cells.sort_by_key(|id| id.0);
+        cells
+    }
+
+    /// The cell that hosts a network's switch and Brew link: the primary when it serves the
+    /// network, else the network's lowest-numbered cell. `None` for a network with no cell.
+    pub fn network_home_cell(&self, name: &str) -> Option<CellId> {
+        self.network_cells(name).into_iter().next()
+    }
+
+    /// True when the cells of network `name` are joined through a site switch: more than one
+    /// cell, and either a core to share or an explicit `[networks]` section (a local network of
+    /// several cells is switched inside the station). A classic station without `[networks]`
+    /// keeps its cells independent unless Brew or LST is configured, as before.
+    pub fn network_is_linked(&self, name: &str) -> bool {
+        let cells = self.network_cells(name);
+        if cells.len() < 2 {
+            return false;
+        }
+        let has_brew = match self.network(name) {
+            Some(n) => n.brew.is_some(),
+            None if name == self.network => self.brew.is_some(),
+            None => return false,
+        };
+        self.networks_explicit
+            || has_brew
+            || (name == self.network && self.lst_dispatch.as_ref().is_some_and(|l| l.enabled))
     }
 
     /// Validate that all required configuration fields are properly set.
@@ -386,7 +473,7 @@ impl StackConfig {
 
         let cells = self.cells();
 
-        // Every cell broadcasts the same network identity; only RF parameters may differ.
+        // Cells share the station's RF plan; identity comes from each cell's network.
         let primary = &self.cell;
         for (id, cell, _) in &cells[1..] {
             if cell.freq_band != primary.freq_band {

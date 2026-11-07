@@ -20,7 +20,7 @@ use tetra_entities::net_lst_dispatch::{LstDispatchEntity, LstDispatchHandle, cod
 use tetra_entities::net_dapnet::spawn_dapnet_worker;
 use tetra_entities::net_dashboard::DashboardServer;
 use tetra_entities::net_geoalarm::{GeoAlarmSink, spawn_geoalarm_worker};
-use tetra_entities::net_site::{CellLink, SharedDirectory, SitePorts, SiteSwitch, site_links};
+use tetra_entities::net_site::{CellLink, LocalNetwork, SharedDirectory, SitePorts, SiteSwitch, site_links};
 #[cfg(feature = "asterisk")]
 use tetra_entities::net_site::SiteRelay;
 use tetra_entities::net_snom::{snom_notify_channel, spawn_snom_notify_worker};
@@ -231,6 +231,7 @@ fn spawn_extra_cells(
     cell_cfgs: Vec<(CellId, SharedConfig)>,
     is_running: Arc<AtomicBool>,
     mut links: HashMap<CellId, CellLink>,
+    mut hosts: HashMap<CellId, NetworkHome>,
     tsink: Option<TelemetrySink>,
 ) -> Vec<thread::JoinHandle<()>> {
     let mut handles = Vec::new();
@@ -238,10 +239,11 @@ fn spawn_extra_cells(
         let is_running = is_running.clone();
         let cell_sink = tsink.as_ref().map(|s| s.for_cell(id.0));
         let link = links.remove(&id);
+        let home = hosts.remove(&id);
         let spawned = thread::Builder::new().name(format!("{id}")).spawn(move || {
             tetra_entities::cell_context::set_current(id);
             let phy_sink = cell_sink.clone();
-            let mut router = build_cell_router(&cell_cfg, link, cell_sink);
+            let mut router = build_cell_router(&cell_cfg, link, home, cell_sink);
             eprintln!(" -> {id}: opening SDR…");
             if !try_attach_phy(&mut router, &cell_cfg, phy_sink) {
                 // Without a PHY nothing paces the loop, so don't run it; the cell stays down.
@@ -260,10 +262,43 @@ fn spawn_extra_cells(
     handles
 }
 
+/// A network whose switch and core link run in one of the additional cells: the network's home
+/// cell, when the primary cell does not serve that network. `others` are the network's remaining
+/// cells; with none the home cell runs the core link alone, without a switch.
+struct NetworkHome {
+    name: String,
+    ports: Option<SitePorts>,
+    others: Vec<(CellId, SharedConfig)>,
+    directory: SharedDirectory,
+}
+
+/// The entity in a network's Brew slot: its core link, or a sink for a network with no core.
+fn network_entity(cfg: &SharedConfig, directory: Option<&SharedDirectory>, tsink: Option<&TelemetrySink>) -> Box<dyn TetraEntityTrait> {
+    let name = cfg.config().network.clone();
+    match cfg.config().brew.clone() {
+        Some(brew_cfg) => {
+            let mut brew = BrewEntity::new(cfg.clone(), new_websocket_transport(&brew_cfg));
+            if let Some(sink) = tsink {
+                brew.set_telemetry_sink(sink.clone());
+            }
+            if let Some(directory) = directory {
+                brew.set_site_directory(directory.clone());
+            }
+            eprintln!(" -> {}: network {name}: Brew link to {}:{}", cfg.config().cell_id, brew_cfg.host, brew_cfg.port);
+            Box::new(brew)
+        }
+        None => {
+            eprintln!(" -> {}: network {name}: local, no core", cfg.config().cell_id);
+            Box::new(LocalNetwork::new(name))
+        }
+    }
+}
+
 /// Radio stack of an additional cell: the core entities only, without external control links or
-/// restart recovery. With a network link configured, `link` connects it to the site switch; `tsink` is the
-/// station's telemetry stream tagged for this cell.
-fn build_cell_router(cfg: &SharedConfig, link: Option<CellLink>, tsink: Option<TelemetrySink>) -> MessageRouter {
+/// restart recovery. `link` connects a linked cell to its network's site switch; `home` makes
+/// this cell host its network's switch and core link instead (a network the primary does not
+/// serve); `tsink` is the station's telemetry stream tagged for this cell.
+fn build_cell_router(cfg: &SharedConfig, link: Option<CellLink>, home: Option<NetworkHome>, tsink: Option<TelemetrySink>) -> MessageRouter {
     let mut router = MessageRouter::new(cfg.clone());
     router.register_entity(Box::new(LmacBs::new(cfg.clone())));
     router.register_entity(Box::new(UmacBs::new(cfg.clone(), tsink.clone())));
@@ -278,7 +313,19 @@ fn build_cell_router(cfg: &SharedConfig, link: Option<CellLink>, tsink: Option<T
         cmce.set_wx_cmd_sender(d.clone_sender());
     }
     router.register_entity(Box::new(cmce));
-    if let Some(link) = link {
+    if let Some(home) = home {
+        // This cell is where its network lives: the core link (or none) and, with more cells on
+        // the network, the switch that joins them. The primary's dashboard still sees the link
+        // state through the cell's own state (CellsSnapshot), not the station backhaul indicator.
+        let entity = network_entity(cfg, Some(&home.directory), None);
+        match home.ports {
+            Some(ports) => {
+                eprintln!(" -> {}: site switch for network {} shared by {} cells", cfg.config().cell_id, home.name, home.others.len() + 1);
+                router.register_entity(Box::new(SiteSwitch::new(entity, cfg.clone(), home.others, ports, home.directory)));
+            }
+            None => router.register_entity(entity),
+        }
+    } else if let Some(link) = link {
         // Linked cells reach the primary's Asterisk bridge through a second link.
         if cfg.config().asterisk.enabled {
             router.register_entity(Box::new(link.asterisk_link()));
@@ -358,6 +405,8 @@ fn build_bs_stack(
         let hcfg = cfg.config().health.clone();
         if hcfg.enabled {
             use std::time::Duration;
+            // The backhaul indicator follows the primary cell's network; other networks' links
+            // show per cell in the Cells card.
             tetra_entities::health::registry().set_brew_configured(cfg.config().brew.is_some());
             tetra_entities::health::spawn_health_monitor(
                 sink.clone(),
@@ -461,19 +510,17 @@ fn build_bs_stack(
             router.register_entity(wrap_network_entity(Box::new(entity), cfg, &mut site));
             eprintln!(" -> LST Dispatch (local console) enabled");
         }
-    } else if let Some(ref brew_cfg) = cfg.config().brew {
-        let transport = new_websocket_transport(brew_cfg);
-        let mut brew_entity = BrewEntity::new(cfg.clone(), transport);
-        if let Some(ref sink) = tsink {
-            brew_entity.set_telemetry_sink(sink.clone());
-        }
-        if let Some((_, _, directory)) = &site {
-            brew_entity.set_site_directory(directory.clone());
-        }
-        router.register_entity(wrap_network_entity(Box::new(brew_entity), cfg, &mut site));
+    } else if cfg.config().brew.is_some() {
+        let directory = site.as_ref().map(|(_, _, d)| d.clone());
+        let brew_entity = network_entity(cfg, directory.as_ref(), tsink.as_ref());
+        router.register_entity(wrap_network_entity(brew_entity, cfg, &mut site));
         eprintln!(" -> Brew/TetraPack integration enabled");
     } else if lst_enabled {
         eprintln!(" -> WARNING: lst_dispatch.enabled but no handle wired — dispatch inactive");
+    } else if site.is_some() {
+        // A local network of several cells: the switch joins them, nothing leaves the station.
+        let entity = network_entity(cfg, None, None);
+        router.register_entity(wrap_network_entity(entity, cfg, &mut site));
     }
 
     // Register Asterisk SIP/RTP entity if enabled. Only compiled in with the
@@ -634,13 +681,42 @@ fn main() {
             .collect()
     };
     tetra_entities::net_site::register_extra_cells(extra_cell_cfgs.clone());
-    let extra_cell_ids: Vec<CellId> = extra_cell_cfgs.iter().map(|(id, _)| *id).collect();
-    let (site, cell_links) = if cfg.config().is_site_linked() {
-        let (ports, links) = site_links(&extra_cell_ids);
-        (Some((ports, extra_cell_cfgs.clone(), SharedDirectory::default())), links)
-    } else {
-        (None, HashMap::new())
-    };
+    // One switch per linked network, hosted by the network's home cell: the primary's goes
+    // into its router here (`site`), the others into their home cell's router (`network_homes`).
+    // A network of one cell with a core runs its link in that cell, without a switch.
+    let mut site: Option<SiteSetup> = None;
+    let mut cell_links: HashMap<CellId, CellLink> = HashMap::new();
+    let mut network_homes: HashMap<CellId, NetworkHome> = HashMap::new();
+    {
+        let stack_config = cfg.config();
+        let cell_cfg = |id: CellId| extra_cell_cfgs.iter().find(|(c, _)| *c == id).cloned();
+        for network in &stack_config.networks {
+            let Some(home) = stack_config.network_home_cell(&network.name) else { continue };
+            let others: Vec<(CellId, SharedConfig)> = stack_config
+                .network_cells(&network.name)
+                .into_iter()
+                .filter(|&id| id != home)
+                .filter_map(cell_cfg)
+                .collect();
+            let linked = stack_config.network_is_linked(&network.name);
+            let ports = if linked {
+                let other_ids: Vec<CellId> = others.iter().map(|(id, _)| *id).collect();
+                let (ports, links) = site_links(&other_ids);
+                cell_links.extend(links);
+                Some(ports)
+            } else {
+                None
+            };
+            let directory = SharedDirectory::default();
+            if home.is_primary() {
+                if let Some(ports) = ports {
+                    site = Some((ports, others, directory));
+                }
+            } else if cell_cfg(home).is_some() && (ports.is_some() || network.brew.is_some()) {
+                network_homes.insert(home, NetworkHome { name: network.name.clone(), ports, others, directory });
+            }
+        }
+    }
 
     let (mut router, tsource, cdispatchers, dapnet_telemetry_sink) =
         build_bs_stack(&mut cfg, &args.config, lst_handle.clone(), site);
@@ -932,7 +1008,7 @@ fn main() {
     try_attach_phy(&mut router, &cfg, phy_tsink);
 
     // Multi-cell: additional cells run independently for now (multi-cell plan, phase 2).
-    let extra_cell_threads = spawn_extra_cells(extra_cell_cfgs, is_running.clone(), cell_links, cell_tsink);
+    let extra_cell_threads = spawn_extra_cells(extra_cell_cfgs, is_running.clone(), cell_links, network_homes, cell_tsink);
     if !extra_cell_threads.is_empty() {
         tracing::warn!(
             "{} additional cell(s) started — calls and SDS are routed across cells through the site switch",
@@ -1030,7 +1106,7 @@ mod telemetry_tests {
         let mut cell = config.cell.clone();
         cell.main_carrier += 1;
         cell.wap_ip = Some(wap_profile());
-        config.extra_cells.push(tetra_config::bluestation::CfgExtraCell { id: CellId(1), cell, soapysdr: None });
+        config.extra_cells.push(tetra_config::bluestation::CfgExtraCell { id: CellId(1), cell, soapysdr: None, network: None });
         let cfg = SharedConfig::try_from_parts(config, None).unwrap();
         assert!(needs_telemetry(&cfg));
     }

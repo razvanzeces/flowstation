@@ -341,6 +341,8 @@ type LinkState = (bool, bool, Option<Instant>);
 /// Wraps the network entity (Brew / LST Dispatch) in the primary router; see the module docs.
 pub struct SiteSwitch {
     inner: Box<dyn TetraEntityTrait>,
+    /// The cell whose router runs this switch; messages for it go straight onto that queue.
+    host: CellId,
     primary: SharedConfig,
     extra: Vec<(CellId, SharedConfig)>,
     all_cells: Vec<CellId>,
@@ -368,8 +370,10 @@ pub struct SiteSwitch {
 }
 
 impl SiteSwitch {
-    /// `primary` is the primary cell's config (the one the network entity runs with); `extra`
-    /// are the additional cells' configs, whose network link state the switch keeps in sync.
+    /// `primary` is the config of the cell whose router runs the switch and the network entity
+    /// (the network's home cell: the primary cell, or the first cell of a network the primary
+    /// does not serve); `extra` are the network's other cells, whose link state the switch keeps
+    /// in sync.
     pub fn new(
         inner: Box<dyn TetraEntityTrait>,
         primary: SharedConfig,
@@ -377,11 +381,13 @@ impl SiteSwitch {
         ports: SitePorts,
         directory: SharedDirectory,
     ) -> Self {
+        let host = primary.config().cell_id;
         let carrier_cell = carrier_map(&primary, &extra);
-        let mut all_cells = vec![CellId::PRIMARY];
+        let mut all_cells = vec![host];
         all_cells.extend(extra.iter().map(|(id, _)| *id));
         Self {
             inner,
+            host,
             primary,
             extra,
             all_cells,
@@ -419,7 +425,7 @@ impl SiteSwitch {
     // ── Delivery helpers ────────────────────────────────────────────────────────────────────
 
     fn deliver(&self, queue: &mut MessageQueue, cell: CellId, message: SapMsg) {
-        if cell.is_primary() {
+        if cell == self.host {
             queue.push_back(message);
         } else if let Some(tx) = self.ports.to_cells.get(&cell) {
             let _ = tx.send(LinkMsg::Msg(message));
@@ -442,7 +448,7 @@ impl SiteSwitch {
 
     /// Downlink voice onto a cell's circuit, via that cell's playout buffer.
     fn deliver_voice(&mut self, to: CellCircuit, data: &[u8]) {
-        if to.cell.is_primary() {
+        if to.cell == self.host {
             self.playout.push(to.carrier_num, to.ts, data.to_vec());
         } else if let Some(tx) = self.ports.to_cells.get(&to.cell) {
             let _ = tx.send(LinkMsg::Voice {
@@ -454,7 +460,7 @@ impl SiteSwitch {
     }
 
     fn cell_of_carrier(&self, carrier_num: u16) -> CellId {
-        self.carrier_cell.get(&carrier_num).copied().unwrap_or(CellId::PRIMARY)
+        self.carrier_cell.get(&carrier_num).copied().unwrap_or(self.host)
     }
 
     /// Run the network entity with a private queue and route what it emits.
@@ -1002,7 +1008,7 @@ impl SiteSwitch {
                     None => self.group_cells(dest),
                 };
                 let targets = if targets.is_empty() {
-                    BTreeSet::from([CellId::PRIMARY])
+                    BTreeSet::from([self.host])
                 } else {
                     targets
                 };
@@ -1013,12 +1019,13 @@ impl SiteSwitch {
                 let cells = self.all_cells.clone();
                 self.deliver_all(queue, cells, &message);
             }
-            _ => self.deliver(queue, CellId::PRIMARY, message),
+            _ => self.deliver(queue, self.host, message),
         }
     }
 
     fn network_call_targets(&mut self, cc: &CallControl) -> BTreeSet<CellId> {
-        let primary = || BTreeSet::from([CellId::PRIMARY]);
+        let host = self.host;
+        let primary = || BTreeSet::from([host]);
         match cc {
             CallControl::NetworkCallStart {
                 brew_uuid,
@@ -1062,7 +1069,7 @@ impl SiteSwitch {
                 None => self.all_cells.iter().copied().collect(),
             },
             CallControl::NetworkCircuitSetupRequest { brew_uuid, call } => {
-                let cell = self.location(call.destination).unwrap_or(CellId::PRIMARY);
+                let cell = self.location(call.destination).unwrap_or(self.host);
                 self.circuit_calls.insert(*brew_uuid, cell);
                 BTreeSet::from([cell])
             }
@@ -1124,7 +1131,7 @@ impl TetraEntityTrait for SiteSwitch {
     }
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
-        self.handle_from_cell(queue, CellId::PRIMARY, message);
+        self.handle_from_cell(queue, self.host, message);
     }
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
@@ -1148,7 +1155,7 @@ impl TetraEntityTrait for SiteSwitch {
 
 /// Carrier number → cell, for every cell (carriers are unique per cell).
 pub(super) fn carrier_map(primary: &SharedConfig, extra: &[(CellId, SharedConfig)]) -> HashMap<u16, CellId> {
-    let cells = std::iter::once((CellId::PRIMARY, primary)).chain(extra.iter().map(|(id, c)| (*id, c)));
+    let cells = std::iter::once((primary.config().cell_id, primary)).chain(extra.iter().map(|(id, c)| (*id, c)));
     let mut map = HashMap::new();
     for (id, cfg) in cells {
         for (carrier, _, _) in StackConfig::cell_phase_mod_carriers(&cfg.config().cell).unwrap_or_default() {
@@ -1543,6 +1550,92 @@ main_carrier = 1525
         let (c0, _) = site.tick();
         assert!(c0.iter().any(|m| matches!(m, SapMsgInner::CmceSdsData(s) if s.dest_issi == 100)));
         assert!(site.net_got().is_empty(), "local SDS must not go out to the network");
+    }
+
+    /// A network the primary does not serve: its switch runs in its home cell (cell 1 here),
+    /// with cell 2 linked to it. Messages for the host go onto the host's own queue, the other
+    /// cell's through its link, and a local network (no core) keeps everything on site.
+    #[test]
+    fn a_switch_hosted_by_an_additional_cell_routes_between_its_cells() {
+        const TWO_NETWORKS: &str = r#"
+network = "tetrapack"
+config_version = "0.6"
+stack_mode = "Bs"
+
+[phy_io]
+backend = "None"
+
+[net_info]
+mcc = 901
+mnc = 9999
+
+[cell_info]
+main_carrier = 1521
+freq_band = 4
+freq_offset = 0
+duplex_spacing = 4
+reverse_operation = false
+location_area = 1
+local_ssi_ranges = [[5000, 5999]]
+
+[networks.tetrapack]
+[networks.tetrapack.brew]
+host = "brew.example"
+port = 3000
+tls = false
+username = 1
+password = "x"
+
+[networks.club]
+mcc = 901
+mnc = 1
+
+[[cells]]
+id = 1
+network = "club"
+[cells.cell_info]
+main_carrier = 1525
+
+[[cells]]
+id = 2
+network = "club"
+[cells.cell_info]
+main_carrier = 1529
+"#;
+        let cfg = parsing::from_toml_str(TWO_NETWORKS).unwrap();
+        assert_eq!(cfg.network_home_cell("club"), Some(CellId(1)));
+        let host = SharedConfig::from_parts(cfg.for_extra_cell(CellId(1)).unwrap(), None);
+        let cell2 = SharedConfig::from_parts(cfg.for_extra_cell(CellId(2)).unwrap(), None);
+        assert!(host.config().brew.is_none() && host.config().site_linked);
+        let net = MockNet::default();
+        let (ports, mut links) = site_links(&[CellId(2)]);
+        let mut switch = SiteSwitch::new(Box::new(net.clone()), host.clone(), vec![(CellId(2), cell2)], ports, SharedDirectory::default());
+        let mut link = links.remove(&CellId(2)).unwrap();
+        let (mut q1, mut q2) = (MessageQueue::new(), MessageQueue::new());
+        let now = TdmaTime { h: 0, m: 1, f: 1, t: 2 };
+        let drain = |q: &mut MessageQueue| std::iter::from_fn(|| q.pop_front()).map(|m| m.msg).collect::<Vec<_>>();
+
+        // A radio on the host cell affiliates to group 91; cell 2 sends it an SDS: delivered on
+        // the host's queue, nothing reaches the (absent) core.
+        let to_brew = |msg| SapMsg::new(Sap::Control, TetraEntity::Cmce, TetraEntity::Brew, msg);
+        switch.rx_prim(&mut q1, to_brew(SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate { issi: 100, groups: vec![91], action: BrewSubscriberAction::Affiliate })));
+        switch.tick_start(&mut q1, now);
+        drain(&mut q1);
+        link.rx_prim(&mut q2, to_brew(SapMsgInner::CmceSdsData(CmceSdsData { source_issi: 200, dest_issi: 100, user_defined_data: SdsUserData::Type1(0x8001) })));
+        switch.tick_start(&mut q1, now);
+        link.tick_start(&mut q2, now);
+        let on_host = drain(&mut q1);
+        assert!(on_host.iter().any(|m| matches!(m, SapMsgInner::CmceSdsData(s) if s.dest_issi == 100)), "SDS reaches the host cell's radio: {on_host:?}");
+        assert!(drain(&mut q2).is_empty());
+        assert!(net.got.lock().unwrap().is_empty(), "a local network has no core to forward to");
+
+        // A radio on cell 2 talks on group 91: the host cell hears it as a network call.
+        link.rx_prim(&mut q2, to_brew(granted(7, 200, 91, 1529)));
+        switch.tick_start(&mut q1, now);
+        link.tick_start(&mut q2, now);
+        let on_host = drain(&mut q1);
+        assert!(start_uuid(&on_host).is_some(), "the host cell gets the call start: {on_host:?}");
+        assert!(net.got.lock().unwrap().is_empty());
     }
 
     #[test]

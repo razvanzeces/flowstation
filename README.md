@@ -266,6 +266,10 @@ The registered-radios table shows every cell's radios with a C0/C1… badge, the
 
 Design notes and per-phase status: [`Docs/multi-cell-plan.md`](Docs/multi-cell-plan.md).
 
+### Several networks in one station
+
+Cells can serve different TETRA networks: a `[networks.<name>]` table gives each network its MCC/MNC and its own Brew core (or none, for a network switched inside the station), and `network = "<name>"` binds the primary cell at the root and each `[[cells]]` entry. A radio user picks the network on the terminal and lands on that network's cells and core. See [`Docs/networks.md`](Docs/networks.md).
+
 ## Stability and system robustness
 
 This fork hardens day-to-day operation so your BTS keeps working — and stays recoverable — in most of the situations that used to mean “reinstall from scratch”.

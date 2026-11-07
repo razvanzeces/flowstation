@@ -438,9 +438,14 @@ pub struct CellInfo {
     pub main_carrier: u16,
     pub secondary_carrier: Option<u16>,
     pub carriers: Vec<CellCarrierInfo>,
-    /// Mobile country / network code of the station (`[net_info]`).
+    /// Mobile country / network code this cell broadcasts (its network's, or `[net_info]`).
     pub mcc: u16,
     pub mnc: u16,
+    /// The `[networks]` entry this cell serves ("default" without a `[networks]` section).
+    pub network: String,
+    /// The network's core link as seen from this cell: `Some(up)` with a Brew link, `None` for
+    /// a network with no core.
+    pub link_up: Option<bool>,
     pub colour_code: u8,
     pub location_area: u16,
     /// Neighbour cells advertised in D-NWRK-BROADCAST.

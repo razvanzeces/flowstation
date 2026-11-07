@@ -19,6 +19,7 @@ use super::sec_emergency::{CfgEmergencyDto, apply_emergency_patch};
 use super::sec_geoalarm::{CfgGeoalarmDto, apply_geoalarm_patch};
 use super::sec_health::{CfgHealthDto, apply_health_patch};
 use super::sec_lst_dispatch::{CfgLstDispatchDto, apply_lst_dispatch_patch};
+use super::sec_networks::{CfgNetwork, DEFAULT_NETWORK, parse_networks};
 use super::sec_recovery::{CfgRecoveryDto, apply_recovery_patch};
 use super::sec_security::{CfgSecurityDto, apply_security_patch};
 use super::sec_snom_notify::{CfgSnomNotifyDto, apply_snom_notify_patch};
@@ -89,6 +90,8 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         _ => toml::Table::new(),
     };
     let extra_cells = parse_extra_cells(raw_cells, &primary_cell_info_raw)?;
+    // `[networks]` is a table of free-form names, parsed by hand like the cells.
+    let raw_networks = raw.remove("networks");
 
     // Now deserialise the (mutated) Value into the typed root — neighbor_cells_ca
     // has been removed so it will not appear in the flatten HashMap.
@@ -252,6 +255,9 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         net: net_dto_to_cfg(root.net_info),
         cell: cell_cfg,
         extra_cells,
+        networks: Vec::new(),
+        networks_explicit: false,
+        network: DEFAULT_NETWORK.to_owned(),
         site_linked: false,
         cell_id: tetra_core::CellId::PRIMARY,
         brew: None,
@@ -280,6 +286,8 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         cfg.lst_dispatch = Some(apply_lst_dispatch_patch(lst));
     }
 
+    resolve_networks(&mut cfg, raw_networks, root.network)?;
+
     if let Some(dashboard) = root.dashboard {
         cfg.dashboard = Some(apply_dashboard_patch(dashboard)?);
     }
@@ -297,6 +305,61 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
     }
 
     Ok(cfg)
+}
+
+/// Fill `networks` / `network` and bind every cell. With a `[networks]` section the primary
+/// cell takes its network's identity and core; `[brew]` and `[lst_dispatch]` then belong in the
+/// networks and are refused at the root. Without one, `[net_info]` + `[brew]` form the single
+/// implicit network and cells may not name one.
+fn resolve_networks(cfg: &mut StackConfig, raw_networks: Option<Value>, primary_network: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let networks = parse_networks(raw_networks, &cfg.net)?;
+    if networks.is_empty() {
+        if let Some(name) = primary_network {
+            return Err(format!("network = {name:?} needs a [networks.{name}] section").into());
+        }
+        if let Some(c) = cfg.extra_cells.iter().find(|c| c.network.is_some()) {
+            return Err(format!("{}: network = {:?} needs a [networks] section", c.id, c.network.as_deref().unwrap_or("")).into());
+        }
+        cfg.networks = vec![CfgNetwork {
+            name: DEFAULT_NETWORK.to_owned(),
+            net: cfg.net.clone(),
+            brew: cfg.brew.clone(),
+        }];
+        cfg.network = DEFAULT_NETWORK.to_owned();
+        return Ok(());
+    }
+
+    if cfg.brew.is_some() {
+        return Err("[brew] cannot be used together with [networks]: put it under the network it serves ([networks.<name>.brew])".into());
+    }
+    if cfg.lst_dispatch.as_ref().is_some_and(|l| l.enabled) && networks.iter().any(|n| n.brew.is_some()) {
+        return Err("lst_dispatch.enabled cannot be used together with a [networks.<name>.brew] link".into());
+    }
+    let Some(primary_name) = primary_network else {
+        return Err("[networks] needs `network = \"<name>\"` at the top of the file: the primary cell's network".into());
+    };
+    let primary = networks
+        .iter()
+        .find(|n| n.name == primary_name)
+        .ok_or_else(|| format!("network = {primary_name:?} is not a [networks] entry"))?;
+    for c in &cfg.extra_cells {
+        if let Some(name) = &c.network
+            && !networks.iter().any(|n| &n.name == name)
+        {
+            return Err(format!("{}: network = {name:?} is not a [networks] entry", c.id).into());
+        }
+    }
+    cfg.network = primary.name.clone();
+    cfg.net = primary.net.clone();
+    cfg.brew = primary.brew.clone();
+    cfg.networks = networks;
+    cfg.networks_explicit = true;
+    for n in &cfg.networks {
+        if cfg.network_cells(&n.name).is_empty() {
+            return Err(format!("networks.{}: no cell serves this network (bind one with network = {:?})", n.name, n.name).into());
+        }
+    }
+    Ok(())
 }
 
 /// Build `SharedConfig` from any reader.
@@ -335,6 +398,8 @@ struct TomlConfigRoot {
     net_info: NetInfoDto,
     cell_info: CellInfoDto,
 
+    /// The primary cell's network; required with `[networks]`.
+    network: Option<String>,
     brew: Option<CfgBrewDto>,
     lst_dispatch: Option<CfgLstDispatchDto>,
     asterisk: Option<CfgAsteriskDto>,

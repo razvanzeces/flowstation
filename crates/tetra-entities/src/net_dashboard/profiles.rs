@@ -661,6 +661,12 @@ pub fn apply_profiles(config_path: &str, cell_name: &str, brew_name: Option<&str
     let current = fs::read_to_string(config_path).map_err(|e| e.to_string())?;
     let mut table: toml::Table = toml::from_str(&current).map_err(|e| format!("parse config: {e}"))?;
 
+    // With [networks] the core links live under the networks, not in a root [brew]; a Brew
+    // profile here would be refused by the config loader, so say so before writing anything.
+    if table.contains_key("networks") && brew_name.is_some() {
+        return Err("this station uses [networks]: edit the network's brew link in the configuration instead of applying a Brew profile".into());
+    }
+
     let cell_obj = cell
         .as_object()
         .ok_or_else(|| "cell profile is not an object".to_string())?;
