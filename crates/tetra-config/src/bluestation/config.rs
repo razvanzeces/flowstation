@@ -263,8 +263,8 @@ impl StackConfig {
             return;
         }
         let siblings: Vec<(CfgCellInfo, CfgNetInfo)> =
-            self.cells().iter().map(|(id, c, _)| ((*c).clone(), self.network_of_cell(*id).net.clone())).collect();
-        let nets: Vec<CfgNetInfo> = self.cells().iter().map(|(id, _, _)| self.network_of_cell(*id).net.clone()).collect();
+            self.cells().iter().map(|(id, c, _)| ((*c).clone(), self.network_of_cell(*id).net)).collect();
+        let nets: Vec<CfgNetInfo> = self.cells().iter().map(|(id, _, _)| self.network_of_cell(*id).net).collect();
         let lists = std::iter::once(&mut self.cell).chain(self.extra_cells.iter_mut().map(|c| &mut c.cell));
         for (cell, cell_net) in lists.zip(nets.iter()) {
             for (sibling, sibling_net) in &siblings {
@@ -332,7 +332,8 @@ impl StackConfig {
 
     /// The network a cell of this station serves. Only meaningful on the primary (parsed)
     /// config, which knows every cell; a cell without a binding serves the primary's network.
-    pub fn network_of_cell(&self, id: CellId) -> &CfgNetwork {
+    /// A config built by hand with no `networks` entry serves the implicit one.
+    pub fn network_of_cell(&self, id: CellId) -> CfgNetwork {
         let name = if id.is_primary() {
             Some(self.network.as_str())
         } else {
@@ -341,7 +342,12 @@ impl StackConfig {
         name.and_then(|n| self.network(n))
             .or_else(|| self.network(&self.network))
             .or_else(|| self.networks.first())
-            .expect("a station always serves at least one network")
+            .cloned()
+            .unwrap_or_else(|| CfgNetwork {
+                name: super::DEFAULT_NETWORK.to_owned(),
+                net: self.net.clone(),
+                brew: self.brew.clone(),
+            })
     }
 
     /// The cells serving network `name`, lowest id first (the primary comes first when it is one).
@@ -369,12 +375,13 @@ impl StackConfig {
         if cells.len() < 2 {
             return false;
         }
-        let network = match self.network(name) {
-            Some(n) => n,
+        let has_brew = match self.network(name) {
+            Some(n) => n.brew.is_some(),
+            None if name == self.network => self.brew.is_some(),
             None => return false,
         };
         self.networks_explicit
-            || network.brew.is_some()
+            || has_brew
             || (name == self.network && self.lst_dispatch.as_ref().is_some_and(|l| l.enabled))
     }
 

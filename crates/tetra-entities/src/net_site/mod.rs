@@ -25,6 +25,7 @@
 //! radios on every cell can call and be called through the PBX.
 
 mod directory;
+mod local;
 mod relay;
 mod switch;
 
@@ -34,6 +35,7 @@ use tetra_config::bluestation::SharedConfig;
 use tetra_core::CellId;
 
 pub use directory::{SharedDirectory, SiteDirectory};
+pub use local::LocalNetwork;
 pub use relay::SiteRelay;
 pub use switch::{CellLink, RelayPorts, SitePorts, SiteSwitch, site_links};
 

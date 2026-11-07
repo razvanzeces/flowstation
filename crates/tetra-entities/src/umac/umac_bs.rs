@@ -1888,14 +1888,16 @@ impl UmacBs {
                     });
                 }
 
-                // Forward UL voice to Brew slot (real Brew or LST Dispatch occupying TetraEntity::Brew).
+                // Forward UL voice to the Brew slot: real Brew, LST Dispatch, or the site switch of
+                // a linked multi-cell network (which copies it to the other cells).
                 let brew_slot_active = self.config.config().brew.is_some()
                     || self
                         .config
                         .config()
                         .lst_dispatch
                         .as_ref()
-                        .is_some_and(|c| c.enabled);
+                        .is_some_and(|c| c.enabled)
+                    || self.config.config().is_site_linked();
                 if brew_slot_active {
                     if self.scheduler_for(carrier_num).circuit_is_active(Direction::Ul, ts) {
                         let msg = SapMsg {
