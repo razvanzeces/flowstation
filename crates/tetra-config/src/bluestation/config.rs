@@ -230,7 +230,10 @@ impl StackConfig {
 
     /// All cells, primary first then `[[cells]]` in config order: (id, cell parameters, SDR settings).
     pub fn cells(&self) -> Vec<(CellId, &CfgCellInfo, Option<&CfgSoapySdr>)> {
-        let mut v = vec![(CellId::PRIMARY, &self.cell, self.phy_io.soapysdr.as_ref())];
+        // `cell` is the cell numbered `cell_id`: the primary in the station's config, the cell
+        // itself in the stand-alone config of an additional cell (`for_extra_cell`), so that
+        // cell reports its own number (Brew `bts-info`, `ms-cell`), not 0.
+        let mut v = vec![(self.cell_id, &self.cell, self.phy_io.soapysdr.as_ref())];
         v.extend(self.extra_cells.iter().map(|c| (c.id, &c.cell, c.soapysdr.as_ref())));
         v
     }
@@ -369,7 +372,7 @@ impl StackConfig {
     /// config, which knows every cell; a cell without a binding serves the primary's network.
     /// A config built by hand with no `networks` entry serves the implicit one.
     pub fn network_of_cell(&self, id: CellId) -> CfgNetwork {
-        let name = if id.is_primary() {
+        let name = if id.is_primary() || id == self.cell_id {
             Some(self.network.as_str())
         } else {
             self.extra_cells.iter().find(|c| c.id == id).and_then(|c| c.network.as_deref())
@@ -414,7 +417,7 @@ impl StackConfig {
 
     /// The cells serving network `name`, lowest id first (the primary comes first when it is one).
     pub fn network_cells(&self, name: &str) -> Vec<CellId> {
-        let mut cells: Vec<CellId> = std::iter::once(CellId::PRIMARY)
+        let mut cells: Vec<CellId> = std::iter::once(self.cell_id)
             .chain(self.extra_cells.iter().map(|c| c.id))
             .filter(|&id| self.network_of_cell(id).name == name)
             .collect();
