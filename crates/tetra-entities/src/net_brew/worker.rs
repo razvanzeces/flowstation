@@ -1962,6 +1962,9 @@ mod tests {
         assert_eq!(json_of(&offered)["mnc"], 1638);
         assert!(json_of(&offered)["capabilities"].as_array().unwrap().iter().any(|c| c == BREW_EXT_MNI));
         assert_eq!(json_of(&offered)["cells"].as_array().unwrap().len(), 1);
+        assert_eq!(json_of(&offered)["cells"][0]["cell"], 1, "the cell's own number, not 0 (global cell ID login/1)");
+        let placed = ms_cell_message(&cell, &["ms-cell".to_string()], 2320972, tetra_core::CellId(1));
+        assert!(placed.is_some(), "a radio on the cell is placed on it");
 
         let (event_tx, _rx) = bounded(64);
         let (tx, command_rx) = bounded(64);
